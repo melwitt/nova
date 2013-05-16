@@ -28,7 +28,6 @@ import netaddr
 from oslo.config import cfg
 
 from nova import block_device
-from nova.compute import api as compute
 from nova.compute import flavors
 from nova.compute import power_state
 from nova.compute import task_states
@@ -159,7 +158,6 @@ class VMOps(object):
     Management class for VM-related tasks
     """
     def __init__(self, session, virtapi):
-        self.compute_api = compute.API()
         self._session = session
         self._virtapi = virtapi
         self._volumeops = volumeops.VolumeOps(self._session)
@@ -1376,7 +1374,9 @@ class VMOps(object):
 
         for instance in instances:
             LOG.info(_("Automatically hard rebooting"), instance=instance)
-            self.compute_api.reboot(ctxt, instance, "HARD")
+            # NOTE(melwitt): before, we called `compute_api.reboot` here but
+            # that hits the DB directly.
+            self.reboot(instance, 'HARD')
 
     def get_info(self, instance, vm_ref=None):
         """Return data about VM instance."""

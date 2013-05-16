@@ -31,11 +31,12 @@ import uuid
 from oslo.config import cfg
 
 from nova import block_device
-from nova.compute import api as compute
 from nova.compute import power_state
 from nova.compute import task_states
+from nova import conductor
 from nova import context as nova_context
 from nova import exception
+from nova import network
 from nova.openstack.common import excutils
 from nova.openstack.common import log as logging
 from nova.virt import driver
@@ -77,7 +78,8 @@ class VMwareVMOps(object):
 
     def __init__(self, session, virtapi, volumeops, cluster=None):
         """Initializer."""
-        self.compute_api = compute.API()
+        self.conductor_api = conductor.API()
+        self.network_api = network.API()
         self._session = session
         self._virtapi = virtapi
         self._volumeops = volumeops
@@ -1043,7 +1045,12 @@ class VMwareVMOps(object):
 
         for instance in instances:
             LOG.info(_("Automatically hard rebooting %d") % instance['uuid'])
-            self.compute_api.reboot(ctxt, instance, "HARD")
+            # NOTE(melwitt): before, we called `compute_api.reboot` here but
+            # that hits the DB directly. VMWare API doesn't use reboot_type
+            # in its driver.reboot
+            nw_info = self.network_api.get_instance_nw_info(
+                ctxt, instance, self.conductor_api)
+            self.reboot(instance, nw_info)
 
     def get_info(self, instance):
         """Return data about the VM instance."""
