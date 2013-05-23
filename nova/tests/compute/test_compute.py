@@ -2360,6 +2360,56 @@ class ComputeTestCase(BaseTestCase):
                 instance=jsonutils.to_primitive(instance),
                 bdms={})
 
+    def test_delete_instance_keeps_net_on_power_off_fail(self):
+        called = {'_deallocate_network': False}
+
+        def fake_deallocate_network(context, instance):
+            called['_deallocate_network'] = True
+
+        self.stubs.Set(self.compute, '_deallocate_network',
+                       fake_deallocate_network)
+
+        def fake_virt_driver_destroy(instance, nw_info, block_device_info):
+            raise exception.InstancePowerOffFailure(reason='')
+
+        self.stubs.Set(self.compute.driver, 'destroy',
+                       fake_virt_driver_destroy)
+
+        instance = self._create_fake_instance()
+
+        try:
+            self.compute._delete_instance(self.context,
+                    instance=jsonutils.to_primitive(instance), bdms={})
+        except exception.InstancePowerOffFailure:
+            pass
+
+        self.assertFalse(called['_deallocate_network'])
+
+    def test_delete_instance_loses_net_on_other_fail(self):
+        called = {'_deallocate_network': False}
+
+        def fake_deallocate_network(context, instance):
+            called['_deallocate_network'] = True
+
+        self.stubs.Set(self.compute, '_deallocate_network',
+                       fake_deallocate_network)
+
+        def fake_virt_driver_destroy(instance, nw_info, block_device_info):
+            raise Exception()
+
+        self.stubs.Set(self.compute.driver, 'destroy',
+                       fake_virt_driver_destroy)
+
+        instance = self._create_fake_instance()
+
+        try:
+            self.compute._delete_instance(self.context,
+                    instance=jsonutils.to_primitive(instance), bdms={})
+        except Exception:
+            pass
+
+        self.assertTrue(called['_deallocate_network'])
+
     def test_delete_instance_deletes_console_auth_tokens(self):
         instance = self._create_fake_instance()
         self.flags(vnc_enabled=True)
