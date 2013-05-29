@@ -26,6 +26,7 @@ import testtools
 import time
 import traceback
 import uuid
+from webob import exc
 
 import mox
 from oslo.config import cfg
@@ -5030,6 +5031,24 @@ class ComputeAPITestCase(BaseTestCase):
 
         pre_build_len = len(db.instance_get_all(self.context))
         self.assertRaises(exception.SecurityGroupNotFoundForProject,
+                          self.compute_api.create,
+                          self.context,
+                          instance_type=instance_type,
+                          image_href=None,
+                          security_group=['this_is_a_fake_sec_group'])
+        self.assertEqual(pre_build_len,
+                         len(db.instance_get_all(self.context)))
+
+    def test_create_instance_with_sec_group_driver_raises_not_found(self):
+        instance_type = flavors.get_default_instance_type()
+
+        def _fake_get(context, name=None, id=None, map_exception=False):
+            raise exc.HTTPNotFound('not found')
+
+        self.stubs.Set(self.security_group_api, 'get', _fake_get)
+
+        pre_build_len = len(db.instance_get_all(self.context))
+        self.assertRaises(exception.SecurityGroupNotFound,
                           self.compute_api.create,
                           self.context,
                           instance_type=instance_type,

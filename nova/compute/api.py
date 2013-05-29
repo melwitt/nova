@@ -27,6 +27,7 @@ import re
 import string
 import time
 import uuid
+from webob import exc
 
 from oslo.config import cfg
 
@@ -348,9 +349,17 @@ class API(base.Base):
             # NOTE(sdague): default is handled special
             if secgroup == "default":
                 continue
-            if not self.security_group_api.get(context, secgroup):
-                raise exception.SecurityGroupNotFoundForProject(
-                    project_id=context.project_id, security_group_id=secgroup)
+            try:
+                if not self.security_group_api.get(context, secgroup):
+                    raise exception.SecurityGroupNotFoundForProject(
+                        project_id=context.project_id,
+                        security_group_id=secgroup)
+            except exc.HTTPNotFound:
+                # NOTE(melwitt): SecurityGroupAPI semantics are to raise
+                # HTTPNotFound for not found and some drivers do this
+                # Map to nova exception if it's raised during a server create
+                raise exception.SecurityGroupNotFound(
+                    security_group_id=secgroup)
 
     def _check_requested_networks(self, context, requested_networks):
         """
