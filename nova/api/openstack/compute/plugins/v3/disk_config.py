@@ -76,6 +76,13 @@ class ServerDiskConfigController(wsgi.Controller):
             server = resp_obj.obj['server']
             self._add_disk_config(req, [server])
 
+    def _detail(self, req, resp_obj):
+        context = req.environ['nova.context']
+        if 'servers' in resp_obj.obj and authorize(context):
+            resp_obj.attach(xml=ServersDiskConfigTemplate())
+            servers = resp_obj.obj['servers']
+            self._add_disk_config(req, servers)
+
     @wsgi.extends
     def show(self, req, resp_obj, id):
         context = req.environ['nova.context']
@@ -84,11 +91,7 @@ class ServerDiskConfigController(wsgi.Controller):
 
     @wsgi.extends
     def detail(self, req, resp_obj):
-        context = req.environ['nova.context']
-        if 'servers' in resp_obj.obj and authorize(context):
-            resp_obj.attach(xml=ServersDiskConfigTemplate())
-            servers = resp_obj.obj['servers']
-            self._add_disk_config(req, servers)
+        self._detail(req, resp_obj)
 
     def _set_disk_config(self, dict_):
         if API_DISK_CONFIG in dict_:
@@ -103,7 +106,7 @@ class ServerDiskConfigController(wsgi.Controller):
             if 'server' in body:
                 self._set_disk_config(body['server'])
             resp_obj = (yield)
-            self._show(req, resp_obj)
+            self._detail(req, resp_obj)
 
     @wsgi.extends
     def update(self, req, id, body):

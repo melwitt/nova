@@ -191,9 +191,9 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         if override_controller:
-            server = override_controller.create(req, body).obj['server']
+            server = override_controller.create(req, body).obj['servers'][0]
         else:
-            server = self.controller.create(req, body).obj['server']
+            server = self.controller.create(req, body).obj['servers'][0]
 
     def test_create_instance_with_config_drive_disabled(self):
         params = {config_drive.ATTRIBUTE_NAME: "False"}
@@ -236,7 +236,7 @@ class ServersControllerCreateTest(test.TestCase):
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_with_bad_config_drive(self):
@@ -286,7 +286,7 @@ class ServersControllerCreateTest(test.TestCase):
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self.assertEqual(FAKE_UUID, server['id'])
 
 

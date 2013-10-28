@@ -232,6 +232,11 @@ class ViewBuilderV3(ViewBuilder):
         self._address_builder = views_addresses.ViewBuilderV3()
         self._image_builder = views_images.ViewBuilderV3()
 
+    def create(self, request, instances):
+        """View that should be returned when instance(s) are created."""
+        func = super(ViewBuilderV3, self).create
+        return self._list_view(func, request, instances)
+
     def show(self, request, instance):
         """Detailed view of a single instance."""
         ip_v4 = instance.get('access_ip_v4')

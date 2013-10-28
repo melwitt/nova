@@ -332,7 +332,7 @@ class TestOpenStackClientV3(TestOpenStackClient):
         if 'servers_reservation' in response:
             return response['servers_reservation']
         else:
-            return response['server']
+            return response['servers'][0]
 
 
 class TestOpenStackClientV3Mixin(object):

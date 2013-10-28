@@ -33,6 +33,7 @@ from nova.api.openstack.compute import plugins
 from nova.api.openstack.compute.plugins.v3 import availability_zone
 from nova.api.openstack.compute.plugins.v3 import ips
 from nova.api.openstack.compute.plugins.v3 import keypairs
+from nova.api.openstack.compute.plugins.v3 import multiple_create
 from nova.api.openstack.compute.plugins.v3 import servers
 from nova.api.openstack.compute import views
 from nova.api.openstack import xmlutil
@@ -1787,7 +1788,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.body['server']['image_ref'] = image_uuid
         self.body['server']['flavor_ref'] = flavor
         self.req.body = jsonutils.dumps(self.body)
-        server = self.controller.create(self.req, self.body).obj['server']
+        server = self.controller.create(self.req, self.body).obj['servers'][0]
         self._check_admin_pass_len(server)
         self.assertEqual(FAKE_UUID, server['id'])
 
@@ -1883,7 +1884,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_image_ref_is_invalid(self):
@@ -1907,7 +1908,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.body['server'].update(params)
         self.req.body = jsonutils.dumps(self.body)
         self.req.headers["content-type"] = "application/json"
-        server = self.controller.create(self.req, self.body).obj['server']
+        server = self.controller.create(self.req, self.body).obj['servers'][0]
 
     # TODO(cyeoh): bp-v3-api-unittests
     # This needs to be ported to the os-keypairs extension tests
@@ -1989,7 +1990,7 @@ class ServersControllerCreateTest(test.TestCase):
 
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
-        server = res['server']
+        server = res['servers'][0]
         self._check_admin_pass_len(server)
         self.assertEqual(FAKE_UUID, server['id'])
 
@@ -2006,7 +2007,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self._check_admin_pass_missing(server)
         self.assertEqual(FAKE_UUID, server['id'])
 
@@ -2077,7 +2078,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self._check_admin_pass_len(server)
         self.assertEqual(FAKE_UUID, server['id'])
 
@@ -2118,7 +2119,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self._check_admin_pass_missing(server)
         self.assertEqual(FAKE_UUID, server['id'])
 
@@ -2172,8 +2173,9 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        self.assertEqual(FAKE_UUID, res["server"]["id"])
-        self._check_admin_pass_len(res["server"])
+        server = res['servers'][0]
+        self.assertEqual(FAKE_UUID, server["id"])
+        self._check_admin_pass_len(server)
 
     def test_create_instance_invalid_flavor_href(self):
         image_href = 'http://localhost/v2/images/2'
@@ -2214,7 +2216,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self.assertEqual(FAKE_UUID, server['id'])
 
     def test_create_instance_admin_pass(self):
@@ -2223,7 +2225,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self.assertEqual(server['admin_pass'],
                          self.body['server']['admin_pass'])
 
@@ -2234,7 +2236,7 @@ class ServersControllerCreateTest(test.TestCase):
         self.req.body = jsonutils.dumps(self.body)
         res = self.controller.create(self.req, self.body).obj
 
-        server = res['server']
+        server = res['servers'][0]
         self.assertIn('admin_pass', self.body['server'])
 
     def test_create_instance_admin_pass_empty(self):
@@ -2245,21 +2247,14 @@ class ServersControllerCreateTest(test.TestCase):
         # The fact that the action doesn't raise is enough validation
         self.controller.create(self.req, self.body)
 
-    def test_create_location(self):
-        selfhref = 'http://localhost/v2/fake/servers/%s' % FAKE_UUID
-        bookhref = 'http://localhost/fake/servers/%s' % FAKE_UUID
-        self.req.body = jsonutils.dumps(self.body)
-        robj = self.controller.create(self.req, self.body)
-
-        self.assertEqual(robj['Location'], selfhref)
-
     def _do_test_create_instance_above_quota(self, resource, allowed, quota,
                                              expected_msg):
         fakes.stub_out_instance_quota(self.stubs, allowed, quota, resource)
         self.body['server']['flavor_ref'] = 3
         self.req.body = jsonutils.dumps(self.body)
         try:
-            server = self.controller.create(self.req, self.body).obj['server']
+            res_obj = self.controller.create(self.req, self.body).obj
+            server = res_obj['servers'][0]
             self.fail('expected quota to be exceeded')
         except webob.exc.HTTPRequestEntityTooLarge as e:
             self.assertEquals(e.explanation, expected_msg)
@@ -2321,6 +2316,17 @@ class ServersControllerCreateTest(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', fake_create)
         self.assertRaises(webob.exc.HTTPNotFound,
                           self._test_create_extra, params)
+
+    def test_create_multiple_instances(self):
+        num_vms = 2
+        self.body['server'][multiple_create.MAX_ATTRIBUTE_NAME] = num_vms
+        self.req.body = jsonutils.dumps(self.body)
+        res_obj = self.controller.create(self.req, self.body).obj
+        servers = res_obj['servers']
+        self.assertEqual(num_vms, len(servers))
+        for server in servers:
+            self._check_admin_pass_len(server)
+            self.assertEqual(FAKE_UUID, server['id'])
 
 
 class TestServerCreateRequestXMLDeserializer(test.TestCase):

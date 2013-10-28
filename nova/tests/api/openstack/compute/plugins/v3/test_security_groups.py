@@ -142,7 +142,7 @@ class SecurityGroupsOutputTest(test.TestCase):
         server = dict(name='server_test', image_ref=image_uuid, flavor_ref=2)
         res = self._make_request(url, {'server': server})
         self.assertEqual(res.status_int, 202)
-        server = self._get_server(res.body)
+        server = self._get_servers(res.body)[0]
         for i, group in enumerate(self._get_groups(server)):
             name = 'fake-2-%s' % i
             self.assertEqual(group.get('name'), name)
@@ -329,9 +329,9 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         if override_controller:
-            server = override_controller.create(req, body).obj['server']
+            server = override_controller.create(req, body).obj['servers'][0]
         else:
-            server = self.controller.create(req, body).obj['server']
+            server = self.controller.create(req, body).obj['servers'][0]
 
     def test_create_instance_with_security_group_enabled(self):
         group = 'foo'

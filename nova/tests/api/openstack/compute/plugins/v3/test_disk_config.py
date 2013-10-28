@@ -182,7 +182,7 @@ class DiskConfigTestCase(test.TestCase):
         self.stubs.Set(compute_api.API, 'create', create)
         req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = jsonutils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['servers'][0]
         self.assertDiskConfig(server_dict, 'AUTO')
 
     def test_create_server_override_manual(self):
@@ -199,7 +199,7 @@ class DiskConfigTestCase(test.TestCase):
 
         req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = jsonutils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['servers'][0]
         self.assertDiskConfig(server_dict, 'MANUAL')
 
     def test_create_server_detect_from_image(self):
@@ -218,7 +218,7 @@ class DiskConfigTestCase(test.TestCase):
 
         req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = jsonutils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['servers'][0]
         self.assertDiskConfig(server_dict, 'MANUAL')
 
         req = fakes.HTTPRequestV3.blank('/v3/servers')
@@ -233,7 +233,7 @@ class DiskConfigTestCase(test.TestCase):
 
         req.body = jsonutils.dumps(body)
         res = req.get_response(self.app)
-        server_dict = jsonutils.loads(res.body)['server']
+        server_dict = jsonutils.loads(res.body)['servers'][0]
         self.assertDiskConfig(server_dict, 'AUTO')
 
     def test_update_server_invalid_disk_config(self):
@@ -497,7 +497,7 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         res = self.no_disk_config_controller.create(
             req,
-            body).obj['server']
+            body).obj['servers'][0]
         self.assertTrue(self.create_called)
 
     def test_rebuild_instance_with_disk_config_disabled(self):

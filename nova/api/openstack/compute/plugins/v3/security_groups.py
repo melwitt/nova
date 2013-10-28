@@ -114,20 +114,24 @@ class SecurityGroupsOutputController(wsgi.Controller):
             resp_obj.attach(xml=SecurityGroupServerTemplate())
             self._extend_servers(req, [resp_obj.obj['server']])
 
+    def _detail(self, req, resp_obj):
+        if not softauth(req.environ['nova.context']):
+            return
+        if 'servers' in resp_obj.obj:
+            resp_obj.attach(xml=SecurityGroupServersTemplate())
+            self._extend_servers(req, list(resp_obj.obj['servers']))
+
     @wsgi.extends
     def show(self, req, resp_obj, id):
         return self._show(req, resp_obj)
 
     @wsgi.extends
     def create(self, req, resp_obj, body):
-        return self._show(req, resp_obj)
+        return self._detail(req, resp_obj)
 
     @wsgi.extends
     def detail(self, req, resp_obj):
-        if not softauth(req.environ['nova.context']):
-            return
-        resp_obj.attach(xml=SecurityGroupServersTemplate())
-        self._extend_servers(req, list(resp_obj.obj['servers']))
+        return self._detail(req, resp_obj)
 
 
 class SecurityGroupsTemplateElement(xmlutil.TemplateElement):

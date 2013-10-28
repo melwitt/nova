@@ -90,9 +90,9 @@ class BlockDeviceMappingTest(test.TestCase):
         req.body = jsonutils.dumps(body)
 
         if override_controller:
-            override_controller.create(req, body).obj['server']
+            override_controller.create(req, body).obj['servers'][0]
         else:
-            self.controller.create(req, body).obj['server']
+            self.controller.create(req, body).obj['servers'][0]
 
     def test_create_instance_with_block_device_mapping_disabled(self):
         bdm = [{'device_name': 'foo'}]

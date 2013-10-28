@@ -155,9 +155,9 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         if override_controller:
-            server = override_controller.create(req, body).obj['server']
+            server = override_controller.create(req, body).obj['servers'][0]
         else:
-            server = self.controller.create(req, body).obj['server']
+            server = self.controller.create(req, body).obj['servers'][0]
 
     def test_create_instance_with_multiple_create_disabled(self):
         ret_res_id = True
@@ -325,9 +325,10 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
+        server = res['servers'][0]
 
-        self.assertEqual(FAKE_UUID, res["server"]["id"])
-        self._check_admin_pass_len(res["server"])
+        self.assertEqual(FAKE_UUID, server["id"])
+        self._check_admin_pass_len(server)
 
     def test_create_multiple_instances_pass_disabled(self):
         """Test creating multiple instances but not asking for
@@ -353,9 +354,10 @@ class ServersControllerCreateTest(test.TestCase):
         req.body = jsonutils.dumps(body)
         req.headers["content-type"] = "application/json"
         res = self.controller.create(req, body).obj
+        server = res['servers'][0]
 
-        self.assertEqual(FAKE_UUID, res["server"]["id"])
-        self._check_admin_pass_missing(res["server"])
+        self.assertEqual(FAKE_UUID, server["id"])
+        self._check_admin_pass_missing(server)
 
     def _check_admin_pass_len(self, server_dict):
         """utility function - check server_dict for admin_pass length."""

@@ -141,6 +141,15 @@ def FullServerTemplate():
     return master
 
 
+class FullServersTemplate(xmlutil.TemplateBuilder):
+    def construct(self):
+        root = xmlutil.TemplateElement('servers')
+        elem = xmlutil.SubTemplateElement(root, 'server', selector='servers')
+        make_server(elem, detailed=True)
+        elem.set('admin_pass')
+        return xmlutil.MasterTemplate(root, 1, nsmap=server_nsmap)
+
+
 class CommonDeserializer(wsgi.MetadataXMLDeserializer):
     """Common deserializer to handle xml-formatted server create requests.
 
@@ -709,7 +718,7 @@ class ServersController(wsgi.Controller):
             raise exc.HTTPNotFound(explanation=msg)
 
     @wsgi.response(202)
-    @wsgi.serializers(xml=FullServerTemplate)
+    @wsgi.serializers(xml=FullServersTemplate)
     @wsgi.deserializers(xml=CreateDeserializer)
     def create(self, req, body):
         """Creates a new server for a given user."""
@@ -846,14 +855,13 @@ class ServersController(wsgi.Controller):
                 xml=wsgi.XMLDictSerializer)
 
         req.cache_db_instances(instances)
-        server = self._view_builder.create(req, instances[0])
+        servers = self._view_builder.create(req, instances)
 
         if CONF.enable_instance_password:
-            server['server']['admin_pass'] = password
+            for i in xrange(len(servers['servers'])):
+                servers['servers'][i]['admin_pass'] = password
 
-        robj = wsgi.ResponseObject(server)
-
-        return self._add_location(robj)
+        return wsgi.ResponseObject(servers)
 
     def _create_extension_point(self, ext, server_dict, create_kwargs):
         handler = ext.obj
