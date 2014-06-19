@@ -15,6 +15,7 @@
 
 from nova.api.openstack.compute.plugins.v3 import migrate_server
 from nova import exception
+from nova import objects
 from nova.openstack.common import uuidutils
 from nova.tests.api.openstack.compute.plugins.v3 import \
      admin_only_action_common
@@ -168,8 +169,80 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
         self.assertIn(unicode(fake_exc), res.body)
 
     def test_migrate_live_compute_service_unavailable(self):
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_by_hypervisor')
+        objects.ComputeNodeList.get_by_hypervisor(self.context,
+                                                  'hostname').AndReturn([])
         self._test_migrate_live_failed_with_exception(
-            exception.ComputeServiceUnavailable(host='host'))
+            exception.ComputeServiceUnavailable(host='hostname'))
+
+    def test_migrate_live_hypervisor_hostname(self):
+        self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_by_hypervisor')
+        self.mox.StubOutWithMock(objects.Service, 'get_by_id')
+        instance = self._stub_instance_get()
+        shostname = 'hostname'
+        lhostname = 'hostname.local'
+        self.mox.StubOutWithMock(instance, 'refresh')
+        fake_exc = exception.ComputeServiceUnavailable(host=lhostname)
+        # try live_migrate with hypervisor hostname
+        self.compute_api.live_migrate(self.context, instance, False, False,
+                                      lhostname).AndRaise(fake_exc)
+        fake_service = objects.Service(id=123, host=shostname)
+        fake_node = objects.ComputeNode(service_id=123,
+                                        hypervisor_hostname=lhostname)
+        fake_node._context = self.context
+        objects.Service.get_by_id(self.context, 123).AndReturn(fake_service)
+        # after ComputeServiceUnavailable check if compute host matches
+        objects.ComputeNodeList.get_by_hypervisor(self.context,
+            lhostname).AndReturn([fake_node])
+        instance.refresh()
+        self.compute_api.live_migrate(self.context, instance, False, False,
+                                      shostname)
+        self.mox.ReplayAll()
+        res = self._make_request('/servers/%s/action' % instance.uuid,
+                                 {'migrate_live':
+                                  {'host': lhostname,
+                                   'block_migration': False,
+                                   'disk_over_commit': False}})
+        self.assertEqual(202, res.status_int)
+
+    def test_migrate_live_hypervisor_hostname_not_found(self):
+        self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_by_hypervisor')
+        instance = self._stub_instance_get()
+        lhostname = 'hostname.local'
+        fake_exc = exception.ComputeServiceUnavailable(host=lhostname)
+        # try live_migrate with hypervisor hostname
+        self.compute_api.live_migrate(self.context, instance, False, False,
+                                      lhostname).AndRaise(fake_exc)
+        objects.ComputeNodeList.get_by_hypervisor(self.context,
+            lhostname).AndReturn([])
+        self.mox.ReplayAll()
+        res = self._make_request('/servers/%s/action' % instance.uuid,
+                                 {'migrate_live':
+                                  {'host': lhostname,
+                                   'block_migration': False,
+                                   'disk_over_commit': False}})
+        self.assertEqual(400, res.status_int)
+
+    def test_migrate_live_hypervisor_hostname_multiple_found(self):
+        self.mox.StubOutWithMock(self.compute_api, 'live_migrate')
+        self.mox.StubOutWithMock(objects.ComputeNodeList, 'get_by_hypervisor')
+        instance = self._stub_instance_get()
+        lhostname = 'hostname.local'
+        fake_exc = exception.ComputeServiceUnavailable(host=lhostname)
+        # try live_migrate with hypervisor hostname
+        self.compute_api.live_migrate(self.context, instance, False, False,
+                                      lhostname).AndRaise(fake_exc)
+        objects.ComputeNodeList.get_by_hypervisor(self.context,
+            lhostname).AndReturn(['fake', 'fake'])
+        self.mox.ReplayAll()
+        res = self._make_request('/servers/%s/action' % instance.uuid,
+                                 {'migrate_live':
+                                  {'host': lhostname,
+                                   'block_migration': False,
+                                   'disk_over_commit': False}})
+        self.assertEqual(409, res.status_int)
 
     def test_migrate_live_invalid_hypervisor_type(self):
         self._test_migrate_live_failed_with_exception(

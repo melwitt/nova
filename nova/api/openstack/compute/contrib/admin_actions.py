@@ -25,6 +25,7 @@ from nova import compute
 from nova.compute import vm_states
 from nova import exception
 from nova.i18n import _
+from nova import objects
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 
@@ -311,6 +312,30 @@ class AdminActionsController(wsgi.Controller):
 
         return resp
 
+    def _try_live_migrate(self, context, id, instance, block_migration,
+                          disk_over_commit, host):
+        try:
+            self.compute_api.live_migrate(context, instance,
+                                          block_migration,
+                                          disk_over_commit, host)
+        except exception.ComputeServiceUnavailable:
+            # NOTE(melwitt): retry if the host matches a hypervisor_hostname
+            #                to allow users to specify long hostname too
+            nodes = objects.ComputeNodeList.get_by_hypervisor(context, host)
+            if not nodes:
+                raise
+            if len(nodes) > 1:
+                msg = _('Multiple hosts found for hypervisor_hostname %s, '
+                        'please specify a service host name instead') % host
+                raise exception.NoUniqueMatch(msg)
+            else:
+                host = nodes[0].service.host
+                # refresh from database, else task_state will be 'migrating'
+                instance.refresh()
+                self.compute_api.live_migrate(context, instance,
+                                              block_migration,
+                                              disk_over_commit, host)
+
     @wsgi.action('os-migrateLive')
     def _migrate_live(self, req, id, body):
         """Permit admins to (live) migrate a server to a new host."""
@@ -336,8 +361,8 @@ class AdminActionsController(wsgi.Controller):
 
         try:
             instance = self.compute_api.get(context, id, want_objects=True)
-            self.compute_api.live_migrate(context, instance, block_migration,
-                                          disk_over_commit, host)
+            self._try_live_migrate(context, id, instance, block_migration,
+                                   disk_over_commit, host)
         except (exception.NoValidHost,
                 exception.ComputeServiceUnavailable,
                 exception.InvalidHypervisorType,
@@ -352,7 +377,8 @@ class AdminActionsController(wsgi.Controller):
             raise exc.HTTPBadRequest(explanation=ex.format_message())
         except exception.InstanceNotFound as e:
             raise exc.HTTPNotFound(explanation=e.format_message())
-        except exception.InstanceIsLocked as e:
+        except (exception.InstanceIsLocked,
+                exception.NoUniqueMatch) as e:
             raise exc.HTTPConflict(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:
             common.raise_http_conflict_for_instance_invalid_state(state_error,
