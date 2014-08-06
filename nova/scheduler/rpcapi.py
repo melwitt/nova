@@ -102,6 +102,9 @@ class SchedulerAPI(object):
                                      serializer=serializer)
 
     def select_destinations(self, ctxt, request_spec, filter_properties):
+        # NOTE(melwitt): remove when dicts can be serialized recursively
+        #                by NovaObjectSerializer
+        filter_properties = jsonutils.to_primitive(filter_properties)
         cctxt = self.client.prepare()
         return cctxt.call(ctxt, 'select_destinations',
             request_spec=request_spec, filter_properties=filter_properties)

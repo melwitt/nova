@@ -400,6 +400,9 @@ class ComputeTaskAPI(object):
             admin_password, injected_files, requested_networks,
             security_groups, block_device_mapping, legacy_bdm=True):
         image_p = jsonutils.to_primitive(image)
+        # NOTE(melwitt): remove when dicts can be serialized recursively
+        #                by NovaObjectSerializer
+        filter_properties = jsonutils.to_primitive(filter_properties)
         kw = {'instances': instances, 'image': image_p,
                'filter_properties': filter_properties,
                'admin_password': admin_password,

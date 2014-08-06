@@ -1031,6 +1031,9 @@ class ComputeAPI(object):
             filter_properties, admin_password=None, injected_files=None,
             requested_networks=None, security_groups=None,
             block_device_mapping=None, node=None, limits=None):
+        # NOTE(melwitt): remove when dicts can be serialized recursively
+        #                by NovaObjectSerializer
+        filter_properties = jsonutils.to_primitive(filter_properties)
         cctxt = self.client.prepare(server=host, version='3.23')
         cctxt.cast(ctxt, 'build_and_run_instance', instance=instance,
                 image=image, request_spec=request_spec,
