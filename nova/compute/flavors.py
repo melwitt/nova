@@ -28,7 +28,7 @@ from nova import context
 from nova import db
 from nova import exception
 from nova.i18n import _
-from nova.openstack.common.db import exception as db_exc
+from nova import objects
 from nova.openstack.common import log as logging
 from nova.openstack.common import strutils
 from nova.pci import pci_request
@@ -160,11 +160,9 @@ def create(name, memory, vcpus, root_gb, ephemeral_gb=0, flavorid=None,
     except ValueError:
         raise exception.InvalidInput(reason=_("is_public must be a boolean"))
 
-    try:
-        return db.flavor_create(context.get_admin_context(), kwargs)
-    except db_exc.DBError as e:
-        LOG.exception(_('DB error: %s') % e)
-        raise exception.FlavorCreateFailed()
+    flavor = objects.Flavor(**kwargs)
+    flavor.create(context.get_admin_context())
+    return flavor
 
 
 def destroy(name):
@@ -172,7 +170,9 @@ def destroy(name):
     try:
         if not name:
             raise ValueError()
-        db.flavor_destroy(context.get_admin_context(), name)
+        ctxt = context.get_admin_context()
+        flavor = objects.Flavor.get_by_name(ctxt, name)
+        flavor.destroy(ctxt)
     except (ValueError, exception.NotFound):
         LOG.exception(_('Instance type %s not found for deletion') % name)
         raise exception.FlavorNotFoundByName(flavor_name=name)
@@ -186,12 +186,12 @@ def get_all_flavors(ctxt=None, inactive=False, filters=None):
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    inst_types = db.flavor_get_all(
-            ctxt, inactive=inactive, filters=filters)
+    inst_types = objects.FlavorList.get_all(ctxt, inactive=inactive,
+                                            filters=filters)
 
     inst_type_dict = {}
     for inst_type in inst_types:
-        inst_type_dict[inst_type['id']] = inst_type
+        inst_type_dict[inst_typeid] = inst_type
     return inst_type_dict
 
 
@@ -205,8 +205,9 @@ def get_all_flavors_sorted_list(ctxt=None, inactive=False, filters=None,
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    return db.flavor_get_all(ctxt, filters=filters, sort_key=sort_key,
-                             sort_dir=sort_dir, limit=limit, marker=marker)
+    return objects.FlavorList.get_all(ctxt, filters=filters, sort_key=sort_key,
+                                      sort_dir=sort_dir, limit=limit,
+                                      marker=marker)
 
 
 def get_default_flavor():
@@ -226,7 +227,7 @@ def get_flavor(instance_type_id, ctxt=None, inactive=False):
     if inactive:
         ctxt = ctxt.elevated(read_deleted="yes")
 
-    return db.flavor_get(ctxt, instance_type_id)
+    return objects.Flavor.get_by_id(ctxt, instance_type_id)
 
 
 def get_flavor_by_name(name, ctxt=None):
@@ -237,7 +238,7 @@ def get_flavor_by_name(name, ctxt=None):
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    return db.flavor_get_by_name(ctxt, name)
+    return objects.Flavor.get_by_name(ctxt, name)
 
 
 # TODO(termie): flavor-specific code should probably be in the API that uses
@@ -250,7 +251,7 @@ def get_flavor_by_flavor_id(flavorid, ctxt=None, read_deleted="yes"):
     if ctxt is None:
         ctxt = context.get_admin_context(read_deleted=read_deleted)
 
-    return db.flavor_get_by_flavor_id(ctxt, flavorid, read_deleted)
+    return objects.Flavor.get_by_flavor_id(ctxt, flavorid, read_deleted)
 
 
 def get_flavor_access_by_flavor_id(flavorid, ctxt=None):
@@ -258,7 +259,9 @@ def get_flavor_access_by_flavor_id(flavorid, ctxt=None):
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    return db.flavor_access_get_by_flavor_id(ctxt, flavorid)
+    flavor = objects.Flavor.get_by_flavor_id(ctxt, flavorid)
+    flavor.obj_load_attr('projects')
+    return flavor.projects
 
 
 def add_flavor_access(flavorid, projectid, ctxt=None):
@@ -266,7 +269,8 @@ def add_flavor_access(flavorid, projectid, ctxt=None):
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    return db.flavor_access_add(ctxt, flavorid, projectid)
+    flavor = objects.Flavor.get_by_flavor_id(ctxt, flavorid)
+    return flavor.add_access(ctxt, projectid)
 
 
 def remove_flavor_access(flavorid, projectid, ctxt=None):
@@ -274,7 +278,8 @@ def remove_flavor_access(flavorid, projectid, ctxt=None):
     if ctxt is None:
         ctxt = context.get_admin_context()
 
-    return db.flavor_access_remove(ctxt, flavorid, projectid)
+    flavor = objects.Flavor.get_by_flavor_id(ctxt, flavorid)
+    return flavor.remove_access(ctxt, projectid)
 
 
 def extract_flavor(instance, prefix=''):
@@ -282,11 +287,13 @@ def extract_flavor(instance, prefix=''):
     information.
     """
 
-    instance_type = {}
+    #instance_type = {}
+    instance_type = objects.Flavor()
     sys_meta = utils.instance_sys_meta(instance)
     for key, type_fn in system_metadata_flavor_props.items():
         type_key = '%sinstance_type_%s' % (prefix, key)
-        instance_type[key] = type_fn(sys_meta[type_key])
+        #instance_type[key] = type_fn(sys_meta[type_key])
+        setattr(instance_type, key, type_fn(sys_meta[type_key]))
     return instance_type
 
 
