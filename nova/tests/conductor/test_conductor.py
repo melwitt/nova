@@ -1170,8 +1170,8 @@ class _BaseTaskTestCase(object):
         inst_obj = objects.Instance._from_db_object(
             self.context, objects.Instance(), inst, [])
         flavor = flavors.get_default_flavor()
-        flavor['extra_specs'] = 'extra_specs'
-        request_spec = {'instance_type': flavor,
+        flavor['extra_specs'] = {'extra_specs': 'fake'}
+        request_spec = {'instance_type': obj_base.obj_to_primitive(flavor),
                         'instance_properties': {}}
         compute_utils.get_image_metadata(
             self.context, self.conductor_manager.image_api,
@@ -1180,7 +1180,7 @@ class _BaseTaskTestCase(object):
         scheduler_utils.build_request_spec(
             self.context, 'image',
             [mox.IsA(objects.Instance)],
-            instance_type=flavor).AndReturn(request_spec)
+            instance_type=mox.IsA(objects.Flavor)).AndReturn(request_spec)
 
         hosts = [dict(host='host1', nodename=None, limits={})]
         self.conductor_manager.scheduler_rpcapi.select_destinations(
@@ -1193,7 +1193,7 @@ class _BaseTaskTestCase(object):
 
         self.conductor_manager.compute_rpcapi.prep_resize(
             self.context, 'image', mox.IsA(objects.Instance),
-            mox.IsA(dict), 'host1', [], request_spec=request_spec,
+            mox.IsA(objects.Flavor), 'host1', [], request_spec=request_spec,
             filter_properties=filter_properties, node=None)
 
         self.mox.ReplayAll()
@@ -1219,10 +1219,9 @@ class _BaseTaskTestCase(object):
             system_metadata=system_metadata,
             expected_attrs=['system_metadata']) for i in xrange(2)]
         instance_type = flavors.extract_flavor(instances[0])
-        instance_type['extra_specs'] = 'fake-specs'
+        instance_type_p = jsonutils.to_primitive(instance_type)
         instance_properties = jsonutils.to_primitive(instances[0])
 
-        self.mox.StubOutWithMock(db, 'flavor_extra_specs_get')
         self.mox.StubOutWithMock(self.conductor_manager.scheduler_rpcapi,
                                  'select_destinations')
         self.mox.StubOutWithMock(db, 'instance_get_by_uuid')
@@ -1231,14 +1230,11 @@ class _BaseTaskTestCase(object):
         self.mox.StubOutWithMock(self.conductor_manager.compute_rpcapi,
                                  'build_and_run_instance')
 
-        db.flavor_extra_specs_get(
-                self.context,
-                instance_type['flavorid']).AndReturn('fake-specs')
         self.conductor_manager.scheduler_rpcapi.select_destinations(
                 self.context, {'image': {'fake_data': 'should_pass_silently'},
                     'instance_properties': jsonutils.to_primitive(
                         instances[0]),
-                    'instance_type': instance_type,
+                    'instance_type': instance_type_p,
                     'instance_uuids': [inst.uuid for inst in instances],
                     'num_instances': 2},
                 {'retry': {'num_attempts': 1, 'hosts': []}}).AndReturn(
@@ -1258,7 +1254,7 @@ class _BaseTaskTestCase(object):
                 request_spec={
                     'image': {'fake_data': 'should_pass_silently'},
                     'instance_properties': instance_properties,
-                    'instance_type': instance_type,
+                    'instance_type': instance_type_p,
                     'instance_uuids': [inst.uuid for inst in instances],
                     'num_instances': 2},
                 filter_properties={'retry': {'num_attempts': 1,
@@ -1284,7 +1280,7 @@ class _BaseTaskTestCase(object):
                 request_spec={
                     'image': {'fake_data': 'should_pass_silently'},
                     'instance_properties': instance_properties,
-                    'instance_type': instance_type,
+                    'instance_type': instance_type_p,
                     'instance_uuids': [inst.uuid for inst in instances],
                     'num_instances': 2},
                 filter_properties={'limits': [],

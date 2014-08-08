@@ -387,11 +387,10 @@ class ComputeTaskAPI(object):
             instance = jsonutils.to_primitive(
                     objects_base.obj_to_primitive(instance))
             version = '1.4'
-        flavor_p = jsonutils.to_primitive(flavor)
         cctxt = self.client.prepare(version=version)
         return cctxt.call(context, 'migrate_server',
                           instance=instance, scheduler_hint=scheduler_hint,
-                          live=live, rebuild=rebuild, flavor=flavor_p,
+                          live=live, rebuild=rebuild, flavor=flavor,
                           block_migration=block_migration,
                           disk_over_commit=disk_over_commit,
                           reservations=reservations)

@@ -191,7 +191,7 @@ def get_all_flavors(ctxt=None, inactive=False, filters=None):
 
     inst_type_dict = {}
     for inst_type in inst_types:
-        inst_type_dict[inst_typeid] = inst_type
+        inst_type_dict[inst_type.id] = inst_type
     return inst_type_dict
 
 
@@ -270,7 +270,7 @@ def add_flavor_access(flavorid, projectid, ctxt=None):
         ctxt = context.get_admin_context()
 
     flavor = objects.Flavor.get_by_flavor_id(ctxt, flavorid)
-    return flavor.add_access(ctxt, projectid)
+    flavor.add_access(ctxt, projectid)
 
 
 def remove_flavor_access(flavorid, projectid, ctxt=None):
@@ -279,22 +279,20 @@ def remove_flavor_access(flavorid, projectid, ctxt=None):
         ctxt = context.get_admin_context()
 
     flavor = objects.Flavor.get_by_flavor_id(ctxt, flavorid)
-    return flavor.remove_access(ctxt, projectid)
+    flavor.remove_access(ctxt, projectid)
 
 
 def extract_flavor(instance, prefix=''):
-    """Create an InstanceType-like object from instance's system_metadata
+    """Create a Flavor object from instance's system_metadata
     information.
     """
 
-    #instance_type = {}
-    instance_type = objects.Flavor()
+    flavor = objects.Flavor()
     sys_meta = utils.instance_sys_meta(instance)
     for key, type_fn in system_metadata_flavor_props.items():
         type_key = '%sinstance_type_%s' % (prefix, key)
-        #instance_type[key] = type_fn(sys_meta[type_key])
-        setattr(instance_type, key, type_fn(sys_meta[type_key]))
-    return instance_type
+        setattr(flavor, key, type_fn(sys_meta[type_key]))
+    return flavor
 
 
 def save_flavor_info(metadata, instance_type, prefix=''):

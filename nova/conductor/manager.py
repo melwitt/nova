@@ -501,6 +501,7 @@ class ComputeTaskManager(base.Base):
 
         request_spec = scheduler_utils.build_request_spec(
             context, image, [instance], instance_type=flavor)
+        print(request_spec)
 
         quotas = objects.Quotas.from_reservations(context,
                                                   reservations,

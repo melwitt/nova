@@ -3562,9 +3562,10 @@ class ComputeManager(manager.Manager):
             block_device_info = self._get_instance_block_device_info(
                                 context, instance, bdms=bdms)
 
+            instance_type_p = obj_base.obj_to_primitive(instance_type)
             disk_info = self.driver.migrate_disk_and_power_off(
                     context, instance, migration.dest_host,
-                    instance_type, network_info,
+                    instance_type_p, network_info,
                     block_device_info)
 
             self._terminate_volume_connections(context, instance, bdms)

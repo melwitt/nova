@@ -21,6 +21,8 @@ from nova import db
 from nova.db.sqlalchemy import api as sql_session
 from nova.db.sqlalchemy import models
 from nova import exception
+from nova import objects
+from nova.objects import base as obj_base
 from nova import test
 
 
@@ -85,11 +87,8 @@ class InstanceTypeTestCase(test.TestCase):
         flavor_id = 'flavor1'
         type_ref = flavors.create('some flavor', 256, 1, 120, 100,
                                           flavorid=flavor_id)
-        access_ref = flavors.add_flavor_access(flavor_id,
-                                                             project_id,
-                                                             ctxt=ctxt)
-        self.assertEqual(access_ref["project_id"], project_id)
-        self.assertEqual(access_ref["instance_type_id"], type_ref["id"])
+        flavors.add_flavor_access(flavor_id, project_id, ctxt=ctxt)
+        self.assertIn(project_id, type_ref.projects)
 
     def test_add_flavor_access_already_exists(self):
         user_id = 'fake'
@@ -162,7 +161,8 @@ class InstanceTypeTestCase(test.TestCase):
         default_instance_type = flavors.get_default_flavor()
         instance_type_id = default_instance_type['id']
         fetched = flavors.get_flavor(instance_type_id)
-        self.assertEqual(default_instance_type, fetched)
+        self.assertIsInstance(fetched, objects.Flavor)
+        self.assertEqual(default_instance_type['flavorid'], fetched.flavorid)
 
     def test_will_not_get_flavor_by_unknown_id(self):
         # Ensure get by name returns default flavor with no name.
@@ -178,7 +178,9 @@ class InstanceTypeTestCase(test.TestCase):
         # Ensure get by name returns default flavor with no name.
         default = flavors.get_default_flavor()
         actual = flavors.get_flavor_by_name(None)
-        self.assertEqual(default, actual)
+        self.assertIsInstance(default, objects.Flavor)
+        self.assertIsInstance(actual, objects.Flavor)
+        self.assertEqual(default.flavorid, actual.flavorid)
 
     def test_will_not_get_flavor_with_bad_name(self):
         # Ensure get by name returns default flavor with bad name.
@@ -195,7 +197,8 @@ class InstanceTypeTestCase(test.TestCase):
         default_instance_type = flavors.get_default_flavor()
         flavorid = default_instance_type['flavorid']
         fetched = flavors.get_flavor_by_flavor_id(flavorid)
-        self.assertEqual(default_instance_type, fetched)
+        self.assertIsInstance(fetched, objects.Flavor)
+        self.assertEqual(default_instance_type['flavorid'], fetched.flavorid)
 
     def test_can_read_deleted_types_using_flavor_id(self):
         # Ensure deleted flavors can be read when querying flavor_id.
@@ -230,12 +233,20 @@ class InstanceTypeTestCase(test.TestCase):
     def test_get_all_flavors_sorted_list_sort(self):
         # Test default sort
         all_flavors = flavors.get_all_flavors_sorted_list()
-        self.assertEqual(DEFAULT_FLAVORS, all_flavors)
+        self.assertEqual(len(DEFAULT_FLAVORS), len(all_flavors))
+        for i in range(len(all_flavors)):
+            f = all_flavors[i]
+            self.assertIsInstance(f, objects.Flavor)
+            self.assertEqual(DEFAULT_FLAVORS[i]['flavorid'], f.flavorid)
 
         # Test sorted by name
         all_flavors = flavors.get_all_flavors_sorted_list(sort_key='name')
         expected = sorted(DEFAULT_FLAVORS, key=lambda item: item['name'])
-        self.assertEqual(expected, all_flavors)
+        self.assertEqual(len(expected), len(all_flavors))
+        for i in range(len(all_flavors)):
+            f = all_flavors[i]
+            self.assertIsInstance(f, objects.Flavor)
+            self.assertEqual(expected[i]['flavorid'], f.flavorid)
 
     def test_get_all_flavors_sorted_list_limit(self):
         limited_flavors = flavors.get_all_flavors_sorted_list(limit=2)
@@ -245,12 +256,17 @@ class InstanceTypeTestCase(test.TestCase):
         all_flavors = flavors.get_all_flavors_sorted_list()
 
         # Set the 3rd result as the marker
-        marker_flavorid = all_flavors[2]['flavorid']
+        marker_flavorid = all_flavors[2].flavorid
         marked_flavors = flavors.get_all_flavors_sorted_list(
             marker=marker_flavorid)
         # We expect everything /after/ the 3rd result
         expected_results = all_flavors[3:]
-        self.assertEqual(expected_results, marked_flavors)
+        self.assertEqual(len(expected_results), len(marked_flavors))
+        for i in range(len(marked_flavors)):
+            f = marked_flavors[i]
+            self.assertIsInstance(f, objects.Flavor)
+            self.assertEqual(expected_results[i].flavorid,
+                             f.flavorid)
 
     def test_get_inactive_flavors(self):
         flav1 = flavors.create('flavor1', 256, 1, 120)
@@ -298,19 +314,20 @@ class InstanceTypeToolsTest(test.TestCase):
 
     def _test_extract_flavor(self, prefix):
         instance_type = flavors.get_default_flavor()
+        instance_type_p = obj_base.obj_to_primitive(instance_type)
 
         metadata = {}
-        flavors.save_flavor_info(metadata, instance_type,
-                                               prefix)
+        flavors.save_flavor_info(metadata, instance_type, prefix)
         instance = {'system_metadata': self._dict_to_metadata(metadata)}
         _instance_type = flavors.extract_flavor(instance, prefix)
+        _instance_type_p = obj_base.obj_to_primitive(_instance_type)
 
         props = flavors.system_metadata_flavor_props.keys()
-        for key in instance_type.keys():
+        for key in instance_type_p.keys():
             if key not in props:
-                del instance_type[key]
+                del instance_type_p[key]
 
-        self.assertEqual(instance_type, _instance_type)
+        self.assertEqual(instance_type_p, _instance_type_p)
 
     def test_extract_flavor(self):
         self._test_extract_flavor('')
@@ -551,11 +568,15 @@ class CreateInstanceTypeTest(test.TestCase):
 
         flavors.destroy('flavor')
         self.assertRaises(exception.FlavorNotFound,
-                          flavors.get_flavor, flavor['id'])
+                          flavors.get_flavor, flavor.id)
 
         # Deleted instance should not be in list anymore
         new_list = flavors.get_all_flavors()
-        self.assertEqual(original_list, new_list)
+        self.assertEqual(len(original_list), len(new_list))
+        for k in original_list.keys():
+            f = original_list[k]
+            self.assertIsInstance(f, objects.Flavor)
+            self.assertEqual(f.flavorid, new_list[k].flavorid)
 
     def test_duplicate_names_fail(self):
         # Ensures that name duplicates raise FlavorCreateFailed.

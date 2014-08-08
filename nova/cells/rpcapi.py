@@ -144,6 +144,9 @@ class CellsAPI(object):
         build_inst_kwargs['instances'] = instances_p
         build_inst_kwargs['image'] = jsonutils.to_primitive(
                 build_inst_kwargs['image'])
+        if build_inst_kwargs.get('filter_properties'):
+            build_inst_kwargs['filter_properties'] = jsonutils.to_primitive(
+                    build_inst_kwargs['filter_properties'])
         cctxt = self.client.prepare(version='1.8')
         cctxt.cast(ctxt, 'build_instances',
                    build_inst_kwargs=build_inst_kwargs)
