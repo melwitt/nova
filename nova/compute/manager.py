@@ -587,7 +587,7 @@ class ComputeVirtAPI(virtapi.VirtAPI):
 class ComputeManager(manager.Manager):
     """Manages the running instances from creation to destruction."""
 
-    target = messaging.Target(version='3.35')
+    target = messaging.Target(version='3.36')
 
     # How long to wait in seconds before re-issuing a shutdown
     # signal to a instance during power off.  The overall
@@ -1974,6 +1974,17 @@ class ComputeManager(manager.Manager):
             requested_networks = objects.NetworkRequestList(
                 objects=[objects.NetworkRequest.from_tuple(t)
                          for t in requested_networks])
+        # NOTE(melwitt): Remove this in v4.0 of the RPC API
+        flavor = filter_properties.get('instance_type')
+        if flavor and not isinstance(flavor, objects.Flavor):
+            if flavor.get('extra_specs'):
+                # The extra_specs might be a trimmed-down NUMA-only set, so
+                # lookup flavor to get the full extra_specs for use downstream
+                flavor = objects.Flavor.get_by_id(context, flavor['id'])
+            else:
+                flavor = objects.Flavor._from_db_object(
+                    context, objects.Flavor(), flavor)
+            filter_properties = dict(filter_properties, instance_type=flavor)
 
         @utils.synchronized(instance.uuid)
         def _locked_do_build_and_run_instance(*args, **kwargs):
