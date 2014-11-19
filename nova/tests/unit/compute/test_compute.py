@@ -1871,12 +1871,13 @@ class ComputeTestCase(BaseTestCase):
         def fake_rpc_reserve_block_device_name(self, context, instance, device,
                                                volume_id, **kwargs):
             bdm = objects.BlockDeviceMapping(
-                        **{'source_type': 'volume',
+                        **{'context': context,
+                           'source_type': 'volume',
                            'destination_type': 'volume',
                            'volume_id': 1,
                            'instance_uuid': instance['uuid'],
                            'device_name': '/dev/vdc'})
-            bdm.create(context)
+            bdm.create()
             bdms.append(bdm)
             return bdm
 
@@ -2013,7 +2014,7 @@ class ComputeTestCase(BaseTestCase):
                                                 expected_attrs=extra)
         self.compute.stop_instance(self.context, instance=inst_obj)
         inst_obj.task_state = task_states.POWERING_ON
-        inst_obj.save(self.context)
+        inst_obj.save()
         self.compute.start_instance(self.context, instance=inst_obj)
         self.compute.terminate_instance(self.context, instance, [], [])
 
@@ -2031,7 +2032,7 @@ class ComputeTestCase(BaseTestCase):
                                                 expected_attrs=extra)
         self.compute.stop_instance(self.context, instance=inst_obj)
         inst_obj.task_state = task_states.POWERING_ON
-        inst_obj.save(self.context)
+        inst_obj.save()
         self.compute.start_instance(self.context, instance=inst_obj)
         self.compute.terminate_instance(self.context, instance, [], [])
 
@@ -2248,7 +2249,7 @@ class ComputeTestCase(BaseTestCase):
                                                 instance['uuid'],
                                                 expected_attrs=extra)
         inst_obj.task_state = task_states.POWERING_ON
-        inst_obj.save(self.context)
+        inst_obj.save()
         self.compute.start_instance(self.context, instance=inst_obj)
         self.assertTrue(called['power_on'])
         self.compute.terminate_instance(self.context, inst_obj, [], [])
@@ -2273,7 +2274,7 @@ class ComputeTestCase(BaseTestCase):
                                                 instance['uuid'],
                                                 expected_attrs=extra)
         inst_obj.task_state = task_states.POWERING_OFF
-        inst_obj.save(self.context)
+        inst_obj.save()
         self.compute.stop_instance(self.context, instance=inst_obj)
         self.assertTrue(called['power_off'])
         self.compute.terminate_instance(self.context, inst_obj, [], [])
@@ -4169,7 +4170,7 @@ class ComputeTestCase(BaseTestCase):
 
     def test_state_revert(self):
         # ensure that task_state is reverted after a failed operation.
-        migration = objects.Migration()
+        migration = objects.Migration(context=self.context.elevated())
         migration.instance_uuid = 'b48316c5-71e8-45e4-9884-6c78055b9b13'
         migration.new_instance_type_id = '1'
 
@@ -4224,6 +4225,11 @@ class ComputeTestCase(BaseTestCase):
         self._stub_out_resize_network_methods()
         instance = self._create_fake_instance_obj()
         for operation in actions:
+
+            def fake_migration_save(*args, **kwargs):
+                raise test.TestingException()
+
+            self.stubs.Set(migration, 'save', fake_migration_save)
             self._test_state_revert(instance, *operation)
 
     def _ensure_quota_reservations_committed(self, instance):
@@ -4356,12 +4362,12 @@ class ComputeTestCase(BaseTestCase):
                                  '_get_instance_block_device_info')
         self.mox.StubOutWithMock(migration, 'save')
         self.mox.StubOutWithMock(instance, 'save')
-        self.mox.StubOutWithMock(self.context, 'elevated')
 
-        def _mig_save(context):
+        def _mig_save():
             self.assertEqual(migration.status, 'finished')
             self.assertEqual(vm_state, instance.vm_state)
             self.assertEqual(task_states.RESIZE_FINISH, instance.task_state)
+            self.assertTrue(migration._context.is_admin)
             orig_mig_save()
 
         def _instance_save0():
@@ -4421,8 +4427,7 @@ class ComputeTestCase(BaseTestCase):
                                              image, True,
                                              'fake-bdminfo', power_on)
         # Ensure instance status updates is after the migration finish
-        self.context.elevated().AndReturn(self.context)
-        migration.save(self.context).WithSideEffects(_mig_save)
+        migration.save().WithSideEffects(_mig_save)
         exp_kwargs = dict(expected_task_state=task_states.RESIZE_FINISH)
         instance.save(**exp_kwargs).WithSideEffects(_instance_save3)
         self.compute._notify_about_instance_usage(
@@ -4455,12 +4460,13 @@ class ComputeTestCase(BaseTestCase):
                   'id': volume_id,
                   'attach_status': 'detached'}
         bdm = objects.BlockDeviceMapping(
-                        **{'source_type': 'volume',
+                        **{'context': self.context,
+                           'source_type': 'volume',
                            'destination_type': 'volume',
                            'volume_id': volume_id,
                            'instance_uuid': instance['uuid'],
                            'device_name': '/dev/vdc'})
-        bdm.create(self.context)
+        bdm.create()
 
         # stub out volume attach
         def fake_volume_get(self, context, volume_id):
@@ -6977,10 +6983,10 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(self.compute.network_api, 'setup_networks_on_host',
                        fake_setup_networks_on_host)
 
-        migration = objects.Migration()
+        migration = objects.Migration(context=self.context.elevated())
         migration.instance_uuid = instance.uuid
         migration.status = 'finished'
-        migration.create(self.context.elevated())
+        migration.create()
 
         instance.task_state = task_states.DELETING
         instance.vm_state = vm_states.RESIZED
@@ -7119,10 +7125,11 @@ class ComputeTestCase(BaseTestCase):
         instance = self._create_fake_instance_obj(
                 params={'root_device_name': '/dev/vda'})
         bdm = objects.BlockDeviceMapping(
-                **{'source_type': 'image', 'destination_type': 'local',
+                **{'context': self.context, 'source_type': 'image',
+                   'destination_type': 'local',
                    'image_id': 'fake-image-id', 'device_name': '/dev/vda',
                    'instance_uuid': instance.uuid})
-        bdm.create(self.context)
+        bdm.create()
 
         self.compute.reserve_block_device_name(self.context, instance,
                                                '/dev/vdb', 'fake-volume-id',
@@ -9409,14 +9416,16 @@ class ComputeAPITestCase(BaseTestCase):
         admin = context.get_admin_context()
         instance = self._create_fake_instance_obj()
 
-        img_bdm = {'instance_uuid': instance['uuid'],
+        img_bdm = {'context': admin,
+                     'instance_uuid': instance['uuid'],
                      'device_name': '/dev/vda',
                      'source_type': 'image',
                      'destination_type': 'local',
                      'delete_on_termination': False,
                      'boot_index': 0,
                      'image_id': 'fake_image'}
-        vol_bdm = {'instance_uuid': instance['uuid'],
+        vol_bdm = {'context': admin,
+                     'instance_uuid': instance['uuid'],
                      'device_name': '/dev/vdc',
                      'source_type': 'volume',
                      'destination_type': 'volume',
@@ -9425,7 +9434,7 @@ class ComputeAPITestCase(BaseTestCase):
         bdms = []
         for bdm in img_bdm, vol_bdm:
             bdm_obj = objects.BlockDeviceMapping(**bdm)
-            bdm_obj.create(admin)
+            bdm_obj.create()
             bdms.append(bdm_obj)
 
         self.stubs.Set(self.compute, 'volume_api', mox.MockAnything())
