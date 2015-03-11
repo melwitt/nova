@@ -179,7 +179,7 @@ class CellsAPITestCase(test.NoDBTestCase):
 
         expected_args = {'instance': fake_instance}
         self._check_result(call_info, 'instance_update_at_top',
-                expected_args)
+                expected_args, version='1.35')
 
     def test_instance_destroy_at_top(self):
         fake_instance = {'uuid': 'fake-uuid'}

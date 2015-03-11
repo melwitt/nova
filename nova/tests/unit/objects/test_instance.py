@@ -28,7 +28,6 @@ from nova import exception
 from nova.network import model as network_model
 from nova import notifications
 from nova import objects
-from nova.objects import base
 from nova.objects import instance
 from nova.objects import instance_info_cache
 from nova.objects import pci_device
@@ -330,12 +329,8 @@ class _TestInstanceObject(object):
                     exp_vm_state, exp_task_state, admin_reset)
         elif cell_type == 'compute':
             cells_rpcapi.CellsAPI().AndReturn(cells_api_mock)
-            expected = ['info_cache', 'security_groups', 'system_metadata',
-                        'flavor', 'new_flavor', 'old_flavor']
-            new_ref_obj = objects.Instance._from_db_object(self.context,
-                          objects.Instance(), new_ref, expected_attrs=expected)
-            instance_ref_p = base.obj_to_primitive(new_ref_obj)
-            cells_api_mock.instance_update_at_top(self.context, instance_ref_p)
+            cells_api_mock.instance_update_at_top(self.context,
+                                                  mox.IsA(instance.Instance))
         notifications.send_update(self.context, mox.IgnoreArg(),
                                   mox.IgnoreArg())
 

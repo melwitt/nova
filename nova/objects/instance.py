@@ -859,8 +859,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             _handle_cell_update_from_api()
         elif cell_type == 'compute':
             cells_api = cells_rpcapi.CellsAPI()
-            cells_api.instance_update_at_top(context,
-                                             base.obj_to_primitive(new_ref))
+            cells_api.instance_update_at_top(context, new_ref)
 
         notifications.send_update(context, old_ref, new_ref)
         self.obj_reset_changes()
