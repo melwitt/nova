@@ -33,6 +33,7 @@ from oslo_log import log as logging
 
 from nova.cells import rpcapi as cells_rpcapi
 from nova.i18n import _LE
+from nova import objects
 
 
 db_opts = [
@@ -746,7 +747,10 @@ def instance_update(context, instance_uuid, values, update_cells=True):
     rv = IMPL.instance_update(context, instance_uuid, values)
     if update_cells:
         try:
-            cells_rpcapi.CellsAPI().instance_update_at_top(context, rv)
+            instance = objects.Instance._from_db_object(context,
+                                                        objects.Instance(),
+                                                        rv)
+            cells_rpcapi.CellsAPI().instance_update_at_top(context, instance)
         except Exception:
             LOG.exception(_LE("Failed to notify cells of instance update"))
     return rv
@@ -774,7 +778,10 @@ def instance_update_and_get_original(context, instance_uuid, values,
                                                columns_to_join=columns_to_join)
     if update_cells:
         try:
-            cells_rpcapi.CellsAPI().instance_update_at_top(context, rv[1])
+            instance = objects.Instance._from_db_object(context,
+                                                        objects.Instance(),
+                                                        rv[1])
+            cells_rpcapi.CellsAPI().instance_update_at_top(context, instance)
         except Exception:
             LOG.exception(_LE("Failed to notify cells of instance update"))
     return rv

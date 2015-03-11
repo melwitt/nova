@@ -330,12 +330,8 @@ class _TestInstanceObject(object):
                     exp_vm_state, exp_task_state, admin_reset)
         elif cell_type == 'compute':
             cells_rpcapi.CellsAPI().AndReturn(cells_api_mock)
-            expected = ['info_cache', 'security_groups', 'system_metadata',
-                        'flavor', 'new_flavor', 'old_flavor']
-            new_ref_obj = objects.Instance._from_db_object(self.context,
-                          objects.Instance(), new_ref, expected_attrs=expected)
-            instance_ref_p = base.obj_to_primitive(new_ref_obj)
-            cells_api_mock.instance_update_at_top(self.context, instance_ref_p)
+            cells_api_mock.instance_update_at_top(self.context,
+                                                  mox.IsA(instance.Instance))
         notifications.send_update(self.context, mox.IgnoreArg(),
                                   mox.IgnoreArg())
 
@@ -533,8 +529,12 @@ class _TestInstanceObject(object):
 
         self.assertEqual('foo!bar@baz', inst.cell_name)
         if cell_type == 'compute':
-            mock_update_at_top.assert_called_once_with(self.context,
-                    base.obj_to_primitive(inst))
+            mock_update_at_top.assert_called_once_with(self.context, mock.ANY)
+            # Compare primitives since we can't check instance object equality
+            expected_inst_p = base.obj_to_primitive(inst)
+            actual_inst = mock_update_at_top.call_args[0][1]
+            actual_inst_p = base.obj_to_primitive(actual_inst)
+            self.assertEqual(expected_inst_p, actual_inst_p)
             self.assertFalse(fake_update_from_api.called)
         elif cell_type == 'api':
             self.assertFalse(mock_update_at_top.called)
