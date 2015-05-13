@@ -2632,7 +2632,6 @@ class ComputeTestCase(BaseTestCase):
                                         {'task_state': task_pending,
                                          'expected_task_state': expected_tasks,
                                          'power_state': fake_power_state1},
-                                        update_cells=False,
                                             columns_to_join=['system_metadata',
                                                              'extra',
                                                              'extra.flavor']
@@ -2643,7 +2642,6 @@ class ComputeTestCase(BaseTestCase):
                                         updated_dbinstance1['uuid'],
                                         {'task_state': task_started,
                                          'expected_task_state': task_pending},
-                                        update_cells=False,
                                             columns_to_join=['system_metadata',
                                                              'extra',
                                                              'extra.flavor']
@@ -2692,7 +2690,6 @@ class ComputeTestCase(BaseTestCase):
                 {'power_state': new_power_state,
                  'task_state': None,
                  'vm_state': vm_states.ACTIVE},
-                update_cells=False,
                 columns_to_join=['system_metadata', 'extra', 'extra.flavor'],
                 ).AndRaise(fault)
             self.compute._notify_about_instance_usage(
@@ -2703,7 +2700,6 @@ class ComputeTestCase(BaseTestCase):
             db.instance_update_and_get_original(
                 econtext, updated_dbinstance1['uuid'],
                 {'vm_state': vm_states.ERROR},
-                update_cells=False,
                 columns_to_join=['system_metadata', 'extra', 'extra.flavor'],
                 ).AndRaise(fault)
         else:
@@ -2712,7 +2708,6 @@ class ComputeTestCase(BaseTestCase):
                 {'power_state': new_power_state,
                  'task_state': None,
                  'vm_state': vm_states.ACTIVE},
-                update_cells=False,
                 columns_to_join=['system_metadata', 'extra', 'extra.flavor'],
                 ).AndReturn((None, updated_dbinstance2))
             if fail_running:
@@ -6451,14 +6446,14 @@ class ComputeTestCase(BaseTestCase):
         self.stubs.Set(self.compute, '_get_resource_tracker', fail_get)
 
         instance = self._create_fake_instance_obj({'host': 'someotherhost'})
-        self.compute._instance_update(self.context, instance.uuid)
+        self.compute._instance_update(self.context, instance.uuid, vcpus=4)
 
         instance = self._create_fake_instance_obj({'node': 'someothernode'})
-        self.compute._instance_update(self.context, instance.uuid)
+        self.compute._instance_update(self.context, instance.uuid, vcpus=4)
 
         params = {'host': 'someotherhost', 'node': 'someothernode'}
         instance = self._create_fake_instance_obj(params)
-        self.compute._instance_update(self.context, instance.uuid)
+        self.compute._instance_update(self.context, instance.uuid, vcpus=4)
 
     def test_destroy_evacuated_instance_on_shared_storage(self):
         fake_context = context.get_admin_context()

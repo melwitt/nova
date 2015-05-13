@@ -782,7 +782,6 @@ class _TargetedMessageMethods(_BaseMessageMethods):
         try:
             instance = objects.Instance.get_by_uuid(message.ctxt,
                                                     instance_uuid)
-
         except exception.InstanceNotFound:
             with excutils.save_and_reraise_exception():
                 # Must be a race condition.  Let's try to resolve it by

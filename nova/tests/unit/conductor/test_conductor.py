@@ -860,23 +860,33 @@ class ConductorImportTest(test.TestCase):
 
 class ConductorPolicyTest(test.TestCase):
     def test_all_allowed_keys(self):
-
-        def fake_db_instance_update(self, *args, **kwargs):
-            return None, None
-        self.stubs.Set(db, 'instance_update_and_get_original',
-                       fake_db_instance_update)
-
         ctxt = context.RequestContext('fake-user', 'fake-project')
         conductor = conductor_api.LocalAPI()
         updates = {}
         for key in conductor_manager.allowed_updates:
             if key in conductor_manager.datetime_fields:
                 updates[key] = timeutils.utcnow()
+            elif key == 'access_ip_v4':
+                updates[key] = '10.0.0.2'
+            elif key == 'access_ip_v6':
+                updates[key] = '2001:db8:0:1::1'
+            elif key in ('instance_type_id', 'memory_mb', 'ephemeral_gb',
+                         'root_gb', 'vcpus', 'power_state', 'progress'):
+                updates[key] = 5
+            elif key == 'system_metadata':
+                updates[key] = {'foo': 'foo'}
             else:
                 updates[key] = 'foo'
 
-        with mock.patch('nova.objects.Instance._from_db_object'):
+        def fake_save(inst):
+            # id that comes back from db after updating
+            inst.id = 1
+
+        with mock.patch.object(objects.Instance, 'save',
+                               side_effect=fake_save,
+                               autospec=True) as mock_save:
             conductor.instance_update(ctxt, 'fake-instance', **updates)
+            mock_save.assert_called_once_with(mock.ANY)
 
     def test_allowed_keys_are_real(self):
         instance = models.Instance()

@@ -319,7 +319,6 @@ class _TestInstanceObject(object):
                                 ).AndReturn(old_ref)
         db.instance_update_and_get_original(
                 self.context, fake_uuid, expected_updates,
-                update_cells=False,
                 columns_to_join=['info_cache', 'security_groups',
                                  'system_metadata', 'extra', 'extra.flavor']
                 ).AndReturn((old_ref, new_ref))
@@ -401,7 +400,7 @@ class _TestInstanceObject(object):
                                 use_slave=False
                                 ).AndReturn(old_ref)
         db.instance_update_and_get_original(
-                self.context, fake_uuid, expected_updates, update_cells=False,
+                self.context, fake_uuid, expected_updates,
                 columns_to_join=['info_cache', 'security_groups',
                                  'system_metadata', 'extra', 'extra.flavor']
                 ).AndReturn((old_ref, new_ref))
@@ -544,12 +543,12 @@ class _TestInstanceObject(object):
         expected_calls = [
                 mock.call(self.context, inst.uuid,
                     {'vm_state': 'foo', 'task_state': 'bar',
-                     'cell_name': 'foo!bar@baz'}, update_cells=False,
+                     'cell_name': 'foo!bar@baz'},
                     columns_to_join=['system_metadata', 'extra',
                         'extra.flavor']),
                 mock.call(self.context, inst.uuid,
                     {'vm_state': 'bar', 'task_state': 'foo'},
-                    update_cells=False, columns_to_join=['system_metadata',
+                    columns_to_join=['system_metadata',
                         'extra', 'extra.flavor'])]
         mock_db_update.assert_has_calls(expected_calls)
 

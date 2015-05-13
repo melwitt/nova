@@ -794,13 +794,13 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             # authoritative for their view of vm_state and task_state.
             stale_instance = self.obj_clone()
 
-        cells_update_from_api = cell_type == 'api' and self.cell_name
+        cells_update_from_api = (cell_type == 'api' and self.cell_name and
+                                 self._sync_cells)
 
         if cells_update_from_api:
             def _handle_cell_update_from_api():
-                if self._sync_cells:
-                    cells_api = cells_rpcapi.CellsAPI()
-                    cells_api.instance_update_from_api(context, stale_instance,
+                cells_api = cells_rpcapi.CellsAPI()
+                cells_api.instance_update_from_api(context, stale_instance,
                             expected_vm_state,
                             expected_task_state,
                             admin_state_reset)
@@ -866,7 +866,7 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
             expected_attrs.append('system_metadata')
             expected_attrs.append('flavor')
         old_ref, inst_ref = db.instance_update_and_get_original(
-                context, self.uuid, updates, update_cells=False,
+                context, self.uuid, updates,
                 columns_to_join=_expected_cols(expected_attrs))
 
         self._from_db_object(context, self, inst_ref,

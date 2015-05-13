@@ -114,8 +114,8 @@ class CellsAPI(object):
         existing methods in 1.x after that point should be done such that they
         can handle the version_cap being set to 1.34.
 
-        * 1.35 - Make instance_update_at_top and instance_destroy_at_top
-                 use instance objects
+        * 1.35 - Make instance_update_at_top, instance_destroy_at_top
+                 and instance_info_cache_update_at_top use instance objects
     '''
 
     VERSION_ALIASES = {

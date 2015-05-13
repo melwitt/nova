@@ -731,29 +731,16 @@ def instance_get_all_hung_in_rebooting(context, reboot_window):
     return IMPL.instance_get_all_hung_in_rebooting(context, reboot_window)
 
 
-def instance_update(context, instance_uuid, values, update_cells=True):
+def instance_update(context, instance_uuid, values):
     """Set the given properties on an instance and update it.
 
     Raises NotFound if instance does not exist.
 
     """
-    rv = IMPL.instance_update(context, instance_uuid, values)
-    if update_cells:
-        try:
-            instance = objects.Instance._from_db_object(context,
-                                                        objects.Instance(),
-                                                        rv)
-            cells_rpcapi.CellsAPI().instance_update_at_top(context, instance)
-        except Exception:
-            LOG.exception(_LE("Failed to notify cells of instance update"))
-    return rv
+    return IMPL.instance_update(context, instance_uuid, values)
 
 
-# FIXME(comstud): 'update_cells' is temporary as we transition to using
-# objects.  When everything is using Instance.save(), we can remove the
-# argument and the RPC to nova-cells.
 def instance_update_and_get_original(context, instance_uuid, values,
-                                     update_cells=True,
                                      columns_to_join=None):
     """Set the given properties on an instance and update it. Return
     a shallow copy of the original instance reference, as well as the
@@ -769,14 +756,6 @@ def instance_update_and_get_original(context, instance_uuid, values,
     """
     rv = IMPL.instance_update_and_get_original(context, instance_uuid, values,
                                                columns_to_join=columns_to_join)
-    if update_cells:
-        try:
-            instance = objects.Instance._from_db_object(context,
-                                                        objects.Instance(),
-                                                        rv[1])
-            cells_rpcapi.CellsAPI().instance_update_at_top(context, instance)
-        except Exception:
-            LOG.exception(_LE("Failed to notify cells of instance update"))
     return rv
 
 
