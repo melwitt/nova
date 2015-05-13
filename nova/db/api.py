@@ -634,16 +634,9 @@ def instance_create(context, values):
     return IMPL.instance_create(context, values)
 
 
-def instance_destroy(context, instance_uuid, constraint=None,
-        update_cells=True):
+def instance_destroy(context, instance_uuid, constraint=None):
     """Destroy the instance or raise if it does not exist."""
-    rv = IMPL.instance_destroy(context, instance_uuid, constraint)
-    if update_cells:
-        try:
-            cells_rpcapi.CellsAPI().instance_destroy_at_top(context, rv)
-        except Exception:
-            LOG.exception(_LE("Failed to notify cells of instance destroy"))
-    return rv
+    return IMPL.instance_destroy(context, instance_uuid, constraint)
 
 
 def instance_get_by_uuid(context, uuid, columns_to_join=None, use_slave=False):

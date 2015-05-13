@@ -244,8 +244,12 @@ class ConductorManager(manager.Manager):
 
     # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def instance_destroy(self, context, instance):
-        result = self.db.instance_destroy(context, instance['uuid'])
-        return jsonutils.to_primitive(result)
+        if not isinstance(instance, objects.Instance):
+            instance = objects.Instance._from_db_object(context,
+                                                        objects.Instance(),
+                                                        instance)
+        instance.destroy()
+        return nova_object.obj_to_primitive(instance)
 
     # NOTE(hanlind): This can be removed in version 3.0 of the RPC API
     def instance_fault_create(self, context, values):

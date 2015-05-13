@@ -639,10 +639,18 @@ class Instance(base.NovaPersistentObject, base.NovaObject,
         else:
             constraint = None
 
+        context = self._context
+
         try:
-            db_inst = db.instance_destroy(self._context, self.uuid,
+            cell_type = cells_opts.get_cell_type()
+            if cell_type is not None:
+                stale_instance = self.obj_clone()
+            db_inst = db.instance_destroy(context, self.uuid,
                                           constraint=constraint)
-            self._from_db_object(self._context, self, db_inst)
+            self._from_db_object(context, self, db_inst)
+            if cell_type == 'compute':
+                cells_api = cells_rpcapi.CellsAPI()
+                cells_api.instance_destroy_at_top(context, stale_instance)
         except exception.ConstraintNotMet:
             raise exception.ObjectActionError(action='destroy',
                                               reason='host changed')

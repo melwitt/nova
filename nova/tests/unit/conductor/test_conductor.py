@@ -584,12 +584,16 @@ class ConductorTestCase(_BaseTestCase, test.TestCase):
                                                        'migration')
 
     def test_instance_destroy(self):
-        self.mox.StubOutWithMock(db, 'instance_destroy')
-        db.instance_destroy(self.context, 'fake-uuid').AndReturn('fake-result')
-        self.mox.ReplayAll()
-        result = self.conductor.instance_destroy(self.context,
-                                                 {'uuid': 'fake-uuid'})
-        self.assertEqual(result, 'fake-result')
+        instance = objects.Instance(id=1, uuid='fake-uuid')
+        @mock.patch.object(instance, 'destroy')
+        @mock.patch.object(obj_base, 'obj_to_primitive',
+                           return_value='fake-result')
+        def do_test(mock_to_primitive, mock_destroy):
+            result = self.conductor.instance_destroy(self.context, instance)
+            mock_destroy.assert_called_once_with()
+            mock_to_primitive.assert_called_once_with(instance)
+            self.assertEqual(result, 'fake-result')
+        do_test()
 
     def test_compute_unrescue(self):
         self.mox.StubOutWithMock(self.conductor_manager.compute_api,
