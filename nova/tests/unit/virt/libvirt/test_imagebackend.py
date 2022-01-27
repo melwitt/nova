@@ -22,6 +22,7 @@ import tempfile
 from unittest import mock
 
 from castellan import key_manager
+from castellan.key_manager import key_manager as key_manager_api
 import ddt
 import fixtures
 from oslo_concurrency import lockutils
@@ -229,6 +230,8 @@ class _ImageTestCase(object):
         self._test_libvirt_info_scsi_with_unit(disk_unit)
 
     def test_libvirt_info_with_encryption(self):
+        km = 'castellan.tests.unit.key_manager.mock_key_manager.MockKeyManager'
+        self.flags(backend=km, group='key_manager')
         disk_info = {
             'bus': 'virtio',
             'dev': '/dev/vda',
@@ -264,6 +267,34 @@ class _ImageTestCase(object):
         self.assertEqual("passphrase", disk.encryption.secret.type)
         self.assertEqual(uuids.secret, disk.encryption.secret.uuid)
         self.assertEqual("luks", disk.encryption.format)
+
+    def _test_key_manager_caching(self, encrypted, disk_info_mapping=None):
+        image = self.image_class(
+            self.INSTANCE, self.NAME, disk_info_mapping=disk_info_mapping)
+
+        if encrypted:
+            self.assertIsInstance(
+                image.key_manager, key_manager_api.KeyManager)
+        else:
+            self.assertIsNone(image.key_manager)
+
+    def test_key_manager_caching(self):
+        # First test without encryption.
+        disk_info = {
+            'bus': 'virtio',
+            'dev': '/dev/vda',
+            'type': 'disk',
+            'encrypted': False,
+        }
+        self._test_key_manager_caching(
+            encrypted=False, disk_info_mapping=disk_info)
+
+        # Then test with encryption.
+        km = 'castellan.tests.unit.key_manager.mock_key_manager.MockKeyManager'
+        self.flags(backend=km, group='key_manager')
+        disk_info['encrypted'] = True
+        self._test_key_manager_caching(
+            encrypted=True, disk_info_mapping=disk_info)
 
 
 class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
@@ -941,6 +972,10 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
 
         self.assertEqual(fake_processutils.fake_execute_get_log(), [])
 
+    def test_key_manager_caching(self):
+        # The Lvm backend uses a legacy encryption implementation.
+        self._test_key_manager_caching(encrypted=False)
+
 
 class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
     VG = 'FakeVG'
@@ -1291,6 +1326,10 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
         model = image.get_model(FakeConn())
         self.assertEqual(imgmodel.LocalBlockImage(self.PATH),
                          model)
+
+    def test_key_manager_caching(self):
+        # The Lvm backend uses a legacy encryption implementation.
+        self._test_key_manager_caching(encrypted=True)
 
 
 @ddt.ddt
