@@ -134,6 +134,16 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
 
         return done, done
 
+    def reset_encryption_fields(self):
+        self.encrypted = False
+        encryption_fields = [
+            'encryption_secret_uuid',
+            'encryption_format',
+            'encryption_options',
+        ]
+        for field in encryption_fields:
+            self[field] = None
+
     @staticmethod
     @oslo_db_api.wrap_db_retry(max_retries=1, retry_on_deadlock=True)
     def _create_uuid(context, bdm_id):

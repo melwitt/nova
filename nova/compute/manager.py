@@ -3587,6 +3587,20 @@ class ComputeManager(manager.Manager):
                     self._rebuild_volume_backed_instance(
                         context, instance, bdms, image_meta.id)
 
+            # We are potentially changing images, so wipe out the old
+            # encryption attributes in the BDMs and update them with properties
+            # from the new image. We could be going from not encrypted to
+            # encrypted, for example. Note that we have to do this after
+            # calling driver.destroy() because we need the old encryption
+            # secret UUID in order to delete the old secret.
+            for bdm in bdms:
+                bdm.reset_encryption_fields()
+            if bdms:
+                compute_utils.update_ephemeral_encryption_bdms(
+                    instance.flavor, image_meta, bdms)
+            for bdm in bdms:
+                bdm.save()
+
         instance.task_state = task_states.REBUILD_BLOCK_DEVICE_MAPPING
         instance.save(expected_task_state=[task_states.REBUILDING])
 
