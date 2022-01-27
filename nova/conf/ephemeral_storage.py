@@ -49,6 +49,12 @@ Encryption key length in bits.
 The bit length of the encryption key to be used to encrypt ephemeral storage.
 In XTS mode only half of the bits are used for encryption key.
 """),
+    cfg.StrOpt(
+        'default_format',
+        default='luks',
+        help="""
+Default ephemeral encryption format.
+"""),
 ]
 
 
