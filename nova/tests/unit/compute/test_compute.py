@@ -7980,6 +7980,47 @@ class ComputeTestCase(BaseTestCase,
 
         self.assertNotEqual(0, instance.deleted)
 
+    def test_complete_deletion(self):
+        ctxt = context.get_context()
+        instance = self._create_fake_instance_obj()
+        bdm = objects.BlockDeviceMapping(
+            **fake_block_device.FakeDbBlockDeviceDict({
+                'device_name': '/dev/sda3',
+                'source_type': 'image',
+                'destination_type': 'local',
+                'device_type': 'disk',
+                'guest_format': None,
+                'boot_index': 2,
+                'volume_size': 1,
+                'encryption_secret_uuid': uuids.secret}))
+        bdms = [bdm, bdm]
+
+        @mock.patch.object(self.compute, '_update_resource_tracker')
+        @mock.patch.object(
+            self.compute.reportclient, 'delete_allocation_for_instance')
+        @mock.patch.object(self.compute, '_clean_instance_console_tokens')
+        @mock.patch.object(self.compute, '_delete_scheduler_instance_info')
+        @mock.patch('nova.crypto.delete_encryption_secret')
+        def _test(
+                mock_delete_secret, mock_delete_scheduler_info,
+                mock_clean_tokens, mock_delete_alloc, mock_update_rt):
+
+            mock_delete_secret.side_effect = [test.TestingException(), None]
+
+            self.compute._complete_deletion(ctxt, instance, bdms)
+
+            mock_update_rt.assert_called_once_with(ctxt, instance)
+            mock_delete_alloc.assert_called_once_with(
+                ctxt, instance.uuid, force=True)
+            mock_clean_tokens.assert_called_once_with(ctxt, instance)
+            mock_delete_scheduler_info.assert_called_once_with(
+                ctxt, instance.uuid)
+            self.assertEqual(2, mock_delete_secret.call_count)
+            call = mock.call(ctxt, instance, uuids.secret)
+            mock_delete_secret.assert_has_calls([call, call])
+
+        _test()
+
     def test_terminate_instance_updates_tracker(self):
         admin_context = context.get_admin_context()
 
