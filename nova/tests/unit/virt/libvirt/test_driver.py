@@ -817,12 +817,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             "Driver capabilities for 'supports_socket_pci_numa_affinity' "
             "is invalid",
         )
-        self.assertFalse(
+        self.assertTrue(
             drvr.capabilities['supports_ephemeral_encryption'],
             "Driver capabilities for 'supports_ephemeral_encryption' "
             "is invalid",
         )
-        self.assertFalse(
+        self.assertTrue(
             drvr.capabilities['supports_ephemeral_encryption_luks'],
             "Driver capabilities for 'supports_ephemeral_encryption_luks' "
             " is invalid",
@@ -908,6 +908,19 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             "is invalid when host should support this feature"
         )
         mock_supports.assert_called_once_with()
+
+    def test_driver_capabilities_flat(self):
+        self.flags(use_cow_images=False)
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertFalse(
+            drvr.capabilities['supports_ephemeral_encryption'],
+            "Driver capabilities for 'supports_ephemeral_encryption' "
+            "is invalid")
+        self.assertFalse(
+            drvr.capabilities['supports_ephemeral_encryption_luks'],
+            "Driver capabilities for 'supports_ephemeral_encryption_luks' "
+            "is invalid",
+        )
 
     def test_driver_raises_on_non_linux_platform(self):
         with utils.temporary_mutation(sys, platform='darwin'):
@@ -14166,6 +14179,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             'qcow2',
             virt_disk_size,
             backing_file=backfile_path,
+            encryption=None,
         )
 
     @mock.patch('nova.virt.libvirt.imagebackend.Image.exists',
@@ -14316,12 +14330,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                     'qcow2',
                     disk_info_byname['disk']['virt_disk_size'],
                     backing_file=root_backing,
+                    encryption=None,
                 ),
                 mock.call(
                     CONF.instances_path + '/disk.local',
                     'qcow2',
                     disk_info_byname['disk.local']['virt_disk_size'],
                     backing_file=ephemeral_backing,
+                    encryption=None,
                 ),
             ])
 
