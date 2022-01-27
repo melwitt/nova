@@ -71,6 +71,7 @@ from nova.compute import vm_states
 from nova import conductor
 import nova.conf
 import nova.context
+from nova import crypto
 from nova import exception
 from nova import exception_wrapper
 from nova.i18n import _
@@ -915,14 +916,13 @@ class ComputeManager(manager.Manager):
         instance.destroy()
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
-        self._complete_deletion(context,
-                                instance)
+        self._complete_deletion(context, instance, bdms)
         self._notify_about_instance_usage(context, instance, "delete.end")
         compute_utils.notify_about_instance_action(context, instance,
                 self.host, action=fields.NotificationAction.DELETE,
                 phase=fields.NotificationPhase.END, bdms=bdms)
 
-    def _complete_deletion(self, context, instance):
+    def _complete_deletion(self, context, instance, bdms):
         self._update_resource_tracker(context, instance)
 
         # If we're configured to do deferred deletes, don't force deletion of
@@ -935,6 +935,17 @@ class ComputeManager(manager.Manager):
 
         self._clean_instance_console_tokens(context, instance)
         self._delete_scheduler_instance_info(context, instance.uuid)
+        for bdm in bdms:
+            if bdm.encryption_secret_uuid is not None:
+                try:
+                    crypto.delete_encryption_secret(
+                        context, instance, bdm.encryption_secret_uuid)
+                except Exception:
+                    # NOTE(melwitt): Ignore all errors here so as not to
+                    # prevent a successful instance delete from the end user's
+                    # perspective. If we fail to delete a secret here, the
+                    # _reclaim_queued_deletes periodic task will try again.
+                    pass
 
     def _validate_pinning_configuration(self, instances):
         if not self.driver.capabilities.get('supports_pcpus', False):
@@ -3293,7 +3304,7 @@ class ComputeManager(manager.Manager):
         instance.terminated_at = timeutils.utcnow()
         instance.save()
 
-        self._complete_deletion(context, instance)
+        self._complete_deletion(context, instance, bdms)
         # only destroy the instance in the db if the _complete_deletion
         # doesn't raise and therefore allocation is successfully
         # deleted in placement
