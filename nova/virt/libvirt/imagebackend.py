@@ -676,6 +676,9 @@ class Flat(Image):
 
 
 class Qcow2(Image):
+
+    SUPPORTS_LUKS = True
+
     def __init__(
         self, instance=None, disk_name=None, path=None, disk_info_mapping=None
     ):
