@@ -127,6 +127,10 @@ class Image(metaclass=abc.ABCMeta):
         # are trying to create a base file at the same time
         self.lock_path = os.path.join(CONF.instances_path, 'locks')
 
+        self.key_manager = None
+        if self.disk_info_mapping and self.disk_info_mapping.get('encrypted'):
+            self.key_manager = key_manager.API(CONF)
+
     def _supports_encryption(self):
         """Used to test that the backend supports encryption.
         Override in the subclass if backend supports encryption.
@@ -738,11 +742,6 @@ class Lvm(Image):
     ):
         self.ephemeral_key_uuid = instance.get('ephemeral_key_uuid')
 
-        if self.ephemeral_key_uuid is not None:
-            self.key_manager = key_manager.API(CONF)
-        else:
-            self.key_manager = None
-
         if path:
             if self.ephemeral_key_uuid is None:
                 info = lvm.volume_info(path)
@@ -768,6 +767,12 @@ class Lvm(Image):
             path, "block", "raw", is_block_dev=True,
             disk_info_mapping=disk_info_mapping
         )
+
+        # Override the parent key manager initialization.
+        if self.ephemeral_key_uuid is not None:
+            self.key_manager = key_manager.API(CONF)
+        else:
+            self.key_manager = None
 
         # TODO(sbauza): Remove the config option usage and default the
         # LVM logical volume creation to preallocate the full size only.
