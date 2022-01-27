@@ -1647,7 +1647,10 @@ class LibvirtDriver(driver.ComputeDriver):
         :param block_device_info: optional instance block device information
         :param destroy_vifs: if plugged vifs should be unplugged
         :param cleanup_instance_dir: If the instance dir should be removed
-        :param cleanup_instance_disks: If the instance disks should be removed
+        :param cleanup_instance_disks: If the instance disks should be removed.
+            Also removes ephemeral encryption secrets, if present.
+        :param destroy_secrets: If the cinder volume encryption secrets should
+            be deleted.
         """
         # zero the data on backend pmem device
         vpmems = self._get_vpmems(instance)
@@ -1713,8 +1716,43 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if cleanup_instance_disks:
             crypto.delete_vtpm_secret(context, instance)
+            self._cleanup_ephemeral_encryption_secrets(
+                context, instance, block_device_info)
 
         self._undefine_domain(instance)
+
+    def _cleanup_ephemeral_encryption_secrets(
+        self, context, instance, block_device_info
+    ):
+        exception_raised = None
+        encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+            block_device_info)
+
+        for driver_bdm in encrypted_bdms:
+            secret_uuid = driver_bdm.get('encryption_secret_uuid')
+            if secret_uuid:
+                try:
+                    crypto.delete_encryption_secret(
+                        context, instance, secret_uuid)
+                except Exception as e:
+                    LOG.exception(
+                        f'Failed to delete encryption secret {secret_uuid} '
+                        'from key manager', instance=instance)
+                    exception_raised = e
+
+            secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
+            if self._host.find_secret('volume', secret_usage):
+                try:
+                    self._host.delete_secret('volume', secret_usage)
+                except Exception as e:
+                    LOG.exception(
+                            f'Failed to delete libvirt secret {secret_usage}',
+                            instance=instance)
+                    exception_raised = e
+
+        if exception_raised:
+            # Just raise the last exception that was raised.
+            raise exception_raised
 
     def cleanup_lingering_instance_resources(self, instance):
         # zero the data on backend pmem device, if fails
@@ -4362,9 +4400,69 @@ class LibvirtDriver(driver.ComputeDriver):
     def poll_rebooting_instances(self, timeout, instances):
         pass
 
+    def _add_ephemeral_encryption_driver_bdm_attrs(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+        block_device_info: ty.Dict[str, ty.Any],
+    ) -> ty.Optional[ty.Dict[str, ty.Any]]:
+        """Add ephemeral encryption attributes to driver BDMs before use."""
+        encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+            block_device_info)
+
+        for driver_bdm in encrypted_bdms:
+            # NOTE(lyarwood): Users can request that their ephemeral storage
+            # be encrypted without providing an encryption format to use.
+            # If one isn't provided use the host default here and record
+            # it in the driver BDM.
+            if driver_bdm.get('encryption_format') is None:
+                driver_bdm['encryption_format'] = (
+                    CONF.ephemeral_storage_encryption.default_format)
+
+            secret_uuid = driver_bdm.get('encryption_secret_uuid')
+            if secret_uuid is None:
+                # Create a passphrase and stash it in the key manager
+                secret_uuid, secret = crypto.create_encryption_secret(
+                    context, instance, driver_bdm)
+                # Stash the UUID of said secret in our driver BDM
+                driver_bdm['encryption_secret_uuid'] = secret_uuid
+            else:
+                secret = crypto.get_encryption_secret(context, secret_uuid)
+                if secret is None:
+                    LOG.info(
+                        f'Failed to find encryption secret {secret_uuid} in '
+                        f"the key manager for driver BDM {driver_bdm['uuid']}",
+                        instance=instance)
+                    # Skip creation of a libvirt secret if we couldn't find the
+                    # secret in the key manager.
+                    continue
+
+            # Ensure this is all saved back down in the database via the o.vo
+            # BlockDeviceMapping object
+            driver_bdm.save()
+
+            # Stash the passphrase itself in a libvirt secret using the
+            # same UUID as the key manager secret for easy retrieval later
+            secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
+            if self._host.find_secret('volume', secret_usage) is None:
+                self._host.create_secret(
+                    'volume', secret_usage, password=secret, uuid=secret_uuid)
+
+        return block_device_info
+
     def spawn(self, context, instance, image_meta, injected_files,
               admin_password, allocations, network_info=None,
               block_device_info=None, power_on=True, accel_info=None):
+
+        # NOTE(lyarwood): Before we generate disk_info we need to ensure the
+        # driver_bdms are populated with any missing encryption attributes such
+        # as the format to use, associated options and encryption secret uuid.
+        # This avoids having to pass block_device_info and the driver bdms down
+        # into the imagebackend later when creating or building the config for
+        # the disks.
+        block_device_info = self._add_ephemeral_encryption_driver_bdm_attrs(
+            context, instance, block_device_info)
+
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
                                             image_meta,
