@@ -604,7 +604,7 @@ def _get_disk_mapping(virt_type, instance, disk_bus, cdrom_bus, image_meta,
 
     pre_assigned_device_names = [
         block_device.strip_dev(get_device_name(bdm))
-            for bdm in driver_bdms if get_device_name(bdm)
+        for bdm in driver_bdms if get_device_name(bdm)
     ]
 
     # Try to find the root driver bdm, either an image based disk or volume
