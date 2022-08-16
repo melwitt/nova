@@ -658,10 +658,9 @@ class BlockDeviceMapping(BASE, NovaBase, models.SoftDeleteMixin):
     encryption_format = sa.Column(sa.String(128))
     encryption_options = sa.Column(sa.String(4096))
 
+
 # TODO(stephenfin): Remove once we drop the security_groups field from the
 # Instance table. Until then, this is tied to the SecurityGroup table
-
-
 class SecurityGroupInstanceAssociation(BASE, NovaBase, models.SoftDeleteMixin):
     __tablename__ = 'security_group_instance_association'
     __table_args__ = (
@@ -684,7 +683,7 @@ class SecurityGroup(BASE, NovaBase, models.SoftDeleteMixin):
                                 name='uniq_security_groups0project_id0'
                                      'name0deleted'),
     )
-    id = sa.Column(sa.Integer, primary_key = True)
+    id = sa.Column(sa.Integer, primary_key=True)
 
     name = sa.Column(sa.String(255))
     description = sa.Column(sa.String(255))
@@ -692,8 +691,8 @@ class SecurityGroup(BASE, NovaBase, models.SoftDeleteMixin):
     project_id = sa.Column(sa.String(255))
 
     instances = orm.relationship(Instance,
-                             secondary = "security_group_instance_association",
-                             primaryjoin = 'and_('
+                             secondary="security_group_instance_association",
+                             primaryjoin='and_('
         'SecurityGroup.id == '
         'SecurityGroupInstanceAssociation.security_group_id,'
         'SecurityGroupInstanceAssociation.deleted == 0,'
