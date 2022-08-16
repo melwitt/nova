@@ -105,7 +105,7 @@ def block_device_info_get_mapping(block_device_info):
 
 
 def block_device_info_get_encrypted_disks(
-    block_device_info: ty.Mapping[str, ty.Any],
+    block_device_info: ty.Optional[ty.Mapping[str, ty.Any]],
 ) -> ty.List['nova.virt.block_device.DriverBlockDevice']:
     block_device_info = block_device_info or {}
     return [
