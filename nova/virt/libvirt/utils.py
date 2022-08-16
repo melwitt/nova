@@ -115,10 +115,12 @@ def create_image(
     path: str,
     disk_format: str,
     disk_size: ty.Optional[ty.Union[str, int]],
+    *,
     backing_file: ty.Optional[str] = None,
     encryption: ty.Optional[ty.Dict[str, ty.Any]] = None
 ) -> None:
     """Disk image creation with qemu-img
+
     :param path: Desired location of the disk image
     :param disk_format: Disk image format (as known by qemu-img)
     :param disk_size: Desired size of disk image. May be given as an int or
