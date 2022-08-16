@@ -1616,7 +1616,7 @@ class API:
 
         # NOTE(lyarwood): Attempt to find the format in the flavor and image,
         # if one isn't found then the compute will need to provide and save a
-        # default format during a the initial build.
+        # default format during the initial build.
         eph_format = hardware.get_ephemeral_encryption_format(
             flavor, image_meta)
 
