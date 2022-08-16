@@ -336,11 +336,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
             # We attempt to load this if we're creating a BDM object during an
             # attach volume request, for example. Use the default in that case.
             self.obj_set_defaults(attrname)
-        elif attrname not in BLOCK_DEVICE_OPTIONAL_ATTRS:
-            raise exception.ObjectActionError(
-                action='obj_load_attr',
-                reason='attribute %s not lazy-loadable' % attrname)
-        else:
+        elif attrname in BLOCK_DEVICE_OPTIONAL_ATTRS:
             LOG.debug(
                 "Lazy-loading '%(attr)s' on %(name)s using uuid %(uuid)s",
                 {
@@ -352,6 +348,10 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
             self.instance = objects.Instance.get_by_uuid(self._context,
                                                          self.instance_uuid)
             self.obj_reset_changes(fields=['instance'])
+        else:
+            raise exception.ObjectActionError(
+                action='obj_load_attr',
+                reason='attribute %s not lazy-loadable' % attrname)
 
 
 @base.NovaObjectRegistry.register
