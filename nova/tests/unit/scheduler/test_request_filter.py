@@ -13,6 +13,7 @@
 import os_traits as ot
 from unittest import mock
 
+import ddt
 from oslo_utils.fixture import uuidsentinel as uuids
 from oslo_utils import timeutils
 
@@ -25,6 +26,7 @@ from nova import test
 from nova.tests.unit import utils
 
 
+@ddt.ddt
 class TestRequestFilter(test.NoDBTestCase):
     def setUp(self):
         super(TestRequestFilter, self).setUp()
@@ -613,13 +615,14 @@ class TestRequestFilter(test.NoDBTestCase):
             mock.call(self.context, mock.ANY, mock.ANY, uuids.net1),
             mock.call(self.context, mock.ANY, mock.ANY, uuids.net2)])
 
-    def test_ephemeral_encryption_filter_no_encryption(self):
+    @ddt.data({}, {'hw:ephemeral_encryption_format': 'luks'})
+    def test_ephemeral_encryption_filter_no_encryption(self, extra_specs):
         # First ensure that ephemeral_encryption_filter is included
         self.assertIn(request_filter.ephemeral_encryption_filter,
                       request_filter.ALL_REQUEST_FILTERS)
 
         reqspec = objects.RequestSpec(
-            flavor=objects.Flavor(extra_specs={}),
+            flavor=objects.Flavor(extra_specs=extra_specs),
             image=objects.ImageMeta(
                 properties=objects.ImageMetaProps()))
 
