@@ -20,6 +20,7 @@ import errno
 import functools
 import os
 import shutil
+import typing as ty
 
 from castellan import key_manager
 from oslo_concurrency import processutils
@@ -544,6 +545,29 @@ class Image(metaclass=abc.ABCMeta):
         """
         pass
 
+    def get_encryption_attrs(
+        self,
+        context: 'nova.context.RequestContext',
+    ) -> ty.Optional[ty.Dict[str, ty.Any]]:
+        """Get encryption attributes from the disk_info_mapping.
+
+        Checks for encryption attributes in the disk_info_mapping and returns
+        them if present. If the disk_info_mapping is not present, if the image
+        is not encrypted, or if the image backend does not support encryption,
+        this method will return None.
+
+        :returns: A dict detailing the various encryption attributes such as
+            the format and passphrase or None
+        """
+        if self.disk_info_mapping and self.disk_info_mapping.get('encrypted'):
+            secret_uuid = self.disk_info_mapping.get('encryption_secret_uuid')
+            secret = self.key_manager.get(context, secret_uuid).get_encoded()
+            encryption = {
+                'format': self.disk_info_mapping.get('encryption_format'),
+                'secret': secret,
+            }
+            return encryption
+
 
 class Flat(Image):
     """The Flat backend uses either raw or qcow2 storage. It never uses
@@ -598,6 +622,22 @@ class Flat(Image):
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         filename = self._get_lock_name(base)
+
+        # For encryption. Does this require >= a specific version of QEMU?
+        # Looks like this became available in QEMU 3.1.
+        # Need to figure out how to incorporate encryption options. Looks to be
+        # maybe the same as for qemu-img create.
+        # Logic will likely be: if encryption, convert, then copy_raw_image as
+        # usual.
+        # qemu-img convert --object secret,data=123456,id=sec0 -O luks
+        #   -o key-secret=sec0 18e43e75-e393-4625-a6a0-48017640fb07-copy-raw
+        #   18e43e75-e393-4625-a6a0-48017640fb07-copy-raw-luks
+
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        # context = kwargs.get('context')
+        # encryption = self.get_encryption_attrs(context)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
@@ -713,18 +753,11 @@ class Qcow2(Image):
                                                     imgmodel.FORMAT_QCOW2)
                     disk.extend(image, legacy_backing_size)
 
-        encryption = None
-        if self.disk_info_mapping and self.disk_info_mapping.get('encrypted'):
-            # FIXME(lyarwood): Context is provided as a kwarg here thanks to
-            # the legacy ephemeral encryption implementation. It should likely
-            # be an arg but the required refactor isn't trivial.
-            context = kwargs['context']
-            secret_uuid = self.disk_info_mapping.get('encryption_secret_uuid')
-            secret = self.key_manager.get(context, secret_uuid).get_encoded()
-            encryption = {
-                'format': self.disk_info_mapping.get('encryption_format'),
-                'secret': secret,
-            }
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        context = kwargs.get('context')
+        encryption = self.get_encryption_attrs(context)
 
         if not os.path.exists(self.path):
             with fileutils.remove_path_on_error(self.path):
