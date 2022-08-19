@@ -576,6 +576,8 @@ class Flat(Image):
     when creating a disk from a qcow2 if force_raw_images is not set in config.
     """
 
+    SUPPORTS_LUKS = True
+
     def __init__(
         self, instance=None, disk_name=None, path=None, disk_info_mapping=None
     ):
@@ -636,8 +638,14 @@ class Flat(Image):
         # FIXME(lyarwood): Context is provided as a kwarg here thanks to
         # the legacy ephemeral encryption implementation. It should likely
         # be an arg but the required refactor isn't trivial.
-        # context = kwargs.get('context')
-        # encryption = self.get_encryption_attrs(context)
+        context = kwargs.get('context')
+        encryption = self.get_encryption_attrs(context)
+        if encryption:
+            images.convert_image(
+                base, base, 'raw',
+                encryption.get('encryption_format'),
+                encryption=encryption,
+            )
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
