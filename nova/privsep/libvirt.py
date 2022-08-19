@@ -33,6 +33,10 @@ LOG = logging.getLogger(__name__)
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint
+def e2label(device):
+    processutils.execute('e2label', device)
+
+@nova.privsep.sys_admin_pctxt.entrypoint
 def dmcrypt_create_volume(target, device, cipher, key_size, key):
     """Sets up a dmcrypt mapping
 
@@ -60,6 +64,25 @@ def dmcrypt_delete_volume(target):
     :param target: name of the mapped logical device
     """
     processutils.execute('cryptsetup', 'remove', target)
+
+
+@nova.privsep.sys_admin_pctxt.entrypoint
+def dmcrypt_open(device, name, file_format, key_file, readonly=True):
+    cmd = ('cryptsetup',
+           'open',
+           '--type',
+           file_format,
+           '--key-file=' + key_file,
+           '--readonly' if readonly else '',
+           device,
+           name,
+    )
+    processutils.execute(*cmd)
+
+@nova.privsep.sys_admin_pctxt.entrypoint
+def dmcrypt_close(name):
+    cmd = ('cryptsetup', 'close', name)
+    processutils.execute(*cmd)
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint
