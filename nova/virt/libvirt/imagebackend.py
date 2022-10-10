@@ -635,18 +635,6 @@ class Flat(Image):
         #   -o key-secret=sec0 18e43e75-e393-4625-a6a0-48017640fb07-copy-raw
         #   18e43e75-e393-4625-a6a0-48017640fb07-copy-raw-luks
 
-        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
-        # the legacy ephemeral encryption implementation. It should likely
-        # be an arg but the required refactor isn't trivial.
-        context = kwargs.get('context')
-        encryption = self.get_encryption_attrs(context)
-        if encryption:
-            images.convert_image(
-                base, base, 'raw',
-                encryption.get('encryption_format'),
-                encryption=encryption,
-            )
-
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
             libvirt_utils.copy_image(base, target)
@@ -679,6 +667,18 @@ class Flat(Image):
                     copy_raw_image(base, self.path, size)
 
         self.correct_format()
+
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        context = kwargs.get('context')
+        encryption = self.get_encryption_attrs(context)
+        if encryption:
+            images.convert_image(
+                self.path, self.path, 'raw',
+                encryption.get('format'),
+                encryption=encryption,
+            )
 
     def resize_image(self, size):
         image = imgmodel.LocalFileImage(self.path, self.driver_format)
