@@ -309,7 +309,9 @@ class Image(metaclass=abc.ABCMeta):
             # create_image() only creates the base image if needed, so
             # we cannot rely on it to exist here
             if os.path.exists(base) and size > self.get_disk_size(base):
-                self.resize_image(size)
+                context = kwargs.get('context')
+                encryption = self.get_encryption_attrs(context)
+                self.resize_image(size, encryption=encryption)
 
             if (self.preallocate and self._can_fallocate() and
                     os.access(self.path, os.W_OK)):
