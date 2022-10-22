@@ -153,7 +153,7 @@ def extend(image, size, encryption=None):
         return
 
     # if we can't access the filesystem, we can't do anything more
-    if not is_image_extendable(image):
+    if not is_image_extendable(image, encryption=encryption):
         return
 
     def safe_resize2fs(dev, run_as_root=False, finally_call=lambda: None):
@@ -196,7 +196,7 @@ def can_resize_image(image, size):
     return True
 
 
-def is_image_extendable(image):
+def is_image_extendable(image, encryption=None):
     """Check whether we can extend the image."""
     LOG.debug('Checking if we can extend filesystem inside %(image)s.',
               {'image': image})
@@ -228,7 +228,27 @@ def is_image_extendable(image):
     else:
         # For raw, we can directly inspect the file system
         try:
-            processutils.execute('e2label', image.path)
+            if not encryption or image.format != imgmodel.FORMAT_RAW:
+                processutils.execute('e2label', image.path)
+            else:
+                with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+                    # Write out the passphrase secret to a temp file
+                    f.write(encryption.get('secret'))
+
+                    # Ensure the secret is written to disk, we can't .close() here as
+                    # that removes the file when using NamedTemporaryFile
+                    f.flush()
+
+                    # <instance_uuid>-<disk name>
+                    # example: b1726c00-5917-49f2-ac90-4e6fe05e2793-disk.eph0
+                    disk_name = '-'.join(image.path.split('/')[-2:])
+                    file_format = encryption.get('format')
+                    try:
+                        nova.privsep.libvirt.dmcrypt_open(
+                            image.path, disk_name, file_format, f.name)
+                        nova.privsep.libvirt.e2label('/dev/mapper/' + disk_name)
+                    finally:
+                        nova.privsep.libvirt.dmcrypt_close(disk_name)
         except processutils.ProcessExecutionError as e:
             LOG.debug('Unable to determine label for image %(image)s with '
                       'error %(error)s. Cannot resize.',
