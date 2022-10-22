@@ -601,7 +601,17 @@ class Flat(Image):
     def _get_driver_format(self):
         try:
             data = images.qemu_img_info(self.path)
-            return data.file_format
+            # 'luks' is not a valid block  driver format despite it being the
+            # disk image file format. For example, this XML raises an error:
+            #
+            # <disk type="file" device="disk">
+            #   <driver name="qemu" type="luks" cache="none"/>
+            #
+            # libvirt.libvirtError: unsupported configuration: unknown driver
+            # format value 'luks'
+            #
+            # Return format 'raw' in this case.
+            return data.file_format if data.file_format != 'luks' else 'raw'
         except exception.InvalidDiskInfo as e:
             LOG.info('Failed to get image info from path %(path)s; '
                      'error: %(error)s',
@@ -637,17 +647,31 @@ class Flat(Image):
         #   -o key-secret=sec0 18e43e75-e393-4625-a6a0-48017640fb07-copy-raw
         #   18e43e75-e393-4625-a6a0-48017640fb07-copy-raw-luks
 
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        context = kwargs.get('context')
+        encryption = self.get_encryption_attrs(context)
+
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
-            libvirt_utils.copy_image(base, target)
+            if not encryption:
+                libvirt_utils.copy_image(base, target)
+            else:
+                images.convert_image(
+                    base, target, 'raw',
+                    encryption.get('format'),
+                    encryption=encryption,
+                )
             if size:
-                self.resize_image(size)
+                self.resize_image(size, encryption=encryption)
 
         generating = 'image_id' not in kwargs
         if generating:
             if not self.exists():
                 # Generating image in place
-                prepare_template(target=self.path, *args, **kwargs)
+                prepare_template(
+                    target=self.path, encryption=encryption, *args, **kwargs)
 
             # NOTE(plibeau): extend the disk in the case of image is not
             # accessible anymore by the customer and the base image is
@@ -655,7 +679,7 @@ class Flat(Image):
             # instance.
             else:
                 if size:
-                    self.resize_image(size)
+                    self.resize_image(size, encryption=encryption)
         else:
             if not os.path.exists(base):
                 prepare_template(target=base, *args, **kwargs)
@@ -670,24 +694,20 @@ class Flat(Image):
 
         self.correct_format()
 
-        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
-        # the legacy ephemeral encryption implementation. It should likely
-        # be an arg but the required refactor isn't trivial.
-        context = kwargs.get('context')
-        encryption = self.get_encryption_attrs(context)
-        if encryption:
-            images.convert_image(
-                self.path, self.path, 'raw',
-                encryption.get('format'),
-                encryption=encryption,
-            )
-
-    def resize_image(self, size):
+    def resize_image(self, size, encryption=None):
         image = imgmodel.LocalFileImage(self.path, self.driver_format)
-        disk.extend(image, size)
+        disk.extend(image, size, encryption=encryption)
 
-    def snapshot_extract(self, target, out_format):
-        images.convert_image(self.path, target, self.driver_format, out_format)
+    def snapshot_extract(self, target, out_format, context=None):
+        encryption = self.get_encryption_attrs(context)
+        if not encryption:
+            images.convert_image(
+                self.path, target, self.driver_format, out_format)
+        else:
+            # When using encryption, the self.driver_format is 'raw' but the
+            # disk image file format is the encryption format, such as 'luks'.
+            images.convert_image(
+                self.path, target, file_format, file_format)
 
     @staticmethod
     def is_file_in_instance_path():
