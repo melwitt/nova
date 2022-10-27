@@ -228,7 +228,7 @@ def is_image_extendable(image, encryption=None):
     else:
         # For raw, we can directly inspect the file system
         try:
-            if not encryption or image.format != imgmodel.FORMAT_RAW:
+            if not encryption:
                 processutils.execute('e2label', image.path)
             else:
                 with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:

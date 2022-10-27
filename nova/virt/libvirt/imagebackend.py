@@ -659,7 +659,9 @@ class Flat(Image):
                 libvirt_utils.copy_image(base, target)
             else:
                 images.convert_image(
-                    base, target, 'raw',
+                    base,
+                    target,
+                    self.driver_format,
                     encryption.get('format'),
                     encryption=encryption,
                 )
@@ -700,14 +702,13 @@ class Flat(Image):
 
     def snapshot_extract(self, target, out_format, context=None):
         encryption = self.get_encryption_attrs(context)
-        if not encryption:
-            images.convert_image(
-                self.path, target, self.driver_format, out_format)
-        else:
-            # When using encryption, the self.driver_format is 'raw' but the
-            # disk image file format is the encryption format, such as 'luks'.
-            images.convert_image(
-                self.path, target, file_format, file_format)
+        images.convert_image(
+            self.path,
+            target,
+            self.driver_format,
+            out_format,
+            encryption=encryption,
+        )
 
     @staticmethod
     def is_file_in_instance_path():
