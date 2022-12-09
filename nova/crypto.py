@@ -281,6 +281,21 @@ def create_encryption_secret(
     return secret_uuid, secret
 
 
+def get_encryption_secret(
+    context: nova_context.RequestContext,
+    instance: 'objects.Instance',
+    secret_uuid: str,
+) -> str:
+    key_mgr = _get_key_manager()
+    try:
+        key = key_mgr.get(context, secret_uuid)
+        LOG.debug(f"Retrieved secret with UUID {secret_uuid}", instance=instance)
+        return key.get_encoded()
+    except castellan_exception.ManagedObjectNotFoundError:
+        LOG.debug("Encryption secret with UUID {secret_uuid} was not found.",
+                  instance=instance)
+
+
 def delete_encryption_secret(
     context: nova_context.RequestContext,
     instance: 'objects.Instance',
