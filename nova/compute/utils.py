@@ -1596,6 +1596,9 @@ def update_ephemeral_encryption_bdms(
     eph_format = hardware.get_ephemeral_encryption_format(
         flavor, image_meta)
 
+    eph_secret_uuid = hardware.get_ephemeral_encryption_secret_uuid(
+        flavor, image_meta)
+
     # NOTE(lyarwood): The term ephemeral is overloaded in the codebase,
     # what it actually means in the context of ephemeral encryption is
     # anything local to the compute host so use the is_local property.
@@ -1604,3 +1607,6 @@ def update_ephemeral_encryption_bdms(
         bdm.encrypted = True
         if eph_format:
             bdm.encryption_format = eph_format
+        if eph_secret_uuid:
+            print(f'Setting encryption secret to {eph_secret_uuid}')
+            bdm.encryption_secret_uuid = eph_secret_uuid

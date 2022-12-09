@@ -2712,3 +2712,21 @@ def get_ephemeral_encryption_format(
             )
         return eph_format
     return None
+
+
+def get_ephemeral_encryption_secret_uuid(
+    flavor: 'objects.Flavor',
+    image_meta: 'objects.ImageMeta',
+) -> ty.Optional[str]:
+    """Get the ephemeral encryption secret UUID.
+
+    :param flavor: an objects.Flavor object
+    :param image_meta: an objects.ImageMeta object
+    :raises: nova.exception.FlavorImageConflict or nova.exception.Invalid
+    :returns: UUID string or None
+    """
+    eph_secret_uuid = _get_unique_flavor_image_meta(
+        'ephemeral_encryption_secret_uuid', flavor, image_meta)
+    if eph_secret_uuid:
+        return eph_secret_uuid
+    return None
