@@ -29139,6 +29139,13 @@ class _BaseSnapshotTests(test.NoDBTestCase):
         recv_meta = self.image_service.create(self.context, sent_meta)
         return recv_meta
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.privsep.path.chown')
     @mock.patch.object(compute_utils, 'disk_ops_semaphore',
                        new_callable=compute_utils.UnlimitedSemaphore)
@@ -29159,8 +29166,11 @@ class _BaseSnapshotTests(test.NoDBTestCase):
                   mock_get_domain, mock_resolve, mock_version,
                   mock_disk_op_sema, mock_chown):
         mock_get_domain.return_value = FakeVirtDomain()
+
         driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        driver.snapshot(self.context, self.instance_ref, image_id,
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
+        driver.snapshot(self.context, instance, image_id,
                         self.mock_update_task_state)
         snapshot = self.image_service.show(self.context, image_id)
         return snapshot
@@ -29356,6 +29366,11 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         rbd.remove_snap.assert_called_with('c', 'd', ignore_errors=True,
                                            pool='b', force=True)
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
     @mock.patch('nova.virt.libvirt.utils.get_disk_type_from_path',
                 new=mock.Mock(return_value='rbd'))
     @mock.patch('nova.virt.libvirt.utils.find_disk',
@@ -29376,11 +29391,20 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_get_guest.return_value = mock_guest
         driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         recv_meta = self._create_image()
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
         with mock.patch.object(driver, "suspend") as mock_suspend:
-            driver.snapshot(self.context, self.instance_ref, recv_meta['id'],
+            driver.snapshot(self.context, instance, recv_meta['id'],
                             self.mock_update_task_state)
             self.assertFalse(mock_suspend.called)
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.virt.libvirt.utils.get_disk_type_from_path',
                 new=mock.Mock(return_value='rbd'))
     @mock.patch.object(libvirt_driver.imagebackend.images, 'convert_image',
@@ -29409,19 +29433,27 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_get_guest.return_value = mock_guest
         driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         recv_meta = self._create_image()
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
 
         with mock.patch.object(driver, "suspend") as mock_suspend:
-            driver.snapshot(self.context, self.instance_ref,
+            driver.snapshot(self.context, instance,
                             recv_meta['id'], self.mock_update_task_state)
             self.assertTrue(mock_suspend.called)
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(rbd_utils, 'RBDDriver', new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
     @mock.patch('nova.virt.libvirt.utils.get_disk_type_from_path',
                 new=mock.Mock(return_value='rbd'))
     @mock.patch.object(libvirt_driver.imagebackend.images, 'convert_image',
                        new=mock.Mock(side_effect=[io.BytesIO(b''),
                                                   io.BytesIO(b'')]))
     @mock.patch('nova.virt.libvirt.utils.find_disk',
-                new=mock.Mock(return_value=('filename', 'rbd')))
+                new=mock.Mock(return_value=('/dev/filename', 'rbd')))
     @mock.patch('nova.virt.libvirt.utils.file_open',
                 new=mock.Mock(return_value=io.BytesIO(b'')))
     @mock.patch.object(host.Host, 'get_guest')
@@ -29439,6 +29471,9 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_guest._domain = mock.Mock()
         mock_get_guest.return_value = mock_guest
 
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
+
         # Make _suspend_guest_for_snapshot short-circuit and fail, we just
         # want to know that it was called with the correct live_snapshot
         # argument based on the power_state.
@@ -29448,11 +29483,11 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         ) as mock_suspend:
             self.assertRaises(test.TestingException,
                               drvr.snapshot, self.context,
-                              self.instance_ref, image['id'],
+                              instance, image['id'],
                               self.mock_update_task_state)
 
         mock_suspend.assert_called_once_with(
-            self.context, False, state, self.instance_ref)
+            self.context, False, state, instance)
 
 
 class LXCSnapshotTests(LibvirtSnapshotTests):
