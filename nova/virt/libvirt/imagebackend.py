@@ -366,7 +366,8 @@ class Image(metaclass=abc.ABCMeta):
         return disk.get_disk_size(name)
 
     @abc.abstractmethod
-    def snapshot_extract(self, target, out_format):
+    def snapshot_extract(self, target, out_format, encryption=None,
+                         dest_encryption=None):
         """Extract a snapshot of the image.
 
         This is used during cold (offline) snapshots. Live snapshots
@@ -661,7 +662,8 @@ class Flat(Image):
         image = imgmodel.LocalFileImage(self.path, self.driver_format)
         disk.extend(image, size)
 
-    def snapshot_extract(self, target, out_format):
+    def snapshot_extract(self, target, out_format, encryption=None,
+                         dest_encryption=None):
         images.convert_image(self.path, target, self.driver_format, out_format)
 
     @staticmethod
@@ -751,7 +753,7 @@ class Qcow2(Image):
                     image = imgmodel.LocalFileImage(legacy_base,
                                                     imgmodel.FORMAT_QCOW2)
                     disk.extend(
-                        image, legacy_backing_size, encryption=encryption)
+                        image, legacy_backing_size, encryption=bdm_encryption)
 
         if not os.path.exists(self.path):
             with fileutils.remove_path_on_error(self.path):
@@ -762,10 +764,13 @@ class Qcow2(Image):
         image = imgmodel.LocalFileImage(self.path, imgmodel.FORMAT_QCOW2)
         disk.extend(image, size, encryption=encryption)
 
-    def snapshot_extract(self, target, out_format):
+    def snapshot_extract(self, target, out_format, encryption=None,
+                         dest_encryption=None):
         libvirt_utils.extract_snapshot(self.path, 'qcow2',
                                        target,
-                                       out_format)
+                                       out_format,
+                                       encryption=encryption,
+                                       dest_encryption=dest_encryption)
 
     @staticmethod
     def is_file_in_instance_path():
@@ -912,7 +917,8 @@ class Lvm(Image):
                     dmcrypt.delete_volume(path.rpartition('/')[2])
                     lvm.remove_volumes([self.lv_path])
 
-    def snapshot_extract(self, target, out_format):
+    def snapshot_extract(self, target, out_format, encryption=None,
+                         dest_encryption=None):
         images.convert_image(self.path, target, self.driver_format,
                              out_format, run_as_root=True)
 
@@ -1047,7 +1053,8 @@ class Rbd(Image):
     def resize_image(self, size, encryption=None):
         self.driver.resize(self.rbd_name, size)
 
-    def snapshot_extract(self, target, out_format):
+    def snapshot_extract(self, target, out_format, encryption=None,
+                         dest_encryption=None):
         images.convert_image(self.path, target, 'raw', out_format)
 
     @staticmethod
@@ -1370,7 +1377,8 @@ class Ploop(Image):
         image = imgmodel.LocalFileImage(self.path, imgmodel.FORMAT_PLOOP)
         disk.extend(image, size)
 
-    def snapshot_extract(self, target, out_format):
+    def snapshot_extract(self, target, out_format, encryption=None,
+                         dest_encryption=None):
         img_path = os.path.join(self.path, "root.hds")
         libvirt_utils.extract_snapshot(img_path,
                                        'parallels',
@@ -1421,7 +1429,9 @@ class Backend(object):
             instance=instance, disk_name=name,
             disk_info_mapping=disk_info_mapping)
 
-    def by_libvirt_path(self, instance, path, image_type=None):
+    def by_libvirt_path(
+        self, instance, path, image_type=None, disk_info_mapping=None
+    ):
         """Return an Image object for a disk with the given libvirt path.
 
         :param instance: The instance which owns this disk.
@@ -1432,4 +1442,5 @@ class Backend(object):
         :rtype: Image
         """
         backend = self.backend(image_type)
-        return backend(instance=instance, path=path)
+        return backend(
+            instance=instance, path=path, disk_info_mapping=disk_info_mapping)
