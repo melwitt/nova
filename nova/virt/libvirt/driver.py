@@ -3053,8 +3053,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         snapshot = self._image_api.get(context, image_id)
 
-        # source_format is an on-disk format
-        # source_type is a backend type
+        # source_format is an on-disk format such as qcow2 or raw
+        # source_type is a backend type such as qcow2 or rbd
         disk_path, source_format = libvirt_utils.find_disk(guest)
         source_type = libvirt_utils.get_disk_type_from_path(disk_path)
 
@@ -3085,6 +3085,23 @@ class LibvirtDriver(driver.ComputeDriver):
         # store current state so we know what to resume back to if we suspend
         original_power_state = guest.get_power_state(self._host)
 
+        # We need to get the disk_info_mapping for this instance in order to
+        # pass it when we create the imagebackend object.
+        bdm_list = objects.BlockDeviceMappingList.get_by_instance_uuid(
+            context, instance.uuid)
+        block_device_info = driver.get_block_device_info(instance,
+                                                         bdm_list)
+        disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
+                                            instance,
+                                            instance.image_meta,
+                                            block_device_info)
+
+        root_disk = self.image_backend.by_libvirt_path(
+            instance, disk_path, image_type=source_type,
+            disk_info_mapping=disk_info['mapping']['root'])
+
+        encryption = root_disk.get_encryption(context)
+
         # NOTE(dgenin): Instances with LVM encrypted ephemeral storage require
         #               cold snapshots. Currently, checking for encryption is
         #               redundant because LVM supports only cold snapshots.
@@ -3097,7 +3114,11 @@ class LibvirtDriver(driver.ComputeDriver):
             not CONF.workarounds.disable_libvirt_livesnapshot and
             # NOTE(stephenfin): Live snapshotting doesn't make sense for
             # shutdown instances
-            original_power_state != power_state.SHUTDOWN
+            original_power_state != power_state.SHUTDOWN and
+            # NOTE(melwitt): Live snapshot doesn't work with ephemeral
+            # encryption because there is no way to provide the secret to
+            # libvirt blockRebase(), which is used by _live_snapshot.
+            not encryption
         ):
             live_snapshot = True
         else:
@@ -3105,9 +3126,6 @@ class LibvirtDriver(driver.ComputeDriver):
 
         self._suspend_guest_for_snapshot(
             context, live_snapshot, original_power_state, instance)
-
-        root_disk = self.image_backend.by_libvirt_path(
-            instance, disk_path, image_type=source_type)
 
         if live_snapshot:
             LOG.info("Beginning live snapshot process", instance=instance)
@@ -3151,6 +3169,23 @@ class LibvirtDriver(driver.ComputeDriver):
                 self._suspend_guest_for_snapshot(
                     context, live_snapshot, original_power_state, instance)
 
+            dest_encryption = None
+            if encryption:
+                # Generate image metadata for the snapshot, the encryption
+                # secret UUID will be needed to access the encrypted disk if
+                # the snapshot is used to create an instance later.
+                encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                    block_device_info)
+                dest_encryption, meta_props = (
+                    self._create_snapshot_encryption_metadata(
+                        context,
+                        instance,
+                        encryption,
+                        encrypted_bdms,
+                    )
+                )
+                metadata['properties'].update(meta_props)
+
             snapshot_directory = CONF.libvirt.snapshots_directory
             fileutils.ensure_tree(snapshot_directory)
             with utils.tempdir(dir=snapshot_directory) as tmpdir:
@@ -3163,7 +3198,9 @@ class LibvirtDriver(driver.ComputeDriver):
                                             disk_path, out_path, source_format,
                                             image_format, instance.image_meta)
                     else:
-                        root_disk.snapshot_extract(out_path, image_format)
+                        root_disk.snapshot_extract(
+                            out_path, image_format, encryption=encryption,
+                            dest_encryption=dest_encryption)
                     LOG.info("Snapshot extracted, beginning image upload",
                              instance=instance)
                 except libvirt.libvirtError as ex:
@@ -3206,6 +3243,55 @@ class LibvirtDriver(driver.ComputeDriver):
                         ignore_errors=True)
 
         LOG.info("Snapshot image upload complete", instance=instance)
+
+    @staticmethod
+    def _create_snapshot_encryption_metadata(
+            context: nova_context.RequestContext,
+            instance: 'objects.Instance',
+            encryption: ty.Dict[str, ty.Any],
+            encrypted_bdms: ty.List[
+                driver_block_device.DriverImageBlockDevice
+            ],
+    ) -> ty.Tuple[ty.Optional[ty.Dict[str, ty.Any]], ty.Dict[str, ty.Any]]:
+        """Populate encryption related metadata and create target encryption.
+
+        When we snapshot an encrypted image, we need to also store the
+        encryption secret UUID alongside the image. We will need the passphrase
+        in order to use the image later.
+
+        We create a new encryption secret for the snapshot and return it in a
+        dict containing the encryption attributes needed to generate the
+        snapshot.
+        """
+        dest_encryption = None
+        props = {}
+        if encryption:
+            dest_encryption = copy.deepcopy(encryption)
+            root_bdm = block_device.get_root_bdm(encrypted_bdms)
+            if instance.task_state not in task_states.shelving_states:
+                # NOTE(melwitt): We create a new secret for the snapshot, so
+                # that we will be able to read it if/when an instance is booted
+                # from the snapshot in the future.
+                secret_uuid, secret = crypto.create_encryption_secret(
+                    context, instance, root_bdm, for_snapshot=True)
+            else:
+                LOG.info('Re-using existing ephemeral encryption secret for '
+                         'the snapshot', instance=instance)
+                # Reuse the existing secret to avoid a potential change in
+                # ownership.  Example: an admin shelves the instance of a
+                # non-admin. We don't want the non-admin user to lose access to
+                # the secret for their shelved instance snapshot.
+                secret_uuid = root_bdm.encryption_secret_uuid
+                secret = crypto.get_encryption_secret(context, secret_uuid)
+            dest_encryption['secret'] = secret
+
+            props['hw_ephemeral_encryption'] = True
+            encryption_format = encryption.get('encryption_format')
+            if encryption_format:
+                props['hw_ephemeral_encryption_format'] = encryption_format
+            props['hw_ephemeral_encryption_secret_uuid'] = secret_uuid
+
+        return dest_encryption, props
 
     def _needs_suspend_resume_for_snapshot(
         self,
