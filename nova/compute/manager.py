@@ -3591,7 +3591,7 @@ class ComputeManager(manager.Manager):
             # encryption attributes in the BDMs and update them with properties
             # from the new image. We could be going from not encrypted to
             # encrypted, for example. Note that we have to do this after
-            # calling driver.destroy() because we need the old encryption
+            # calling driver.destroy() because we needed the old encryption
             # secret UUID in order to delete the old secret.
             for bdm in bdms:
                 bdm.reset_encryption_fields()
@@ -6887,6 +6887,24 @@ class ComputeManager(manager.Manager):
 
         instance.task_state = task_states.SPAWNING
         instance.save()
+
+        #if image:
+        #    instance.image_ref = image['id']
+        #    image_meta = objects.ImageMeta.from_dict(image)
+        #else:
+        #    image_meta = objects.ImageMeta.from_dict(
+        #        utils.get_image_from_system_metadata(
+        #            instance.system_metadata))
+
+        ## Retrieve the encryption secret UUID if there is one, before
+        ## generating block_device_info
+        #for bdm in bdms:
+        #    bdm.reset_encryption_fields()
+        #if bdms:
+        #    compute_utils.update_ephemeral_encryption_bdms(
+        #        instance.flavor, image_meta, bdms)
+        #for bdm in bdms:
+        #    bdm.save()
 
         block_device_info = self._prep_block_device(context, instance, bdms)
         scrubbed_keys = self._unshelve_instance_key_scrub(instance)
