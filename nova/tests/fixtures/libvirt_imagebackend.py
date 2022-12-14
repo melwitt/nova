@@ -78,6 +78,9 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
         self.useFixture(fixtures.MonkeyPatch(
             'nova.virt.libvirt.imagebackend.Backend.backend',
             self._mock_backend))
+        self.useFixture(fixtures.MonkeyPatch(
+            'nova.virt.libvirt.imagebackend.Backend.by_libvirt_path',
+            self._mock_backend_by_libvirt_path))
 
     @property
     def created_disks(self):
@@ -185,6 +188,9 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
             else:
                 disk.exists.return_value = True
 
+            # Default to no ephemeral encryption
+            disk.get_encryption.side_effect = lambda ctxt: None
+
             return disk
 
         # Set the SUPPORTS_CLONE member variable to mimic the Image base
@@ -207,6 +213,14 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
             image_init, 'is_file_in_instance_path', is_file_in_instance_path)
 
         return image_init
+
+    def _mock_backend_by_libvirt_path(
+        self, backend_self, instance, path, image_type=None,
+        disk_info_mapping=None
+    ):
+        fn = self._mock_backend(backend_self, image_type=image_type)
+        return fn(
+            instance=instance, path=path, disk_info_mapping=disk_info_mapping)
 
     def _fake_cache(self, fetch_func, filename, size=None, *args, **kwargs):
         # Execute the template function so we can test the arguments it was
