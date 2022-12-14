@@ -3531,6 +3531,16 @@ class API:
                 # These will be handled below.
                 volume_bdms.append(bdm)
             else:
+                # NOTE(melwitt): Local disks are not copied as part of a volume
+                # backed instance snapshot, so we don't want to store any
+                # encryption secret UUIDs in the image metadata
+                # block_device_mapping properties. If/when an instance is
+                # created from this snapshot image in the future, we will want
+                # to generate new encryption secrets for the local disks we are
+                # about to create, and we only create new secrets when
+                # encryption_secret_uuid = None.
+                if 'encryption_secret_uuid' in bdm:
+                    bdm.encryption_secret_uuid = None
                 mapping.append(bdm.get_image_mapping())
 
         # Check limits in Cinder before creating snapshots to avoid going over
