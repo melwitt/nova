@@ -313,7 +313,12 @@ def chown_for_id_maps(
 
 
 def extract_snapshot(
-    disk_path: str, source_fmt: str, out_path: str, dest_fmt: str,
+    disk_path: str,
+    source_fmt: str,
+    out_path: str,
+    dest_fmt: str,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+    dest_encryption: ty.Optional[ty.Dict[str, ty.Any]] = None
 ) -> None:
     """Extract a snapshot from a disk image.
     Note that nobody should write to the disk image during this operation.
@@ -329,7 +334,8 @@ def extract_snapshot(
 
     compress = CONF.libvirt.snapshot_compression and dest_fmt == "qcow2"
     images.convert_image(disk_path, out_path, source_fmt, dest_fmt,
-                         compress=compress)
+                         compress=compress, encryption=encryption,
+                         dest_encryption=dest_encryption)
 
 
 # TODO(stephenfin): This is dumb; remove it.
@@ -429,6 +435,7 @@ def fetch_image(
     target: str,
     image_id: str,
     trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
 ) -> None:
     """Grab image.
 
@@ -436,8 +443,11 @@ def fetch_image(
     :param target: target path to put the image
     :param image_id: id of the image to fetch
     :param trusted_certs: optional objects.TrustedCerts for image validation
+    :param encryption: (Optional) Dict detailing various encryption attributes
+                       such as the format and passphrase.
     """
-    images.fetch_to_raw(context, image_id, target, trusted_certs)
+    images.fetch_to_raw(
+        context, image_id, target, trusted_certs, encryption=encryption)
 
 
 def fetch_raw_image(
