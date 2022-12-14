@@ -21238,12 +21238,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         with test.nested(
                 mock.patch.object(drvr._conn, 'defineXML', create=True),
                 mock.patch('nova.virt.libvirt.utils.get_disk_size'),
-                mock.patch('nova.virt.libvirt.utils.get_disk_backing_file'),
+                mock.patch('nova.virt.images.qemu_img_info'),
                 mock.patch('nova.virt.libvirt.utils.create_image'),
                 mock.patch('nova.virt.libvirt.utils.extract_snapshot'),
                 mock.patch.object(drvr, '_set_quiesced'),
                 mock.patch.object(drvr, '_can_quiesce')
-        ) as (mock_define, mock_size, mock_backing, mock_create_cow,
+        ) as (mock_define, mock_size, mock_img_info, mock_create_cow,
               mock_snapshot, mock_quiesce, mock_can_quiesce):
 
             xmldoc = "<domain/>"
@@ -21255,7 +21255,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             mock_dom.XMLDesc.return_value = xmldoc
             mock_dom.isPersistent.return_value = True
             mock_size.return_value = 1004009
-            mock_backing.return_value = bckfile
+            mock_img_info.return_value.backing_file = bckfile
             guest = libvirt_guest.Guest(mock_dom)
 
             if not can_quiesce:
@@ -21280,13 +21280,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                     fakelibvirt.VIR_DOMAIN_BLOCK_REBASE_SHALLOW))
 
             mock_size.assert_called_once_with(srcfile, format="qcow2")
-            mock_backing.assert_called_once_with(srcfile, basename=False,
-                                                 format="qcow2")
+            mock_img_info.assert_called_once_with(srcfile, "qcow2")
             mock_create_cow.assert_called_once_with(
-                dltfile, 'qcow2', 1004009, backing_file=bckfile)
+                dltfile, 'qcow2', 1004009, backing_file=bckfile,
+                encryption=None)
             mock_chown.assert_called_once_with(dltfile, uid=os.getuid())
-            mock_snapshot.assert_called_once_with(dltfile, "qcow2",
-                                                  dstfile, "qcow2")
+            mock_snapshot.assert_called_once_with(
+                dltfile, "qcow2", dstfile, "qcow2", src_encryption=None,
+                dest_encryption=None)
             mock_delete.assert_called_once_with(dltfile)
             mock_define.assert_called_once_with(xmldoc)
             mock_quiesce.assert_any_call(mock.ANY, self.test_instance,
@@ -29833,6 +29834,13 @@ class _BaseSnapshotTests(test.NoDBTestCase):
         recv_meta = self.image_service.create(self.context, sent_meta)
         return recv_meta
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.privsep.path.chown')
     @mock.patch.object(compute_utils, 'disk_ops_semaphore',
                        new_callable=compute_utils.UnlimitedSemaphore)
@@ -29843,8 +29851,7 @@ class _BaseSnapshotTests(test.NoDBTestCase):
                 new=mock.Mock(return_value=0))
     @mock.patch('nova.virt.libvirt.utils.create_image',
                 new=mock.Mock())
-    @mock.patch('nova.virt.libvirt.utils.get_disk_backing_file',
-                new=mock.Mock(return_value=None))
+    @mock.patch('nova.virt.images.qemu_img_info', new=mock.Mock())
     @mock.patch('nova.virt.libvirt.utils.extract_snapshot',
                 side_effect=_fake_file_like_object)
     @mock.patch('nova.virt.libvirt.utils.file_open',
@@ -29853,8 +29860,11 @@ class _BaseSnapshotTests(test.NoDBTestCase):
                   mock_get_domain, mock_resolve, mock_version,
                   mock_disk_op_sema, mock_chown):
         mock_get_domain.return_value = FakeVirtDomain()
+
         driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        driver.snapshot(self.context, self.instance_ref, image_id,
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
+        driver.snapshot(self.context, instance, image_id,
                         self.mock_update_task_state)
         snapshot = self.image_service.show(self.context, image_id)
         return snapshot
@@ -30080,6 +30090,11 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_log.warning.assert_called_once_with(
             'Failed to snapshot image because it was deleted')
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
     @mock.patch('nova.virt.libvirt.utils.get_disk_type_from_path',
                 new=mock.Mock(return_value='rbd'))
     @mock.patch('nova.virt.libvirt.utils.find_disk',
@@ -30100,11 +30115,20 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_get_guest.return_value = mock_guest
         driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         recv_meta = self._create_image()
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
         with mock.patch.object(driver, "suspend") as mock_suspend:
-            driver.snapshot(self.context, self.instance_ref, recv_meta['id'],
+            driver.snapshot(self.context, instance, recv_meta['id'],
                             self.mock_update_task_state)
             self.assertFalse(mock_suspend.called)
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.virt.libvirt.utils.get_disk_type_from_path',
                 new=mock.Mock(return_value='rbd'))
     @mock.patch.object(libvirt_driver.imagebackend.images, 'convert_image',
@@ -30133,19 +30157,27 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_get_guest.return_value = mock_guest
         driver = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         recv_meta = self._create_image()
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
 
         with mock.patch.object(driver, "suspend") as mock_suspend:
-            driver.snapshot(self.context, self.instance_ref,
+            driver.snapshot(self.context, instance,
                             recv_meta['id'], self.mock_update_task_state)
             self.assertTrue(mock_suspend.called)
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
+                new=mock.MagicMock())
+    @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
+                new=mock.MagicMock())
+    @mock.patch.object(rbd_utils, 'RBDDriver', new=mock.MagicMock())
+    @mock.patch.object(key_manager, 'API', new=mock.Mock())
     @mock.patch('nova.virt.libvirt.utils.get_disk_type_from_path',
                 new=mock.Mock(return_value='rbd'))
     @mock.patch.object(libvirt_driver.imagebackend.images, 'convert_image',
                        new=mock.Mock(side_effect=[io.BytesIO(b''),
                                                   io.BytesIO(b'')]))
     @mock.patch('nova.virt.libvirt.utils.find_disk',
-                new=mock.Mock(return_value=('filename', 'rbd')))
+                new=mock.Mock(return_value=('/dev/filename', 'rbd')))
     @mock.patch('nova.virt.libvirt.utils.file_open',
                 new=mock.Mock(return_value=io.BytesIO(b'')))
     @mock.patch.object(host.Host, 'get_guest')
@@ -30163,6 +30195,9 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         mock_guest._domain = mock.Mock()
         mock_get_guest.return_value = mock_guest
 
+        instance = self.instance_ref.obj_clone()
+        instance.root_device_name = '/dev/vda'
+
         # Make _suspend_guest_for_snapshot short-circuit and fail, we just
         # want to know that it was called with the correct live_snapshot
         # argument based on the power_state.
@@ -30172,11 +30207,11 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         ) as mock_suspend:
             self.assertRaises(test.TestingException,
                               drvr.snapshot, self.context,
-                              self.instance_ref, image['id'],
+                              instance, image['id'],
                               self.mock_update_task_state)
 
         mock_suspend.assert_called_once_with(
-            self.context, False, state, self.instance_ref)
+            self.context, False, state, instance)
 
 
 class LXCSnapshotTests(LibvirtSnapshotTests):
@@ -31340,3 +31375,70 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             mock_imagebackend, mock.sentinel.fetch, self.context,
             mock.sentinel.filename, uuids.image_id, self.instance,
             mock.sentinel.size)
+
+    def _test_create_snapshot_encryption_metadata(self, task_state=None):
+        self.mock_create_secret.return_value = (
+            uuids.secret, mock.sentinel.secret)
+
+        instance_data = {
+            'kernel_id': 'kernel',
+            'project_id': 'prj_id',
+            'ramdisk_id': 'ram_id',
+            'os_type': None,
+            'root_device_name': '/dev/vda',
+            'task_state': task_state,
+        }
+        instance = objects.Instance(**instance_data)
+        img_bdm = block_device_obj.BlockDeviceMapping(
+            id=1, uuid=uuids.image, image_id=uuids.image_id,
+            device_type='disk', disk_bus='virtio', no_device=False,
+            device_name='/dev/vda', volume_size=1, source_type='image',
+            destination_type='local', guest_format=None, encrypted=True,
+            encryption_format='luks', encryption_options=None,
+            encryption_secret_uuid=uuids.src_secret, boot_index=0)
+        eph_bdm = block_device_obj.BlockDeviceMapping(
+            id=2, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
+            no_device=False, device_name='/dev/vdb', volume_size=1,
+            source_type='blank', destination_type='local', guest_format=None,
+            encrypted=True, encryption_format='luks', encryption_options=None,
+            encryption_secret_uuid=uuids.eph_secret, boot_index=1)
+        block_device_info = driver.get_block_device_info(
+            instance, [img_bdm, eph_bdm])
+        encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+            block_device_info)
+        encryption = {'format': 'luks', 'secret': mock.sentinel.src_secret}
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        dest_encryption, props = drvr._create_snapshot_encryption_metadata(
+            self.context, instance, uuids.image, encryption=encryption,
+            encrypted_bdms=encrypted_bdms)
+
+        expected_dest_encryption = {'format': 'luks'}
+        expected_props = {
+            'hw_ephemeral_encryption': True,
+            'hw_ephemeral_encryption_format': 'luks',
+        }
+        if task_state is None:
+            expected_dest_encryption['secret'] = mock.sentinel.secret
+            expected_props['hw_ephemeral_encryption_secret_uuid'] = (
+                uuids.secret)
+            img_driver_bdm = block_device_info['image'][0]
+            self.mock_create_secret.assert_called_once_with(
+                self.context, instance, img_driver_bdm,
+                for_detail=f'image {uuids.image}')
+        elif task_state in task_states.shelving_states:
+            expected_dest_encryption['secret'] = mock.sentinel.src_secret
+            expected_props['hw_ephemeral_encryption_secret_uuid'] = (
+                uuids.src_secret)
+            self.mock_create_secret.assert_not_called()
+
+        self.assertEqual(
+            (expected_dest_encryption, expected_props),
+            (dest_encryption, props))
+
+    def test_create_snapshot_encryption_metadata(self):
+        self._test_create_snapshot_encryption_metadata()
+
+    def test_create_snapshot_encryption_metadata_shelving(self):
+        self._test_create_snapshot_encryption_metadata(
+            task_state=task_states.SHELVING)

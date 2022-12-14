@@ -330,7 +330,12 @@ def chown_for_id_maps(
 
 
 def extract_snapshot(
-    disk_path: str, source_fmt: str, out_path: str, dest_fmt: str,
+    disk_path: str,
+    source_fmt: str,
+    out_path: str,
+    dest_fmt: str,
+    src_encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+    dest_encryption: ty.Optional[ty.Dict[str, ty.Any]] = None
 ) -> None:
     """Extract a snapshot from a disk image.
     Note that nobody should write to the disk image during this operation.
@@ -346,7 +351,8 @@ def extract_snapshot(
 
     compress = CONF.libvirt.snapshot_compression and dest_fmt == "qcow2"
     images.convert_image(disk_path, out_path, source_fmt, dest_fmt,
-                         compress=compress)
+                         compress=compress, src_encryption=src_encryption,
+                         dest_encryption=dest_encryption)
 
 
 # TODO(stephenfin): This is dumb; remove it.
