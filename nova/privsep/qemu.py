@@ -37,9 +37,10 @@ QEMU_IMG_LIMITS = processutils.ProcessLimits(
 
 @nova.privsep.sys_admin_pctxt.entrypoint
 def convert_image(source, dest, in_format, out_format, instances_path,
-                  compress):
+                  compress, encryption=None, dest_encryption=None):
     unprivileged_convert_image(source, dest, in_format, out_format,
-                               instances_path, compress)
+                               instances_path, compress, encryption=encryption,
+                               dest_encryption=dest_encryption)
 
 
 # NOTE(mikal): this method is deliberately not wrapped in a privsep entrypoint
@@ -51,6 +52,7 @@ def unprivileged_convert_image(
     instances_path: str,
     compress: bool,
     encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+    dest_encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
 ) -> None:
     """Disk image conversion with qemu-img
 
@@ -91,7 +93,7 @@ def unprivileged_convert_image(
         cache_mode = 'writeback'
     cmd = ('qemu-img', 'convert', '-t', cache_mode, '-O', out_format)
 
-    if in_format is not None:
+    if in_format is not None and not encryption:
         cmd = cmd + ('-f', in_format)
 
     if compress:
@@ -107,10 +109,18 @@ def unprivileged_convert_image(
             f.flush()
 
             # The basic options include the secret and encryption format
+            #encryption_opts = (
+            #    '--object', f"secret,id=sec,file={f.name}",
+            #    '-o', 'encrypt.key-secret=sec',
+            #    '-o', f"encrypt.format={encryption.get('format')}",
+            #)
+            # Need the secret for the convert. When --image-opts is used, the
+            # source filename must be passed as part of the option string
+            # instead of as a positional arg.
             encryption_opts = (
                 '--object', f"secret,id=sec,file={f.name}",
-                '-o', 'encrypt.key-secret=sec',
-                '-o', f"encrypt.format={encryption.get('format')}",
+                '--image-opts',
+                f"encrypt.key-secret=sec,file.filename={source}",
             )
             # Supported luks options:
             #  cipher-alg=<str>       - Name of cipher algorithm and key length
@@ -132,16 +142,39 @@ def unprivileged_convert_image(
                 'ivgen-alg': 'plain64',
                 'ivgen-hash-alg': 'sha256',
             }
-            for option, value in encryption_options.items():
-                encryption_opts += (
-                    '-o',
-                    f'encrypt.{option}={value}',
-                )
-
+            # FIXME(melwitt): should this be under dest_encryption only?
+            #for option, value in encryption_options.items():
+            #    encryption_opts += (
+            #        '-o',
+            #        f'encrypt.{option}={value}',
+            #    )
             # We need to execute the command while the NamedTemporaryFile still
             # exists
-            cmd += encryption_opts + (source, dest)
-            processutils.execute(*cmd)
+            #cmd += encryption_opts + (source, dest)
+            if dest_encryption:
+                with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f2:
+                    # Write out the passphrase secret to a temp file
+                    f2.write(dest_encryption.get('secret'))
+
+                    # Ensure the secret is written to disk, we can't .close() here as
+                    # that removes the file when using NamedTemporaryFile
+                    f2.flush()
+                    encryption_opts += (
+                        '--object', f"secret,id=sec2,file={f2.name}",
+                        '-o', 'encrypt.key-secret=sec2',
+                        '-o', f"encrypt.format={dest_encryption.get('format')}",
+                    )
+                    # FIXME: these should maybe not be here
+                    for option, value in encryption_options.items():
+                        encryption_opts += (
+                            '-o',
+                            f'encrypt.{option}={value}',
+                        )
+                    cmd += encryption_opts + (dest,)
+                    processutils.execute(*cmd)
+            else:
+                cmd += encryption_opts + (dest,)
+                processutils.execute(*cmd)
     else:
         cmd = cmd + (source, dest)
         processutils.execute(*cmd)

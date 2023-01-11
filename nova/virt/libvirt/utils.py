@@ -18,6 +18,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import copy
 import grp
 import os
 import pwd
@@ -33,6 +34,7 @@ from oslo_utils import fileutils
 
 import nova.conf
 from nova import context as nova_context
+from nova import crypto
 from nova import exception
 from nova.i18n import _
 from nova import objects
@@ -313,7 +315,12 @@ def chown_for_id_maps(
 
 
 def extract_snapshot(
-    disk_path: str, source_fmt: str, out_path: str, dest_fmt: str,
+    disk_path: str,
+    source_fmt: str,
+    out_path: str,
+    dest_fmt: str,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+    dest_encryption: ty.Optional[ty.Dict[str, ty.Any]] = None
 ) -> None:
     """Extract a snapshot from a disk image.
     Note that nobody should write to the disk image during this operation.
@@ -329,7 +336,8 @@ def extract_snapshot(
 
     compress = CONF.libvirt.snapshot_compression and dest_fmt == "qcow2"
     images.convert_image(disk_path, out_path, source_fmt, dest_fmt,
-                         compress=compress)
+                         compress=compress, encryption=encryption,
+                         dest_encryption=dest_encryption)
 
 
 # TODO(stephenfin): This is dumb; remove it.
@@ -429,6 +437,7 @@ def fetch_image(
     target: str,
     image_id: str,
     trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
 ) -> None:
     """Grab image.
 
@@ -436,8 +445,12 @@ def fetch_image(
     :param target: target path to put the image
     :param image_id: id of the image to fetch
     :param trusted_certs: optional objects.TrustedCerts for image validation
+    :param encryption: (Optional) Dict detailing various encryption attributes
+                       such as the format and passphrase.
     """
-    images.fetch_to_raw(context, image_id, target, trusted_certs)
+    images.fetch_to_raw(
+        context, image_id, target, trusted_certs, encryption=encryption)
+        #context, image_id, target, trusted_certs)
 
 
 def fetch_raw_image(
@@ -723,3 +736,13 @@ def restore_vtpm_dir(swtpm_dir: str) -> None:
     nova.privsep.path.chown(swtpm_dir, uid, gid, recursive=True)
     # Move instance-specific directory to global dir
     nova.privsep.path.move_tree(swtpm_dir, VTPM_DIR)
+
+
+def create_encryption_from_driver_bdm(context, instance, driver_bdm):
+    secret_uuid, secret = crypto.create_encryption_secret(
+        context, instance, driver_bdm)
+    encryption = {
+        'format': driver_bdm.get('encryption_format'),
+        'secret': secret,
+    }
+    return encryption

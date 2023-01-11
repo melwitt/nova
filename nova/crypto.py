@@ -306,5 +306,5 @@ def delete_encryption_secret(
         key_mgr.delete(context, secret_uuid)
         LOG.debug(f"Deleted secret with UUID {secret_uuid}", instance=instance)
     except castellan_exception.ManagedObjectNotFoundError:
-        LOG.debug("Encryption secret with UUID {secret_uuid} already deleted "
+        LOG.debug(f"Encryption secret with UUID {secret_uuid} already deleted "
                   "or never existed.", instance=instance)
