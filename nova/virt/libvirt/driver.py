@@ -1631,8 +1631,8 @@ class LibvirtDriver(driver.ComputeDriver):
         :param cleanup_instance_dir: If the instance dir should be removed
         :param cleanup_instance_disks: If the instance disks should be removed.
             Also removes ephemeral encryption secrets, if present.
-        :param destroy_secrets: If the cinder volume encryption secrets should
-            be deleted.
+        :param destroy_secrets: If the cinder volume or ephemeral encryption
+            secrets should be deleted.
         """
         # zero the data on backend pmem device
         vpmems = self._get_vpmems(instance)
@@ -1696,7 +1696,7 @@ class LibvirtDriver(driver.ComputeDriver):
             except exception.InstanceNotFound:
                 pass
 
-        if cleanup_instance_disks:
+        if cleanup_instance_disks and destroy_secrets:
             crypto.delete_vtpm_secret(context, instance)
             self._cleanup_ephemeral_encryption_secrets(
                 context, instance, block_device_info)
