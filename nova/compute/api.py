@@ -3611,7 +3611,6 @@ class API:
             if img_arch:
                 fields_obj.Architecture.canonicalize(img_arch)
 
-    @reject_ephemeral_encryption_instances(instance_actions.REBUILD)
     @reject_vtpm_instances(instance_actions.REBUILD)
     @block_accelerators(until_service=SUPPORT_ACCELERATOR_SERVICE_FOR_REBUILD)
     # TODO(stephenfin): We should expand kwargs out to named args
@@ -3732,6 +3731,9 @@ class API:
         # numa constraints.
         if orig_image_ref != image_href:
             self._validate_numa_rebuild(instance, image, flavor)
+
+        if orig_image_ref != image_href:
+            self._validate_rebuild_for_ephemeral_encryption(flavor, image)
 
         kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
                 context, None, None, image)
@@ -4216,6 +4218,34 @@ class API:
                         'not allowed.')
                     raise exception.EphemeralEncryptionConflict(
                         action='resize', reason=reason)
+
+    @staticmethod
+    def _validate_rebuild_for_ephemeral_encryption(flavor, image):
+        image_meta = objects.ImageMeta.from_dict(image)
+        # This will validate hw:ephemeral_encryption and
+        # hw_ephemeral_encryption.
+        hardware.get_ephemeral_encryption_constraint(flavor, image_meta)
+        # This will validate hw:ephemeral_encryption_format and
+        # hw_ephemeral_encryption_format.
+        flavor_format = flavor.get('extra_specs', {}).get(
+            'hw:ephemeral_encryption_format')
+        image_format = image_meta.properties.get(
+            'hw_ephemeral_encryption_format')
+        if (flavor_format is not None and image_format is not None and
+                flavor_format != image_format):
+            emsg = _(
+                'Flavor %(flavor_name)s has hw:ephemeral_encryption_format '
+                'extra spec explicitly set to %(flavor_val)s, conflicting '
+                'with image %(image_name)s which has '
+                'hw_ephemeral_encryption_format property explicitly set to '
+                '%(image_val)s')
+            data = {
+                'flavor_name': flavor.name,
+                'flavor_val': flavor_format,
+                'image_name': image_meta.name,
+                'image_val': image_format,
+            }
+            raise exception.FlavorImageConflict(emsg % data)
 
     # TODO(stephenfin): This logic would be so much easier to grok if we
     # finally split resize and cold migration into separate code paths
