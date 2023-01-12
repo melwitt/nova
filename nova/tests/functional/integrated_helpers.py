@@ -397,8 +397,9 @@ class InstanceHelperMixin:
         return flavor['id']
 
     def _create_image(self, metadata):
+        # We don't need to hardcode an image 'id' here because the
+        # GlanceFixture will create one dynamically.
         image = {
-            'id': 'c456eb30-91d7-4f43-8f46-2efd9eccd744',
             'name': 'fake-image-custom-property',
             'created_at': datetime.datetime(2011, 1, 1, 1, 2, 3),
             'updated_at': datetime.datetime(2011, 1, 1, 1, 2, 3),
@@ -555,9 +556,11 @@ class InstanceHelperMixin:
         self.notifier.wait_for_versioned_notifications(
             'instance.interface_detach.end')
 
-    def _rebuild_server(self, server, image_uuid, expected_state='ACTIVE'):
+    def _rebuild_server(
+            self, server, image_uuid, expected_state='ACTIVE', api=None):
         """Rebuild a server."""
-        self.api.post_server_action(
+        api = api or self.api
+        api.post_server_action(
             server['id'], {'rebuild': {'imageRef': image_uuid}},
         )
         self.notifier.wait_for_versioned_notifications('instance.rebuild.end')
