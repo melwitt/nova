@@ -1631,8 +1631,8 @@ class LibvirtDriver(driver.ComputeDriver):
         :param cleanup_instance_dir: If the instance dir should be removed
         :param cleanup_instance_disks: If the instance disks should be removed.
             Also removes ephemeral encryption secrets, if present.
-        :param destroy_secrets: If the cinder volume encryption secrets should
-            be deleted.
+        :param destroy_secrets: If the cinder volume or ephemeral encryption
+            secrets should be deleted.
         """
         # zero the data on backend pmem device
         vpmems = self._get_vpmems(instance)
@@ -1696,7 +1696,7 @@ class LibvirtDriver(driver.ComputeDriver):
             except exception.InstanceNotFound:
                 pass
 
-        if cleanup_instance_disks:
+        if cleanup_instance_disks and destroy_secrets:
             crypto.delete_vtpm_secret(context, instance)
             self._cleanup_ephemeral_encryption_secrets(
                 context, instance, block_device_info)
@@ -3219,11 +3219,19 @@ class LibvirtDriver(driver.ComputeDriver):
         if encryption:
             dest_encryption = copy.deepcopy(encryption)
             root_bdm = block_device.get_root_bdm(encrypted_bdms)
-            # NOTE(melwitt): We create a new secret for the snapshot, so that
-            # we will be able to read it if/when an instance is booted from
-            # the snapshot in the future.
-            secret_uuid, secret = crypto.create_encryption_secret(
-                context, instance, root_bdm)
+            if instance.task_state not in task_states.shelving_states:
+                # NOTE(melwitt): We create a new secret for the snapshot, so
+                # that we will be able to read it if/when an instance is booted
+                # from the snapshot in the future.
+                secret_uuid, secret = crypto.create_encryption_secret(
+                    context, instance, root_bdm)
+            else:
+                # Reuse the existing secret to avoid a potential change in
+                # ownership.  Example: an admin shelves the instance of a
+                # non-admin. We don't want the non-admin user to lose access to
+                # the secret for their shelved instance snapshot.
+                secret_uuid = root_bdm.encryption_secret_uuid
+                secret = crypto.get_encryption_secret(context, secret_uuid)
             dest_encryption['secret'] = secret
 
             props['hw_ephemeral_encryption'] = True
