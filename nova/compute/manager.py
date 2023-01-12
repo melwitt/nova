@@ -3592,14 +3592,9 @@ class ComputeManager(manager.Manager):
             # from the new image. We could be going from not encrypted to
             # encrypted, for example. Note that we have to do this after
             # calling driver.destroy() because we needed the old encryption
-            # secret UUID in order to delete the old secret.
-            for bdm in bdms:
-                bdm.reset_encryption_fields()
-            if bdms:
-                compute_utils.update_ephemeral_encryption_bdms(
-                    instance.flavor, image_meta, bdms)
-            for bdm in bdms:
-                bdm.save()
+            # secret UUID in the BDM in order to delete the old secret.
+            self.reset_and_update_ephemeral_encryption_bdms(
+                instance.flavor, image_meta, bdms)
 
         instance.task_state = task_states.REBUILD_BLOCK_DEVICE_MAPPING
         instance.save(expected_task_state=[task_states.REBUILDING])
@@ -3616,6 +3611,14 @@ class ComputeManager(manager.Manager):
                               network_info=network_info,
                               block_device_info=new_block_device_info,
                               accel_info=accel_info)
+
+    @staticmethod
+    def reset_and_update_ephemeral_encryption_bdms(flavor, image_meta, bdms):
+        if bdms:
+            bdms.reset_encryption_fields()
+            compute_utils.update_ephemeral_encryption_bdms(
+                flavor, image_meta, bdms)
+            bdms.save_all()
 
     def _notify_instance_rebuild_error(self, context, instance, error, bdms):
         self._notify_about_instance_usage(context, instance,
@@ -6889,26 +6892,25 @@ class ComputeManager(manager.Manager):
         instance.save()
 
         if image:
-            instance.image_ref = image['id']
             image_meta = objects.ImageMeta.from_dict(image)
         else:
             image_meta = objects.ImageMeta.from_dict(
                 utils.get_image_from_system_metadata(
                     instance.system_metadata))
 
-        print(f'image_meta = {image_meta.__dict__}')
+        # Update the encryption secret UUID in system metadata with the UUID
+        # from the image, if there is one.
+        key = 'hw_ephemeral_encryption_secret_uuid'
+        if key in image_meta.properties:
+            instance.system_metadata['image_' + key] = (
+                image_meta.properties.get(key))
 
-        ## Retrieve the encryption secret UUID if there is one, before
-        # generating block_device_info
-        for bdm in bdms:
-            bdm.reset_encryption_fields()
-        if bdms:
-            compute_utils.update_ephemeral_encryption_bdms(
-                instance.flavor, image_meta, bdms)
-        for bdm in bdms:
-            print(f'bdm = {bdm}')
-
-            bdm.save()
+        # Update encryption fields in the BDMs with values from the image
+        # properties before generating block_device_info. Example: the
+        # encryption secret UUID for the image will be different than the UUID
+        # of the previous image before the instance was shelved.
+        self.reset_and_update_ephemeral_encryption_bdms(
+            instance.flavor, image_meta, bdms)
 
         block_device_info = self._prep_block_device(context, instance, bdms)
         scrubbed_keys = self._unshelve_instance_key_scrub(instance)
@@ -6921,14 +6923,10 @@ class ComputeManager(manager.Manager):
         allocations = self.reportclient.get_allocations_for_consumer(
             context, instance.uuid)
 
+        # Save the original image_ref
         shelved_image_ref = instance.image_ref
         if image:
             instance.image_ref = image['id']
-            image_meta = objects.ImageMeta.from_dict(image)
-        else:
-            image_meta = objects.ImageMeta.from_dict(
-                utils.get_image_from_system_metadata(
-                    instance.system_metadata))
 
         provider_mappings = self._get_request_group_mapping(request_spec)
 
