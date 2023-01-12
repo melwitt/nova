@@ -5778,7 +5778,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
             mock.patch.object(compute_utils, 'is_volume_backed_instance',
                               return_value=is_vol_backed),
             mock.patch.object(self.compute, '_rebuild_volume_backed_instance'),
-            mock.patch.object(compute_utils, 'get_root_bdm')
+            mock.patch.object(compute_utils, 'get_root_bdm'),
         ) as (
              mock_destroy,
              mock_spawn,
