@@ -5770,7 +5770,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
             self.assertTrue(mock_spawn.called)
             mock_destroy.assert_called_once_with(
                 self.context, instance,
-                network_info=None, block_device_info=fake_block_device_info)
+                network_info=None, block_device_info=fake_block_device_info,
+                destroy_secrets=False)
             mock_power_off.assert_called_once_with(
                 instance, clean_shutdown=True)
             if is_vol_backed and reimage_boot_vol:
