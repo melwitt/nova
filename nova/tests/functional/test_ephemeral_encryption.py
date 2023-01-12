@@ -10,6 +10,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import ddt
 from oslo_utils.fixture import uuidsentinel
 
 from nova import context
@@ -531,3 +532,111 @@ class TestEphemeralEncryptionResize(_TestEphemeralEncryptionBase):
             api_client.OpenStackApiException, self._resize_server, server,
             uuidsentinel.eph_encryption_plain_flavor)
         self.assertEqual(400, ex.response.status_code)
+
+
+@ddt.ddt
+class TestEphemeralEncryptionRebuild(_TestEphemeralEncryptionBase):
+
+    compute_driver = 'fake.EphEncryptionDriverLUKSPLAIN'
+    flavors = {
+        'no_eph_encryption': {
+            'id': uuidsentinel.no_eph_encryption
+        },
+        'eph_encryption': {
+            'id': uuidsentinel.eph_encryption_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'True'
+            }
+        },
+        'eph_encryption_disabled': {
+            'id': uuidsentinel.eph_encryption_disabled_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'False'
+            }
+        },
+        'eph_encryption_luks': {
+            'id': uuidsentinel.eph_encryption_luks_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'True',
+                'hw:ephemeral_encryption_format': 'luks'
+            }
+        },
+        'eph_encryption_plain': {
+            'id': uuidsentinel.eph_encryption_plain_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'True',
+                'hw:ephemeral_encryption_format': 'plain'
+            }
+        },
+    }
+
+    @ddt.data(
+        (uuidsentinel.eph_encryption_flavor,
+         {'hw_ephemeral_encryption': 'False'}),
+        (uuidsentinel.eph_encryption_luks_flavor,
+         {'hw_ephemeral_encryption': 'False'}),
+        (uuidsentinel.eph_encryption_plain_flavor,
+         {'hw_ephemeral_encryption': 'False'}),
+        (uuidsentinel.eph_encryption_disabled_flavor,
+         {'hw_ephemeral_encryption': 'True'}),
+        (uuidsentinel.eph_encryption_disabled_flavor,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'luks'}),
+        (uuidsentinel.eph_encryption_disabled_flavor,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'plain'}),
+        (uuidsentinel.eph_encryption_luks_flavor,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'plain'}),
+        (uuidsentinel.eph_encryption_plain_flavor,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'luks'}))
+    @ddt.unpack
+    def test_flavor_image_mismatch(self, flavor_id, image_meta):
+        # Test a scenario where a rebuild with a new image is requested and the
+        # image property conflicts with the instance's flavor extra specs.
+        server = self._create_server(flavor_id=flavor_id, networks=[])
+        image = self._create_image(image_meta)
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._rebuild_server, server,
+            image['id'])
+        self.assertEqual(400, ex.response.status_code)
+
+    @ddt.data(
+        (uuidsentinel.eph_encryption_flavor,
+         {'hw_ephemeral_encryption': 'True'}),
+        (uuidsentinel.no_eph_encryption,
+         {'hw_ephemeral_encryption': 'True'}),
+        (uuidsentinel.eph_encryption_luks_flavor,
+         {'hw_ephemeral_encryption': 'True'}),
+        (uuidsentinel.eph_encryption_plain_flavor,
+         {'hw_ephemeral_encryption': 'True'}),
+        (uuidsentinel.no_eph_encryption,
+         {'hw_ephemeral_encryption': 'False'}),
+        (uuidsentinel.eph_encryption_disabled_flavor,
+         {'hw_ephemeral_encryption': 'False'}),
+        (uuidsentinel.eph_encryption_luks_flavor,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'luks'}),
+        (uuidsentinel.eph_encryption_plain_flavor,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'plain'}),
+        (uuidsentinel.no_eph_encryption,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'luks'}),
+        (uuidsentinel.no_eph_encryption,
+         {'hw_ephemeral_encryption': 'True',
+          'hw_ephemeral_encryption_format': 'plain'}),
+        (uuidsentinel.eph_encryption_flavor, {}),
+        (uuidsentinel.no_eph_encryption, {}),
+        (uuidsentinel.eph_encryption_disabled_flavor, {}),
+        (uuidsentinel.eph_encryption_luks_flavor, {}),
+        (uuidsentinel.eph_encryption_plain_flavor, {}))
+    @ddt.unpack
+    def test_flavor_image_matches(self, flavor_id, image_meta):
+        # Test a scenario where a rebuild with a new image is requested and the
+        # image property matches with the instance's flavor extra specs.
+        server = self._create_server(flavor_id=flavor_id, networks=[])
+        image = self._create_image(image_meta)
+        # Rebuild should not be rejected.
+        self._rebuild_server(server, image['id'])
