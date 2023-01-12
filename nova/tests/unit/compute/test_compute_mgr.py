@@ -5778,7 +5778,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
             mock.patch.object(compute_utils, 'is_volume_backed_instance',
                               return_value=is_vol_backed),
             mock.patch.object(self.compute, '_rebuild_volume_backed_instance'),
-            mock.patch.object(compute_utils, 'get_root_bdm')
+            mock.patch.object(compute_utils, 'get_root_bdm'),
+            mock.patch.object(self.compute,
+                              'reset_ephemeral_encryption_image_sysmeta')
         ) as (
              mock_destroy,
              mock_spawn,
@@ -5788,6 +5790,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
              mock_is_volume_backed,
              mock_rebuild_vol_backed_inst,
              mock_get_root,
+             mock_reset_eph_sysmeta,
         ):
             instance = fake_instance.fake_instance_obj(self.context)
             instance.migration_context = None
@@ -5828,7 +5831,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
             self.assertTrue(mock_spawn.called)
             mock_destroy.assert_called_once_with(
                 self.context, instance,
-                network_info=None, block_device_info=fake_block_device_info)
+                network_info=None, block_device_info=fake_block_device_info,
+                destroy_ephemeral_secrets=False)
             mock_power_off.assert_called_once_with(
                 instance, clean_shutdown=True)
             if is_vol_backed and reimage_boot_vol:
@@ -5836,6 +5840,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                     self.context, instance, [], fake_image_meta.id)
             else:
                 mock_rebuild_vol_backed_inst.assert_not_called()
+            mock_reset_eph_sysmeta.assert_called_once_with(
+                instance, fake_image_meta)
 
     @mock.patch('nova.volume.cinder.API.attachment_delete')
     @mock.patch('nova.volume.cinder.API.attachment_create',
@@ -5933,6 +5939,75 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                 self.context, uuids.old_attachment_id)
             mock_get_img.assert_called_once_with(
                 self.context, uuids.image_id)
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    def test_reset_ephemeral_encryption_image_sysmeta(self, mock_save):
+        instance = fake_instance.fake_instance_obj(self.context)
+        instance.system_metadata = {}
+        image_meta_dict = {
+            'properties': {
+                'hw_ephemeral_encryption': 'True',
+                'hw_ephemeral_encryption_secret_uuid': uuids.secret,
+                'hw_ephemeral_encryption_format': 'luks',
+            }
+        }
+        image_meta = objects.ImageMeta.from_dict(image_meta_dict)
+        self.compute.reset_ephemeral_encryption_image_sysmeta(
+            instance, image_meta)
+        expected_sysmeta = {
+            'image_hw_ephemeral_encryption': 'True',
+            'image_hw_ephemeral_encryption_secret_uuid': uuids.secret,
+            'image_hw_ephemeral_encryption_format': 'luks',
+        }
+        self.assertEqual(expected_sysmeta, instance.system_metadata)
+        mock_save.assert_called_once_with()
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    def test_reset_ephemeral_encryption_image_sysmeta_remove(self, mock_save):
+        # Test a scenario where ephemeral encryption image properties are
+        # missing from the new image and will be removed from instance sysmeta.
+        instance = fake_instance.fake_instance_obj(self.context)
+        instance.system_metadata = {
+            'image_hw_ephemeral_encryption': 'True',
+            'image_hw_ephemeral_encryption_secret_uuid': uuids.secret,
+            'image_hw_ephemeral_encryption_format': 'luks',
+        }
+        image_meta_dict = {}
+        image_meta = objects.ImageMeta.from_dict(image_meta_dict)
+        self.compute.reset_ephemeral_encryption_image_sysmeta(
+            instance, image_meta)
+        expected_sysmeta = {}
+        self.assertEqual(expected_sysmeta, instance.system_metadata)
+        mock_save.assert_called_once_with()
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    def test_reset_ephemeral_encryption_image_sysmeta_none(self, mock_save):
+        # Test a scenario where there are no ephemeral encryption image
+        # properties in the instance sysmeta or the image.
+        instance = fake_instance.fake_instance_obj(self.context)
+        instance.system_metadata = {}
+        image_meta_dict = {
+            'properties': {
+                'fake_property': 'foo',
+            }
+        }
+        image_meta = objects.ImageMeta.from_dict(image_meta_dict)
+        self.compute.reset_ephemeral_encryption_image_sysmeta(
+            instance, image_meta)
+        self.assertEqual({}, instance.system_metadata)
+        mock_save.assert_not_called()
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    def test_reset_ephemeral_encryption_image_sysmeta_no_img(self, mock_save):
+        # Test a scenario where the image isn't changing during a rebuild.
+        instance = fake_instance.fake_instance_obj(self.context)
+        instance.system_metadata = {}
+        image_meta_dict = {}
+        image_meta = objects.ImageMeta.from_dict(image_meta_dict)
+        self.compute.reset_ephemeral_encryption_image_sysmeta(
+            instance, image_meta)
+        self.assertEqual({}, instance.system_metadata)
+        mock_save.assert_not_called()
 
     @mock.patch.object(objects.Instance, 'save', return_value=None)
     @mock.patch.object(fake_driver.SmallFakeDriver, 'detach_volume')

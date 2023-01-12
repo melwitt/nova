@@ -1553,13 +1553,15 @@ class LibvirtDriver(driver.ComputeDriver):
             libvirt_cpu.power_down(instance)
 
     def destroy(self, context, instance, network_info, block_device_info=None,
-                destroy_disks=True, destroy_secrets=True):
+                destroy_disks=True, destroy_secrets=True,
+                destroy_ephemeral_secrets=True):
         self._destroy(instance)
         # NOTE(gibi): if there was device detach in progress then we need to
         # unblock the waiting threads and clean up.
         self._device_event_handler.cleanup_waiters(instance.uuid)
         self.cleanup(context, instance, network_info, block_device_info,
-                     destroy_disks, destroy_secrets=destroy_secrets)
+                     destroy_disks, destroy_secrets=destroy_secrets,
+                     destroy_ephemeral_secrets=destroy_ephemeral_secrets)
 
     def _undefine_domain(self, instance):
         try:
@@ -1587,7 +1589,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def cleanup(self, context, instance, network_info, block_device_info=None,
                 destroy_disks=True, migrate_data=None, destroy_vifs=True,
-                destroy_secrets=True):
+                destroy_secrets=True, destroy_ephemeral_secrets=True):
         """Cleanup the instance from the host.
 
         Identify if the instance disks and instance path should be removed
@@ -1601,7 +1603,10 @@ class LibvirtDriver(driver.ComputeDriver):
         :param destroy_disks: if local ephemeral disks should be destroyed
         :param migrate_data: optional migrate_data object
         :param destroy_vifs: if plugged vifs should be unplugged
-        :param destroy_secrets: Indicates if secrets should be destroyed
+        :param destroy_secrets: Indicates if cinder volume secrets should be
+            destroyed
+        :param destroy_ephemeral_secrets: Indicates if ephemeral encryption
+            secrets should be destroyed
         """
         cleanup_instance_dir = False
         cleanup_instance_disks = False
@@ -1634,11 +1639,13 @@ class LibvirtDriver(driver.ComputeDriver):
                 destroy_vifs=destroy_vifs,
                 cleanup_instance_dir=cleanup_instance_dir,
                 cleanup_instance_disks=cleanup_instance_disks,
-                destroy_secrets=destroy_secrets)
+                destroy_secrets=destroy_secrets,
+                destroy_ephemeral_secrets=destroy_ephemeral_secrets)
 
     def _cleanup(self, context, instance, network_info, block_device_info=None,
                  destroy_vifs=True, cleanup_instance_dir=False,
-                 cleanup_instance_disks=False, destroy_secrets=True):
+                 cleanup_instance_disks=False, destroy_secrets=True,
+                 destroy_ephemeral_secrets=True):
         """Cleanup the domain and any attached resources from the host.
 
         This method cleans up any pmem devices, unplugs VIFs, disconnects
@@ -1657,6 +1664,8 @@ class LibvirtDriver(driver.ComputeDriver):
             Also removes ephemeral encryption secrets, if present.
         :param destroy_secrets: If the cinder volume encryption secrets should
             be deleted.
+        :param destroy_ephemeral_secrets: Indicates if ephemeral encryption
+            secrets should be destroyed
         """
         # zero the data on backend pmem device
         vpmems = self._get_vpmems(instance)
@@ -1727,7 +1736,9 @@ class LibvirtDriver(driver.ComputeDriver):
             # image backends that are not 'lvm' or 'rbd'. We don't want to
             # leave any chance that we delete the secrets if the disks have not
             # been deleted.
-            if CONF.libvirt.images_type in ('lvm', 'rbd') or instance.cleaned:
+            if (destroy_ephemeral_secrets and (
+                    CONF.libvirt.images_type in ('lvm', 'rbd') or
+                    instance.cleaned)):
                 self._cleanup_ephemeral_encryption_secrets(
                     context, instance, block_device_info)
 
