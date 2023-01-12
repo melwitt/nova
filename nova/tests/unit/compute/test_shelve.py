@@ -301,9 +301,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                       mock_get_power_state, mock_spawn,
                       mock_prep_block_device, mock_notify_instance_usage,
                       mock_notify_instance_action,
-                      mock_get_bdms,
-                      accel_uuids=None,
-                      instance=None):
+                      mock_get_bdms, accel_uuids=None, instance=None):
         mock_bdms = mock.Mock()
         mock_get_bdms.return_value = mock_bdms
         instance = instance or self._create_fake_instance_obj()
