@@ -17,6 +17,7 @@ import nova.conf
 from nova import context as nova_context
 from nova import crypto
 from nova import objects
+from nova.tests.functional.api import client as api_client
 from nova.tests.functional.libvirt import base
 
 CONF = nova.conf.CONF
@@ -44,6 +45,14 @@ class EphemeralEncryptionTestBase(base.ServersTestBase):
         flavor_id = self._create_flavor(
             disk=10, ephemeral=5, swap=128, extra_spec=extra_specs)
         server = self._create_server(flavor_id=flavor_id, **kwargs)
+        return server
+
+    def _create_server_with_ephemeral_encryption_image(self, **kwargs):
+        image_properties = {'hw_ephemeral_encryption': 'true'}
+        image_id = self._create_image(image_properties)['id']
+        flavor_id = self._create_flavor(disk=10, ephemeral=5, swap=128)
+        server = self._create_server(
+            image_uuid=image_id, flavor_id=flavor_id, **kwargs)
         return server
 
     def _get_key_mgr_secrets(self, ctx):
@@ -423,3 +432,279 @@ class EphemeralEncryptionLiveMigrateFail(EphemeralEncryptionLiveMigrateBase):
         # Verify that there are no libvirt secrets on either host.
         self.assertSecretsDeleted(bdms, src_driver)
         self.assertSecretsDeleted(bdms, dest_driver)
+
+
+class EphemeralEncryptionTestRebuild(EphemeralEncryptionTestBase):
+
+    def test_rebuild_server_encryption_from_flavor_same_image(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Rebuild the server without changing the image.
+        image_id = self._show_server(server)['image']['id']
+        self._rebuild_server(server, image_id)
+
+        # The image should not have changed.
+        image_id_after_rebuild = self._show_server(server)['image']['id']
+        self.assertEqual(image_id, image_id_after_rebuild)
+
+        # We should still have three key manager secrets and three libvirt
+        # secrets and they should be the same ones from earlier.
+        self.assertSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_from_flavor_new_image_encrypt(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # Rebuild the server with a new image requesting encryption.
+        image = self._create_image({'hw_ephemeral_encryption': 'true'})
+        self._rebuild_server(server, image['id'])
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # The image should have changed.
+        image_id_after_rebuild = self._show_server(server)['image']['id']
+        self.assertEqual(image['id'], image_id_after_rebuild)
+
+        # We should still have three key manager secrets and three libvirt
+        # secrets and they should be the same ones from earlier.
+        self.assertSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_from_flavor_new_image_no_encrypt(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Rebuild the server with a new image not requesting encryption.
+        image = self._create_image({})
+        self._rebuild_server(server, image['id'])
+
+        # The image should have changed.
+        image_id_after_rebuild = self._show_server(server)['image']['id']
+        self.assertEqual(image['id'], image_id_after_rebuild)
+
+        # We should still have three key manager secrets and three libvirt
+        # secrets and they should be the same ones from earlier.
+        # Even though the image didn't request encryption, we still have
+        # encryption specified in the flavor.
+        self.assertSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_from_image_same_image(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_image()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Rebuild the server without changing the image.
+        image_id = self._show_server(server)['image']['id']
+        self._rebuild_server(server, image_id)
+
+        # The image should not have changed.
+        image_id_after_rebuild = self._show_server(server)['image']['id']
+        self.assertEqual(image_id, image_id_after_rebuild)
+
+        # We should still have three key manager secrets and three libvirt
+        # secrets and they should be the same ones from earlier.
+        self.assertSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_from_image_new_image_encrypt(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_image()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Rebuild the server with a new image requesting encryption.
+        image = self._create_image({'hw_ephemeral_encryption': 'true'})
+        self._rebuild_server(server, image['id'])
+
+        # The image should have changed.
+        image_id_after_rebuild = self._show_server(server)['image']['id']
+        self.assertEqual(image['id'], image_id_after_rebuild)
+
+        # We should still have three key manager secrets and three libvirt
+        # secrets and they should be the same ones from earlier.
+        self.assertSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_from_image_new_image_no_encrypt(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_image()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Rebuild the server with a new image not requesting encryption.
+        image = self._create_image({})
+        self._rebuild_server(server, image['id'])
+
+        # The image should have changed.
+        image_id_after_rebuild = self._show_server(server)['image']['id']
+        self.assertEqual(image['id'], image_id_after_rebuild)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+    def test_rebuild_server_no_initial_encryption(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server without ephemeral encryption.
+        flavor_id = self._create_flavor(disk=10, ephemeral=5, swap=128)
+        server = self._create_server(flavor_id=flavor_id)
+
+        # Verify there are still no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # The flavor we created has ephemeral=5 and swap=128, so we will have
+        # three disks, the root disk, an ephemeral disk, and a swap disk.
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+            self.context, server['id'])
+        self.assertEqual(3, len(bdms))
+
+        # Verify that there are no libvirt secrets for the disks.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+        # Rebuild the server with a new image requesting encryption.
+        image = self._create_image({'hw_ephemeral_encryption': 'true'})
+        self._rebuild_server(server, image['id'])
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_change_rejected_non_to_encrypt(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server without ephemeral encryption.
+        flavor_id = self._create_flavor(disk=10, ephemeral=5, swap=128)
+        server = self._create_server(flavor_id=flavor_id)
+
+        # Verify there are still no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # The flavor we created has ephemeral=5 and swap=128, so we will have
+        # three disks, the root disk, an ephemeral disk, and a swap disk.
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+            self.context, server['id'])
+        self.assertEqual(3, len(bdms))
+
+        # Verify that there are no libvirt secrets for the disks.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+        # Attempt to rebuild the server with a new image requesting encryption
+        # as a different user (admin). This should be rejected.
+        image = self._create_image({'hw_ephemeral_encryption': 'true'})
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._rebuild_server, server,
+            image['id'], api=self.admin_api)
+        self.assertEqual(403, ex.response.status_code)
+        msg = (
+            'Only the user_id that owns the instance may change from '
+            'ephemeral encryption to no ephemeral encryption or vice versa.')
+        self.assertIn(msg, ex.response.text)
+
+        # Delete that server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rebuild_server_encryption_change_rejected_encrypt_to_non(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_image()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Attempt to rebuild the server with a new image without ephemeral
+        # encryption as a different user (admin). This should be rejected.
+        image = self._create_image({})
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._rebuild_server, server,
+            image['id'], api=self.admin_api)
+        self.assertEqual(403, ex.response.status_code)
+        msg = (
+            'Only the user_id that owns the instance may change from '
+            'ephemeral encryption to no ephemeral encryption or vice versa.')
+        self.assertIn(msg, ex.response.text)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)

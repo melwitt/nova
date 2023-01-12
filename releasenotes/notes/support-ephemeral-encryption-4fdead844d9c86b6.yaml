@@ -19,3 +19,5 @@ features:
     * resize
     * cold migration
     * live migration
+    * rebuild
+    * evacuate
