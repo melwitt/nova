@@ -284,6 +284,8 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
 
         return instance
 
+    @mock.patch.object(nova.compute.manager.ComputeManager,
+                       'reset_ephemeral_encryption_image_sysmeta')
     @mock.patch('nova.compute.utils.'
                 'update_pci_request_with_placement_allocations',
                 new=mock.NonCallableMock())
@@ -301,7 +303,7 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
                       mock_get_power_state, mock_spawn,
                       mock_prep_block_device, mock_notify_instance_usage,
                       mock_notify_instance_action,
-                      mock_get_bdms,
+                      mock_get_bdms, mock_reset_eph_sysmeta,
                       accel_uuids=None,
                       instance=None):
         mock_bdms = mock.Mock()
@@ -391,6 +393,8 @@ class ShelveComputeManagerTestCase(test_compute.BaseTestCase):
         self.mock_get_allocations.assert_called_once_with(self.context,
                                                           instance.uuid)
         mock_get_power_state.assert_called_once_with(instance)
+        mock_reset_eph_sysmeta.assert_called_once_with(
+            instance, test.MatchType(objects.ImageMeta))
 
         self.assertNotIn('shelved_at', instance.system_metadata)
         self.assertNotIn('shelved_image_id', instance.system_metadata)

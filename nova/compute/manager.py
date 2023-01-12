@@ -3693,11 +3693,13 @@ class ComputeManager(manager.Manager):
                 ]
                 self.driver.destroy(context, instance,
                                     network_info=network_info,
-                                    block_device_info=block_device_info_copy)
+                                    block_device_info=block_device_info_copy,
+                                    destroy_ephemeral_secrets=False)
             else:
                 self.driver.destroy(context, instance,
                     network_info=network_info,
-                    block_device_info=block_device_info)
+                    block_device_info=block_device_info,
+                    destroy_ephemeral_secrets=False)
             try:
                 accel_info = self._get_accel_info(context, instance)
             except Exception as exc:
@@ -3712,6 +3714,12 @@ class ComputeManager(manager.Manager):
                 if is_volume_backed:
                     self._rebuild_volume_backed_instance(
                         context, instance, bdms, image_meta.id)
+
+            # We are potentially changing images, so replace the old
+            # encryption attributes in the instance system metadata with
+            # properties from the new image. We could be going from not
+            # encrypted to encrypted, for example.
+            self.reset_ephemeral_encryption_image_sysmeta(instance, image_meta)
 
         instance.task_state = task_states.REBUILD_BLOCK_DEVICE_MAPPING
         instance.save(expected_task_state=[task_states.REBUILDING])
@@ -3728,6 +3736,53 @@ class ComputeManager(manager.Manager):
                               network_info=network_info,
                               block_device_info=new_block_device_info,
                               accel_info=accel_info)
+
+    @staticmethod
+    def reset_ephemeral_encryption_image_sysmeta(
+        instance: 'objects.Instance',
+        image_meta: 'objects.ImageMeta',
+    ) -> None:
+        """Reset ephemeral encryption attributes in instance sys meta
+
+        We will need the encryption secret and format in the virt driver in
+        order to do things like convert and rebase images. The virt driver will
+        pull them from the block device mappings and instance system metadata.
+
+        The image properties in the system metadata need to be updated
+        if the instance is being booted with a different image than the one
+        with which it was first booted. Examples are rebuild and
+        shelve/unshelve. When an instance is shelved, a snapshot is taken and
+        after it is offloaded, the virt guest is destroyed and resources are
+        freed.
+
+        When we snapshot an encrypted local disk, we save the encryption secret
+        UUID in the image properties of the uploaded snapshot image.
+
+        Later, when we need to unshelve the instance, we will boot a new virt
+        guest from the snapshot image and from then on, the instance will need
+        the encryption secret UUID for that image in order to do potential
+        image converts or rebases in the future.
+        """
+        # image_meta can be an empty objects.ImageMeta()
+        # (example: rebuild without changing the image)
+        if 'properties' not in image_meta:
+            return
+
+        need_save = False
+        for prop in (
+                'hw_ephemeral_encryption',
+                'hw_ephemeral_encryption_secret_uuid',
+                'hw_ephemeral_encryption_format'):
+            key = utils.SM_IMAGE_PROP_PREFIX + prop
+            if key in instance.system_metadata:
+                del instance.system_metadata[key]
+                need_save = True
+            if image_meta.properties.get(prop) is not None:
+                instance.system_metadata[key] = image_meta.properties.get(prop)
+                need_save = True
+
+        if need_save:
+            instance.save()
 
     def _notify_instance_rebuild_error(self, context, instance, error, bdms):
         self._notify_about_instance_usage(context, instance,
@@ -7007,7 +7062,7 @@ class ComputeManager(manager.Manager):
                                                                  instance,
                                                                  bdms=bdms)
         self.driver.destroy(context, instance, network_info,
-                block_device_info)
+                block_device_info, destroy_ephemeral_secrets=False)
 
         # the instance is going to be removed from the host so we want to
         # terminate all the connections with the volume server and the host
@@ -7109,6 +7164,19 @@ class ComputeManager(manager.Manager):
         instance.task_state = task_states.SPAWNING
         instance.save()
 
+        if image:
+            image_meta = objects.ImageMeta.from_dict(image)
+        else:
+            image_meta = objects.ImageMeta.from_dict(
+                utils.get_image_from_system_metadata(
+                    instance.system_metadata))
+
+        # Update encryption fields in the BDMs with values from the image
+        # properties before generating block_device_info. Example: the
+        # encryption secret UUID for the image will be different than the UUID
+        # of the previous image before the instance was shelved.
+        self.reset_ephemeral_encryption_image_sysmeta(instance, image_meta)
+
         block_device_info = self._prep_block_device(context, instance, bdms)
         scrubbed_keys = self._unshelve_instance_key_scrub(instance)
 
@@ -7120,14 +7188,10 @@ class ComputeManager(manager.Manager):
         allocations = self.reportclient.get_allocations_for_consumer(
             context, instance.uuid)
 
+        # Save the original image_ref
         shelved_image_ref = instance.image_ref
         if image:
             instance.image_ref = image['id']
-            image_meta = objects.ImageMeta.from_dict(image)
-        else:
-            image_meta = objects.ImageMeta.from_dict(
-                utils.get_image_from_system_metadata(
-                    instance.system_metadata))
 
         provider_mappings = self._get_request_group_mapping(request_spec)
 

@@ -17258,9 +17258,9 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                                               mock.call(instance)])
             mock_domain_destroy.assert_called_once_with()
             mock_teardown_container.assert_called_once_with(instance)
-            mock_cleanup.assert_called_once_with(self.context, instance,
-                                                 network_info, None, False,
-                                                 destroy_secrets=True)
+            mock_cleanup.assert_called_once_with(
+                self.context, instance, network_info, None, False,
+                destroy_secrets=True, destroy_ephemeral_secrets=True)
 
     @mock.patch.object(libvirt_driver.LibvirtDriver, 'cleanup')
     @mock.patch.object(libvirt_driver.LibvirtDriver, '_teardown_container')
@@ -17281,7 +17281,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         mock_teardown_container.assert_called_once_with(instance)
         mock_cleanup.assert_called_once_with(self.context, instance,
                                              network_info, None, False,
-                                             destroy_secrets=True)
+                                             destroy_secrets=True,
+                                             destroy_ephemeral_secrets=True)
 
     @mock.patch.object(host.Host, 'get_guest')
     def test_reboot_different_ids(self, mock_get):
@@ -21008,7 +21009,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
     @mock.patch('nova.crypto.delete_encryption_secret')
     def _test_cleanup_with_ephemeral_encryption(
         self, mock_delete_secret, has_key_mgr_secret=True,
-        has_libvirt_secret=True, destroy_disks=True
+        has_libvirt_secret=True, destroy_disks=True,
+        destroy_ephemeral_secrets=True,
     ):
         mock_domain = mock.Mock(fakelibvirt.virDomain)
         mock_domain.ID.return_value = 123
@@ -21041,34 +21043,37 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         # Call cleanup() with encrypted ephemeral block device.
         drvr.cleanup(
             self.context, instance, [], block_device_info=block_device_info,
-            destroy_disks=destroy_disks)
+            destroy_disks=destroy_disks,
+            destroy_ephemeral_secrets=destroy_ephemeral_secrets)
 
         # Assert that we deleted the key manager secret.
-        if has_key_mgr_secret and destroy_disks:
+        if has_key_mgr_secret and destroy_disks and destroy_ephemeral_secrets:
             mock_delete_secret.assert_called_once_with(
                 self.context, instance, encryption_secret_uuid)
         else:
             mock_delete_secret.assert_not_called()
 
         # Assert that we deleted the libvirt secret.
-        if has_libvirt_secret and destroy_disks:
+        if has_libvirt_secret and destroy_disks and destroy_ephemeral_secrets:
             secret_usage = f'{instance.uuid}_{uuids.ephemeral}'
             drvr._host.delete_secret.assert_called_once_with(
                 'volume', secret_usage)
         else:
             drvr._host.delete_secret.assert_not_called()
 
-    def test_cleanup_with_ephemeral_encryption(self):
-        self._test_cleanup_with_ephemeral_encryption()
+    @ddt.data((True, True), (True, False), (False, True), (False, False))
+    @ddt.unpack
+    def test_cleanup_with_ephemeral_encryption(
+            self, destroy_disks, destroy_ephemeral_secrets):
+        self._test_cleanup_with_ephemeral_encryption(
+            destroy_disks=destroy_disks,
+            destroy_ephemeral_secrets=destroy_ephemeral_secrets)
 
     def test_cleanup_with_ephemeral_encryption_no_key_mgr_secret(self):
         self._test_cleanup_with_ephemeral_encryption(has_key_mgr_secret=False)
 
     def test_cleanup_with_ephemeral_encryption_no_libvirt_secret(self):
         self._test_cleanup_with_ephemeral_encryption(has_libvirt_secret=False)
-
-    def test_cleanup_with_ephemeral_encryption_no_destroy_disks(self):
-        self._test_cleanup_with_ephemeral_encryption(destroy_disks=False)
 
     @mock.patch.object(
         libvirt_driver.LibvirtDriver, '_cleanup_lvm', new=mock.Mock())

@@ -1311,7 +1311,7 @@ class IronicDriver(virt_driver.ComputeDriver):
 
     def destroy(self, context, instance, network_info,
                 block_device_info=None, destroy_disks=True,
-                destroy_secrets=True):
+                destroy_secrets=True, destroy_ephemeral_secrets=True):
         """Destroy the specified instance, if it can be found.
 
         :param context: The security context.
