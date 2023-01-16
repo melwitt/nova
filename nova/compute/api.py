@@ -4247,7 +4247,6 @@ class API:
             }
             raise exception.FlavorImageConflict(emsg % data)
 
-    @reject_ephemeral_encryption_instances(instance_actions.RESIZE)
     # TODO(stephenfin): This logic would be so much easier to grok if we
     # finally split resize and cold migration into separate code paths
     @block_extended_resource_request
