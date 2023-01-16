@@ -16,3 +16,5 @@ features:
     * interface attach/detach
     * volume attach/detach
     * diagnostics show
+    * resize
+    * cold migration
