@@ -779,7 +779,8 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         mock_get.assert_called_once_with(self.TEMPLATE_PATH)
         path = '/dev/%s/%s_%s' % (self.VG, self.INSTANCE.uuid, self.NAME)
         mock_convert_image.assert_called_once_with(
-            self.TEMPLATE_PATH, path, None, 'raw', CONF.instances_path, False)
+            self.TEMPLATE_PATH, path, None, 'raw', CONF.instances_path, False,
+            encryption=None, dest_encryption=None)
         mock_disk_op_sema.__enter__.assert_called_once()
 
     @mock.patch.object(imagebackend.lvm, 'create_volume')
@@ -814,7 +815,7 @@ class LvmTestCase(_ImageTestCase, test.NoDBTestCase):
         mock_get.assert_called_once_with(self.TEMPLATE_PATH)
         mock_convert_image.assert_called_once_with(
             self.TEMPLATE_PATH, self.PATH, None, 'raw',
-            CONF.instances_path, False)
+            CONF.instances_path, False, encryption=None, dest_encryption=None)
         mock_disk_op_sema.__enter__.assert_called_once()
         mock_resize.assert_called_once_with(self.PATH, run_as_root=True)
 
@@ -1052,7 +1053,8 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
                 self.KEY)
             nova.privsep.qemu.convert_image.assert_called_with(
                 self.TEMPLATE_PATH, self.PATH, None, 'raw',
-                CONF.instances_path, False)
+                CONF.instances_path, False, encryption=None,
+                dest_encryption=None)
 
     def _create_image_generated(self, sparse):
         with test.nested(
@@ -1123,7 +1125,8 @@ class EncryptedLvmTestCase(_ImageTestCase, test.NoDBTestCase):
                  self.KEY)
             nova.privsep.qemu.convert_image.assert_called_with(
                 self.TEMPLATE_PATH, self.PATH, None, 'raw',
-                CONF.instances_path, False)
+                CONF.instances_path, False, encryption=None,
+                dest_encryption=None)
             self.disk.resize2fs.assert_called_with(self.PATH, run_as_root=True)
 
     def test_create_image(self):
