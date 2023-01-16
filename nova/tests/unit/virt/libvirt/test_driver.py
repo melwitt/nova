@@ -735,7 +735,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         os_vif.initialize()
 
         self.stub_out('nova.virt.disk.api.extend',
-                      lambda image, size, use_cow=False: None)
+                      lambda image, size, use_cow=False, encryption=None: None)
 
         self.stub_out('nova.virt.libvirt.imagebackend.Image.'
                       'resolve_driver_format',
@@ -14651,6 +14651,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
              '/fake/instance/dir/foo',
              disk_info['type'],
              disk_info['virt_disk_size'],
+             encryption=None,
         )
         mock_exists.assert_called_once_with('/fake/instance/dir/foo')
 
@@ -14759,7 +14760,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
                           trusted_certs)
             ])
-            resize_image_mock.assert_called_once_with(virt_disk_size)
+            resize_image_mock.assert_called_once_with(
+                virt_disk_size, encryption=None)
 
         mock_utime.assert_called()
         mock_create_cow_image.assert_called_once_with(
@@ -15468,6 +15470,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
         def check_instance_dir(context, instance,
                                instance_dir, disk_info,
+                               block_device_info=None,
                                fallback_from_host=False):
             self.assertTrue(instance_dir)
         # creating mocks
@@ -15488,6 +15491,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                                           migrate_data=migrate_data)
             create_image_mock.assert_has_calls(
                 [mock.call(self.context, instance, mock.ANY, {},
+                           block_device_info=None,
                            fallback_from_host=instance.host)])
             self.assertIsInstance(res, objects.LibvirtLiveMigrateData)
 
@@ -23966,7 +23970,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         self.drvr.confirm_migration(self.context, "migration_ref", ins_ref,
                                     _fake_network_info(self))
         mock_cleanup.assert_called_once_with(
-            self.context, ins_ref, _fake_network_info(self))
+            self.context, "migration_ref", ins_ref, _fake_network_info(self))
 
     @mock.patch('time.sleep', new=mock.Mock())
     def test_cleanup_resize_same_host(self):
@@ -23988,7 +23992,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_get_path.return_value = '/fake/inst'
 
             drvr._cleanup_resize(
-                self.context, instance, _fake_network_info(self))
+                self.context, None, instance, _fake_network_info(self))
             mock_get_path.assert_called_once_with(instance)
             self.assertEqual(5, mock_rmtree.call_count)
 
@@ -24018,7 +24022,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_exists.return_value = True
             mock_get_path.return_value = '/fake/inst'
 
-            drvr._cleanup_resize(self.context, instance, fake_net)
+            drvr._cleanup_resize(self.context, None, instance, fake_net)
 
             mock_get_path.assert_called_once_with(instance)
             self.assertEqual(5, mock_rmtree.call_count)
@@ -24055,7 +24059,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             error = exception.InternalError("fake error")
             mock_unplug.side_effect = error
 
-            drvr._cleanup_resize(self.context, instance, fake_net)
+            drvr._cleanup_resize(self.context, None, instance, fake_net)
 
             mock_get_path.assert_called_once_with(instance)
             self.assertEqual(5, mock_rmtree.call_count)
@@ -24094,7 +24098,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_exists.return_value = True
             mock_get_path.return_value = '/fake/inst'
 
-            drvr._cleanup_resize(self.context, instance, fake_net)
+            drvr._cleanup_resize(self.context, None, instance, fake_net)
 
             mock_get_path.assert_called_once_with(instance)
             self.assertEqual(5, mock_rmtree.call_count)
@@ -24123,7 +24127,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_get_path.return_value = '/fake/inst'
 
             drvr._cleanup_resize(
-                self.context, instance, _fake_network_info(self))
+                self.context, None, instance, _fake_network_info(self))
             mock_get_path.assert_called_once_with(instance)
             mock_remove.assert_called_once_with(
                 libvirt_utils.RESIZE_SNAPSHOT_NAME)
@@ -24154,7 +24158,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_get_path.return_value = '/fake/inst'
 
             drvr._cleanup_resize(
-                self.context, instance, _fake_network_info(self))
+                self.context, None, instance, _fake_network_info(self))
             mock_get_path.assert_called_once_with(instance)
             self.assertFalse(mock_remove.called)
             self.assertEqual(5, mock_rmtree.call_count)
