@@ -735,7 +735,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         os_vif.initialize()
 
         self.stub_out('nova.virt.disk.api.extend',
-                      lambda image, size, use_cow=False: None)
+                      lambda image, size, use_cow=False, encryption=None: None)
 
         self.stub_out('nova.virt.libvirt.imagebackend.Image.'
                       'resolve_driver_format',
@@ -14404,7 +14404,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
                           trusted_certs)
             ])
-            resize_image_mock.assert_called_once_with(virt_disk_size)
+            resize_image_mock.assert_called_once_with(
+                virt_disk_size, encryption=None)
 
         mock_utime.assert_called()
         mock_create_cow_image.assert_called_once_with(
