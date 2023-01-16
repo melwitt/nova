@@ -735,7 +735,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         os_vif.initialize()
 
         self.stub_out('nova.virt.disk.api.extend',
-                      lambda image, size, use_cow=False: None)
+                      lambda image, size, use_cow=False, encryption=None: None)
 
         self.stub_out('nova.virt.libvirt.imagebackend.Image.'
                       'resolve_driver_format',
@@ -14311,6 +14311,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
              '/fake/instance/dir/foo',
              disk_info['type'],
              disk_info['virt_disk_size'],
+             encryption=None,
         )
         mock_exists.assert_called_once_with('/fake/instance/dir/foo')
 
@@ -14419,7 +14420,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
                           trusted_certs)
             ])
-            resize_image_mock.assert_called_once_with(virt_disk_size)
+            resize_image_mock.assert_called_once_with(
+                virt_disk_size, encryption=None)
 
         mock_utime.assert_called()
         mock_create_cow_image.assert_called_once_with(
@@ -14557,7 +14559,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
-                os_type='linux', target=ephemeral_backing)
+                os_type='linux', target=ephemeral_backing,
+                context=self.context)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
@@ -15129,6 +15132,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
         def check_instance_dir(context, instance,
                                instance_dir, disk_info,
+                               block_device_info=None,
                                fallback_from_host=False):
             self.assertTrue(instance_dir)
         # creating mocks
@@ -15149,6 +15153,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                                           migrate_data=migrate_data)
             create_image_mock.assert_has_calls(
                 [mock.call(self.context, instance, mock.ANY, {},
+                           block_device_info=None,
                            fallback_from_host=instance.host)])
             self.assertIsInstance(res, objects.LibvirtLiveMigrateData)
 
