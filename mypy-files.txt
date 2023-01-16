@@ -7,6 +7,7 @@ nova/limit/placement.py
 nova/network/neutron.py
 nova/pci
 nova/privsep/path.py
+nova/privsep/qemu.py
 nova/scheduler/client/report.py
 nova/scheduler/request_filter.py
 nova/scheduler/utils.py
