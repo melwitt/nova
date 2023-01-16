@@ -58,13 +58,14 @@ def privileged_qemu_img_info(path, format=None, output_format='json'):
 
 
 def convert_image(source, dest, in_format, out_format, run_as_root=False,
-                  compress=False):
+                  compress=False, encryption=None, dest_encryption=None):
     """Convert image to other format."""
     if in_format is None:
         raise RuntimeError("convert_image without input format is a security"
                            " risk")
     _convert_image(source, dest, in_format, out_format, run_as_root,
-                   compress=compress)
+                   compress=compress, encryption=encryption,
+                   dest_encryption=dest_encryption)
 
 
 def convert_image_unsafe(source, dest, out_format, run_as_root=False):
@@ -81,17 +82,19 @@ def convert_image_unsafe(source, dest, out_format, run_as_root=False):
 
 
 def _convert_image(source, dest, in_format, out_format, run_as_root,
-                   compress=False):
+                   compress=False, encryption=None, dest_encryption=None):
     try:
         with compute_utils.disk_ops_semaphore:
             if not run_as_root:
                 nova.privsep.qemu.unprivileged_convert_image(
                     source, dest, in_format, out_format, CONF.instances_path,
-                    compress)
+                    compress, encryption=encryption,
+                    dest_encryption=dest_encryption)
             else:
                 nova.privsep.qemu.convert_image(
                     source, dest, in_format, out_format, CONF.instances_path,
-                    compress)
+                    compress, encryption=encryption,
+                    dest_encryption=dest_encryption)
 
     except processutils.ProcessExecutionError as exp:
         msg = (_("Unable to convert image to %(format)s: %(exp)s") %
@@ -110,12 +113,14 @@ def get_info(context, image_href):
     return IMAGE_API.get(context, image_href)
 
 
-def fetch_to_raw(context, image_href, path, trusted_certs=None):
+def fetch_to_raw(
+        context, image_href, path, trusted_certs=None, encryption=None):
     path_tmp = "%s.part" % path
     fetch(context, image_href, path_tmp, trusted_certs)
 
     with fileutils.remove_path_on_error(path_tmp):
         data = qemu_img_info(path_tmp)
+        print(f'data = {data}')
 
         fmt = data.file_format
         if fmt is None:
@@ -134,7 +139,8 @@ def fetch_to_raw(context, image_href, path, trusted_certs=None):
             LOG.debug("%s was %s, converting to raw", image_href, fmt)
             with fileutils.remove_path_on_error(staged):
                 try:
-                    convert_image(path_tmp, staged, fmt, 'raw')
+                    convert_image(
+                        path_tmp, staged, fmt, 'raw', encryption=encryption)
                 except exception.ImageUnacceptable as exp:
                     # re-raise to include image_href
                     raise exception.ImageUnacceptable(image_id=image_href,
