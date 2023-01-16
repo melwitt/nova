@@ -2576,3 +2576,7 @@ class EncryptionSecretCreateForbidden(Forbidden):
 
 class HostConflict(Exception):
     pass
+
+
+class EphemeralEncryptionConflict(NovaException):
+    msg_fmt = _('Conflict in %(action)s with ephemeral encryption: %(reason)s')
