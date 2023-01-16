@@ -14,6 +14,7 @@ from oslo_utils.fixture import uuidsentinel
 
 from nova import context
 from nova import objects
+from nova.tests.functional.api import client as api_client
 from nova.tests.functional import integrated_helpers
 
 
@@ -383,3 +384,154 @@ class TestEphemeralEncryptionPLAIN(_TestEphemeralEncryptionBase):
             flavor_id=uuidsentinel.eph_encryption_plain_flavor,
             networks=[])
         self._assert_bad_build_request_error(server_request)
+
+
+class TestEphemeralEncryptionResize(_TestEphemeralEncryptionBase):
+
+    compute_driver = 'fake.EphEncryptionDriverLUKS'
+    flavors = {
+        'no_eph_encryption': {
+            'id': uuidsentinel.no_eph_encryption
+        },
+        'eph_encryption': {
+            'id': uuidsentinel.eph_encryption_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'True'
+            }
+        },
+        'eph_encryption_disabled': {
+            'id': uuidsentinel.eph_encryption_disabled_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'False'
+            }
+        },
+        'eph_encryption_luks': {
+            'id': uuidsentinel.eph_encryption_luks_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'True',
+                'hw:ephemeral_encryption_format': 'luks'
+            }
+        },
+        'eph_encryption_plain': {
+            'id': uuidsentinel.eph_encryption_plain_flavor,
+            'extra_specs': {
+                'hw:ephemeral_encryption': 'True',
+                'hw:ephemeral_encryption_format': 'plain'
+            }
+        },
+    }
+
+    def test_flavor_encryption_requested_mismatch(self):
+        # Test a scenario where the current flavor does not have ephemeral
+        # encryption specified but the new flavor does have it.
+        server = self._create_server(
+            flavor_id=uuidsentinel.no_eph_encryption, networks=[])
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._resize_server, server,
+            uuidsentinel.eph_encryption_flavor)
+        self.assertEqual(400, ex.response.status_code)
+
+    def test_flavor_encryption_enabled_mismatch(self):
+        # Test a scenario where the current flavor has ephemeral encryption
+        # specified but the new flavor has it disabled.
+        server = self._create_server(
+            flavor_id=uuidsentinel.eph_encryption_flavor, networks=[])
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._resize_server, server,
+            uuidsentinel.eph_encryption_disabled_flavor)
+        self.assertEqual(400, ex.response.status_code)
+
+    def test_flavor_encryption_not_specified_to_disabled(self):
+        # Start another compute to be the resize destination.
+        self._start_compute(host='compute2')
+        # Test a scenario where the current flavor doesn't specify ephemeral
+        # encryption and the new flavor has it disabled. This should be
+        # allowed.
+        server = self._create_server(
+            flavor_id=uuidsentinel.no_eph_encryption, networks=[])
+        # Resize should not be rejected.
+        self._resize_server(
+            server, uuidsentinel.eph_encryption_disabled_flavor)
+
+    def test_flavor_encryption_format_mismatch(self):
+        # Test a scenario where the current flavor has a different ephemeral
+        # encryption format specified than the new flavor does.
+        server = self._create_server(
+            flavor_id=uuidsentinel.eph_encryption_luks_flavor, networks=[])
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._resize_server, server,
+            uuidsentinel.eph_encryption_plain_flavor)
+        self.assertEqual(400, ex.response.status_code)
+
+    def test_flavor_encryption_format_bdm_mismatch(self):
+        # Test a scenario where the current flavor doesn't specify ephemeral
+        # encryption format (and took the default, which is stored in its BDM
+        # record) and the new flavor specifies a conflicting format.
+        server = self._create_server(
+            flavor_id=uuidsentinel.eph_encryption_flavor, networks=[])
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._resize_server, server,
+            uuidsentinel.eph_encryption_plain_flavor)
+        self.assertEqual(400, ex.response.status_code)
+
+    def test_flavor_encryption_format_bdm_matches(self):
+        # Start another compute to be the resize destination.
+        self._start_compute(host='compute2')
+        # Test a scenario where the current flavor doesn't specify ephemeral
+        # encryption format (and took the default, which is stored in its BDM
+        # record) and the new flavor specifies a matching format. This should
+        # be allowed.
+        server = self._create_server(
+            flavor_id=uuidsentinel.eph_encryption_flavor, networks=[])
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+            self.ctxt, server['id'])
+        # Simulate that the server has the encryption attributes stored in its
+        # BDM record. These are normally set in the driver but we are using the
+        # FakeDriver for testing.
+        bdms.root_bdm().encrypted = True
+        bdms.root_bdm().encryption_format = 'luks'
+        bdms.root_bdm().save()
+        # Resize should not be rejected.
+        self._resize_server(server, uuidsentinel.eph_encryption_luks_flavor)
+
+    def test_flavor_new_encryption_format_not_specified(self):
+        # Start another compute to be the resize destination.
+        self._start_compute(host='compute2')
+        # Test a scenario where the current flavor specifies ephemeral
+        # encryption format and the new flavor does not. This should be
+        # allowed.
+        server = self._create_server(
+            flavor_id=uuidsentinel.eph_encryption_luks_flavor, networks=[])
+        # Resize should not be rejected.
+        self._resize_server(server, uuidsentinel.eph_encryption_flavor)
+
+    def test_flavor_encryption_disabled_image_enabled(self):
+        # Test a scenario where the current image of the instance has
+        # encryption enabled but the flavor requested for the resize has it
+        # disabled.
+        properties = {'hw_ephemeral_encryption': 'true'}
+        image_id = self._create_image(properties)['id']
+        server = self._create_server(
+            flavor_id=uuidsentinel.no_eph_encryption, image_uuid=image_id,
+            networks=[])
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._resize_server, server,
+            uuidsentinel.eph_encryption_disabled_flavor)
+        self.assertEqual(400, ex.response.status_code)
+
+    def test_flavor_encryption_format_image_mismatch(self):
+        # Test a scenario where the current image of the instance has
+        # encryption enabled with a specified format but the flavor requested
+        # for the resize specifies a conflicting format.
+        properties = {
+            'hw_ephemeral_encryption': 'true',
+            'hw_ephemeral_encryption_format': 'luks',
+        }
+        image_id = self._create_image(properties)['id']
+        server = self._create_server(
+            flavor_id=uuidsentinel.no_eph_encryption, image_uuid=image_id,
+            networks=[])
+        ex = self.assertRaises(
+            api_client.OpenStackApiException, self._resize_server, server,
+            uuidsentinel.eph_encryption_plain_flavor)
+        self.assertEqual(400, ex.response.status_code)
