@@ -8,3 +8,5 @@ features:
     The following server actions are currently supported:
 
     * create/delete
+    * resize
+    * cold migration
