@@ -134,6 +134,16 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
 
         return done, done
 
+    def reset_encryption_fields(self):
+        self.encrypted = False
+        encryption_fields = [
+            'encryption_secret_uuid',
+            'encryption_format',
+            'encryption_options',
+        ]
+        for field in encryption_fields:
+            self[field] = None
+
     @staticmethod
     @oslo_db_api.wrap_db_retry(max_retries=1, retry_on_deadlock=True)
     def _create_uuid(context, bdm_id):
@@ -375,7 +385,8 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
     # Version 1.16: BlockDeviceMapping <= version 1.15
     # Version 1.17: Add get_by_instance_uuids()
     # Version 1.18: Add get_by_volume()
-    VERSION = '1.18'
+    # Version 1.19: Add reset_encryption_fields() and save_all()
+    VERSION = '1.19'
 
     fields = {
         'objects': fields.ListOfObjectsField('BlockDeviceMapping'),
@@ -456,6 +467,16 @@ class BlockDeviceMappingList(base.ObjectListBase, base.NovaObject):
             return next(bdm_obj for bdm_obj in self if bdm_obj.is_root)
         except StopIteration:
             return
+
+    def reset_encryption_fields(self):
+        """Reset encryption fields for all BlockDeviceMappings in this list"""
+        for obj in self.objects:
+            obj.reset_encryption_fields()
+
+    def save_all(self):
+        """Save changes for all BlockDeviceMappings in this list"""
+        for obj in self.objects:
+            obj.save()
 
 
 def block_device_make_list(context, db_list, **extra_args):
