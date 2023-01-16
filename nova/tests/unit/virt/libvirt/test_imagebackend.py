@@ -690,7 +690,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                                           self.QCOW2_BASE)
         mock_extend.assert_called_once_with(
             imgmodel.LocalFileImage(self.QCOW2_BASE,
-                                    imgmodel.FORMAT_QCOW2), self.SIZE)
+                                    imgmodel.FORMAT_QCOW2), self.SIZE,
+                                    encryption=None)
         mock_exist.assert_has_calls(exist_calls)
         fn.assert_called_once_with(target=self.TEMPLATE_PATH, encryption=None)
         self.assertTrue(mock_sync.called)
