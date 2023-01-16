@@ -107,7 +107,7 @@ def get_disk_size(path):
     return images.qemu_img_info(path).virtual_size
 
 
-def extend(image, size):
+def extend(image, size, encryption=None):
     """Increase image to size.
 
     :param image: instance of nova.virt.image.model.Image
@@ -125,7 +125,29 @@ def extend(image, size):
         nova.privsep.libvirt.ploop_resize(image.path, size)
         return
 
-    processutils.execute('qemu-img', 'resize', image.path, size)
+    cmd = ('qemu-img', 'resize')
+
+    if encryption:
+        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+            # Write out the passphrase secret to a temp file
+            f.write(encryption.get('secret'))
+
+            # Ensure the secret is written to disk, we can't .close() here as
+            # that removes the file when using NamedTemporaryFile
+            f.flush()
+
+            # Need the secret for the resize. When --image-opts is used, the
+            # source filename must be passed as part of the option string
+            # instead of as a positional arg.
+            encryption_opts = (
+                '--object', f"secret,id=sec,file={f.name}",
+                '--image-opts',
+                f"encrypt.key-secret=sec,file.filename={image.path}",
+            )
+            cmd += encryption_opts + (size,)
+            processutils.execute(*cmd)
+    else:
+        processutils.execute(*cmd, image.path, size)
 
     if (image.format != imgmodel.FORMAT_RAW and
         not CONF.resize_fs_using_block_device):
