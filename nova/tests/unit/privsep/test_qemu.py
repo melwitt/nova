@@ -54,6 +54,98 @@ class QemuTestCase(test.NoDBTestCase):
         self._test_convert_image(nova.privsep.qemu.unprivileged_convert_image)
 
     @mock.patch('oslo_concurrency.processutils.execute')
+    @mock.patch('tempfile.NamedTemporaryFile')
+    @mock.patch('nova.privsep.utils.supports_direct_io',
+                new=mock.Mock(return_value=True))
+    def test_convert_image_encrypted_source(self, mock_tempfile, mock_execute):
+        # Simulate an encrypted source image conversion to an unencrypted
+        # destination image.
+        mock_file = mock.Mock()
+        mock_file.name = '/tmp/filename'
+        mock_tempfile.return_value = mock_file
+        encryption = {'format': 'luks', 'secret': '12345'}
+
+        nova.privsep.qemu.convert_image(
+            '/fake/source', '/fake/dest', 'informat', 'outformat',
+            '/fake/instances/path', compress=True, encryption=encryption)
+
+        mock_file.write.assert_called_once_with('12345')
+        mock_file.flush.assert_called_once()
+        mock_execute.assert_called_once_with(
+            'qemu-img', 'convert', '-t', 'none', '-O', 'outformat', '-c',
+            '--object', 'secret,id=sec,file=/tmp/filename', '--image-opts',
+            'encrypt.key-secret=sec,file.filename=/fake/source', '/fake/dest')
+        mock_file.close.assert_called_once()
+
+    @mock.patch('oslo_concurrency.processutils.execute')
+    @mock.patch('tempfile.NamedTemporaryFile')
+    @mock.patch('nova.privsep.utils.supports_direct_io',
+                new=mock.Mock(return_value=True))
+    def test_convert_image_encrypted_dest(self, mock_tempfile, mock_execute):
+        # Simulate an unencrypted source image conversion to an encrypted
+        # destination image.
+        mock_file = mock.Mock()
+        mock_file.name = '/tmp/filename'
+        mock_tempfile.return_value = mock_file
+        encryption = {'format': 'luks', 'secret': '12345'}
+
+        nova.privsep.qemu.convert_image(
+            '/fake/source', '/fake/dest', 'informat', 'outformat',
+            '/fake/instances/path', compress=True, dest_encryption=encryption)
+
+        mock_file.write.assert_called_once_with('12345')
+        mock_file.flush.assert_called_once()
+        mock_execute.assert_called_once_with(
+            'qemu-img', 'convert', '-t', 'none', '-O', 'outformat',
+            '-f', 'informat', '-c',
+            '--object', 'secret,id=sec_dest,file=/tmp/filename',
+            '-o', 'encrypt.key-secret=sec_dest', '-o', 'encrypt.format=luks',
+            '-o', 'encrypt.cipher-alg=aes-256',
+            '-o', 'encrypt.cipher-mode=xts', '-o', 'encrypt.hash-alg=sha256',
+            '-o', 'encrypt.iter-time=2000', '-o', 'encrypt.ivgen-alg=plain64',
+            '-o', 'encrypt.ivgen-hash-alg=sha256',
+            '/fake/source', '/fake/dest')
+        mock_file.close.assert_called_once()
+
+    @mock.patch('oslo_concurrency.processutils.execute')
+    @mock.patch('tempfile.NamedTemporaryFile')
+    @mock.patch('nova.privsep.utils.supports_direct_io',
+                new=mock.Mock(return_value=True))
+    def test_convert_image_encrypted_source_and_dest(
+            self, mock_tempfile, mock_execute):
+        # Simulate an encrypted source image conversion to an encrypted
+        # destination image.
+        mock_file1 = mock.Mock()
+        mock_file1.name = '/tmp/filename1'
+        encryption = {'format': 'luks', 'secret': '12345'}
+        mock_file2 = mock.Mock()
+        mock_file2.name = '/tmp/filename2'
+        mock_tempfile.side_effect = [mock_file1, mock_file2]
+        dest_encryption = {'format': 'luks', 'secret': '67890'}
+
+        nova.privsep.qemu.convert_image(
+            '/fake/source', '/fake/dest', 'informat', 'outformat',
+            '/fake/instances/path', compress=True, encryption=encryption,
+            dest_encryption=dest_encryption)
+
+        mock_file1.write.assert_called_once_with('12345')
+        mock_file1.flush.assert_called_once()
+        mock_file2.write.assert_called_once_with('67890')
+        mock_file2.flush.assert_called_once()
+        mock_execute.assert_called_once_with(
+            'qemu-img', 'convert', '-t', 'none', '-O', 'outformat', '-c',
+            '--object', 'secret,id=sec,file=/tmp/filename1', '--image-opts',
+            'encrypt.key-secret=sec,file.filename=/fake/source',
+            '--object', 'secret,id=sec_dest,file=/tmp/filename2',
+            '-o', 'encrypt.key-secret=sec_dest', '-o', 'encrypt.format=luks',
+            '-o', 'encrypt.cipher-alg=aes-256',
+            '-o', 'encrypt.cipher-mode=xts', '-o', 'encrypt.hash-alg=sha256',
+            '-o', 'encrypt.iter-time=2000', '-o', 'encrypt.ivgen-alg=plain64',
+            '-o', 'encrypt.ivgen-hash-alg=sha256', '/fake/dest')
+        mock_file1.close.assert_called_once()
+        mock_file2.close.assert_called_once()
+
+    @mock.patch('oslo_concurrency.processutils.execute')
     @mock.patch('os.path.isdir')
     def _test_qemu_img_info(self, method, mock_isdir, mock_execute):
         mock_isdir.return_value = False
