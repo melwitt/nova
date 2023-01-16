@@ -17,6 +17,8 @@ Helpers for qemu tasks.
 """
 
 import os
+import tempfile
+import typing as ty
 
 from oslo_concurrency import processutils
 from oslo_log import log as logging
@@ -35,14 +37,34 @@ QEMU_IMG_LIMITS = processutils.ProcessLimits(
 
 @nova.privsep.sys_admin_pctxt.entrypoint
 def convert_image(source, dest, in_format, out_format, instances_path,
-                  compress):
+                  compress, encryption=None, dest_encryption=None):
     unprivileged_convert_image(source, dest, in_format, out_format,
-                               instances_path, compress)
+                               instances_path, compress, encryption=encryption,
+                               dest_encryption=dest_encryption)
 
 
 # NOTE(mikal): this method is deliberately not wrapped in a privsep entrypoint
-def unprivileged_convert_image(source, dest, in_format, out_format,
-                               instances_path, compress):
+def unprivileged_convert_image(
+    source: str,
+    dest: str,
+    in_format: ty.Optional[str],
+    out_format: str,
+    instances_path: str,
+    compress: bool,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+    dest_encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+) -> None:
+    """Disk image conversion with qemu-img
+
+    :param source: Location of the disk image to convert
+    :param dest: Desired location of the converted disk image
+    :param in_format: Disk image format of the source image
+    :param out_format: Desired disk image format of the converted disk image
+    :param instances_path: Location where instances are stored on disk
+    :param compress: Whether to compress the converted disk image
+    :param encryption: (Optional) Dict detailing various encryption attributes
+                       such as the format and passphrase.
+    """
     # NOTE(mdbooth, kchamart): `qemu-img convert` defaults to
     # 'cache=writeback' for the source image, and 'cache=unsafe' for the
     # target, which means that data is not synced to disk at completion.
@@ -71,14 +93,89 @@ def unprivileged_convert_image(source, dest, in_format, out_format,
         cache_mode = 'writeback'
     cmd = ('qemu-img', 'convert', '-t', cache_mode, '-O', out_format)
 
-    if in_format is not None:
+    # qemu-img: --image-opts and --format are mutually exclusive
+    if in_format is not None and not encryption:
         cmd = cmd + ('-f', in_format)
 
     if compress:
         cmd += ('-c',)
 
-    cmd = cmd + (source, dest)
-    processutils.execute(*cmd)
+    if encryption:
+        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+            # Write out the passphrase secret to a temp file
+            f.write(encryption.get('secret'))
+
+            # Ensure the secret is written to disk, we can't .close() here as
+            # that removes the file when using NamedTemporaryFile
+            f.flush()
+
+            # When --image-opts is used, the source filename must be passed as
+            # part of the option string instead of as a positional arg.
+            encryption_opts = (
+                '--object', f"secret,id=sec,file={f.name}",
+                '--image-opts',
+                f"encrypt.key-secret=sec,file.filename={source}",
+            )
+
+            if dest_encryption:
+                with tempfile.NamedTemporaryFile(
+                    mode='tr+',
+                    encoding='utf-8'
+                ) as f_dest:
+                    # Write out the passphrase secret to a temp file
+                    f_dest.write(dest_encryption.get('secret'))
+
+                    # Ensure the secret is written to disk, we can't .close()
+                    # here as that removes the file when using
+                    # NamedTemporaryFile
+                    f_dest.flush()
+                    encryption_opts += (
+                        '--object', f"secret,id=sec_dest,file={f_dest.name}",
+                        '-o', 'encrypt.key-secret=sec_dest',
+                        '-o',
+                        f"encrypt.format={dest_encryption.get('format')}",
+                    )
+                    # Supported luks options:
+                    #  cipher-alg=<str>       - Name of cipher algorithm and
+                    #                           key length
+                    #  cipher-mode=<str>      - Name of encryption cipher mode
+                    #  hash-alg=<str>         - Name of hash algorithm to use
+                    #                           for PBKDF
+                    #  iter-time=<num>        - Time to spend in PBKDF in
+                    #                           milliseconds
+                    #  ivgen-alg=<str>        - Name of IV generator algorithm
+                    #  ivgen-hash-alg=<str>   - Name of IV generator hash
+                    #                           algorithm
+                    #
+                    # NOTE(melwitt): Sensible defaults (that match the qemu
+                    # defaults) are hardcoded at this time for simplicity and
+                    # consistency when instances are migrated. Configuration of
+                    # luks options could be added in a future release.
+                    encryption_options = {
+                        'cipher-alg': 'aes-256',
+                        'cipher-mode': 'xts',
+                        'hash-alg': 'sha256',
+                        'iter-time': 2000,
+                        'ivgen-alg': 'plain64',
+                        'ivgen-hash-alg': 'sha256',
+                    }
+                    for option, value in encryption_options.items():
+                        encryption_opts += (
+                            '-o',
+                            f'encrypt.{option}={value}',
+                        )
+                    # We need to execute the command while the
+                    # NamedTemporaryFile still exists
+                    cmd += encryption_opts + (dest,)
+                    processutils.execute(*cmd)
+            else:
+                # We need to execute the command while the NamedTemporaryFile
+                # still exists
+                cmd += encryption_opts + (dest,)
+                processutils.execute(*cmd)
+    else:
+        cmd = cmd + (source, dest)
+        processutils.execute(*cmd)
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint
