@@ -2556,3 +2556,7 @@ class NotSupportedComputeForEvacuateV295(NotSupported):
 class EphemeralEncryptionSecretNotFound(Invalid):
     msg_fmt = _(
         'Encryption secret %(secret_uuid)s was not found in the key manager')
+
+
+class EphemeralEncryptionConflict(NovaException):
+    msg_fmt = _('Conflict in %(action)s with ephemeral encryption: %(reason)s')
