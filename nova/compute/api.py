@@ -4182,7 +4182,41 @@ class API:
 
         return node
 
-    @reject_ephemeral_encryption_instances(instance_actions.RESIZE)
+    @staticmethod
+    def _validate_resize_for_ephemeral_encryption(
+            context, instance, current_flavor, new_flavor):
+        # Check if this is a request to resize from a flavor without
+        # ephemeral encryption to a flavor with ephemeral encryption and
+        # vice versa.
+        current_flavor_encryption = strutils.bool_from_string(
+            current_flavor.extra_specs.get('hw:ephemeral_encryption'))
+        new_flavor_encryption = strutils.bool_from_string(
+            new_flavor.extra_specs.get('hw:ephemeral_encryption'))
+        if current_flavor_encryption != new_flavor_encryption:
+            reason = _(
+                'Resize from a flavor with ephemeral encryption to a '
+                'flavor without ephemeral encryption and vice versa is not '
+                'allowed.')
+            raise exception.EphemeralEncryptionConflict(
+                action='resize', reason=reason)
+        # If both flavors specify encryption, check if the formats match.
+        if current_flavor_encryption and new_flavor_encryption:
+            current_format = current_flavor.extra_specs.get(
+                'hw:ephemeral_encryption_format')
+            new_format = new_flavor.extra_specs.get(
+                'hw:ephemeral_encryption_format')
+            if new_format is not None and current_format != new_format:
+                # Check BDM first before failing. If the BDM encryption format
+                # matches the new flavor format, we don't need to reject it.
+                bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                    context, instance.uuid)
+                if bdms.root_bdm().encryption_format != new_format:
+                    reason = _(
+                        'Resize to a different ephemeral encryption format is '
+                        'not allowed.')
+                    raise exception.EphemeralEncryptionConflict(
+                        action='resize', reason=reason)
+
     # TODO(stephenfin): This logic would be so much easier to grok if we
     # finally split resize and cold migration into separate code paths
     @block_extended_resource_request
@@ -4246,6 +4280,9 @@ class API:
                 if not volume_backed:
                     reason = _('Resize to zero disk flavor is not allowed.')
                     raise exception.CannotResizeDisk(reason=reason)
+
+            self._validate_resize_for_ephemeral_encryption(
+                context, instance, current_flavor, new_flavor)
 
         current_flavor_name = current_flavor['name']
         new_flavor_name = new_flavor['name']
