@@ -73,8 +73,6 @@ import itertools
 import operator
 
 from oslo_config import cfg
-from oslo_serialization import jsonutils
-
 
 from nova import block_device
 from nova import exception
@@ -407,10 +405,7 @@ def get_info_from_bdm(instance, virt_type, image_meta, bdm,
         bdm_info['encrypted'] = bdm.get('encrypted')
         bdm_info['encryption_secret_uuid'] = bdm.get('encryption_secret_uuid')
         bdm_info['encryption_format'] = bdm.get('encryption_format')
-        encryption_options = bdm.get('encryption_options')
-        if encryption_options:
-            bdm_info['encryption_options'] = jsonutils.loads(
-                encryption_options)
+        bdm_info['encryption_options'] = bdm.get('encryption_options')
 
     return bdm_info
 
