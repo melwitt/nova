@@ -820,12 +820,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             "Driver capabilities for 'supports_socket_pci_numa_affinity' "
             "is invalid",
         )
-        self.assertFalse(
+        self.assertTrue(
             drvr.capabilities['supports_ephemeral_encryption'],
             "Driver capabilities for 'supports_ephemeral_encryption' "
             "is invalid",
         )
-        self.assertFalse(
+        self.assertTrue(
             drvr.capabilities['supports_ephemeral_encryption_luks'],
             "Driver capabilities for 'supports_ephemeral_encryption_luks' "
             " is invalid",
@@ -911,6 +911,19 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             "is invalid when host should support this feature"
         )
         mock_supports.assert_called_once_with()
+
+    def test_driver_capabilities_flat(self):
+        self.flags(use_cow_images=False)
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertFalse(
+            drvr.capabilities['supports_ephemeral_encryption'],
+            "Driver capabilities for 'supports_ephemeral_encryption' "
+            "is invalid")
+        self.assertFalse(
+            drvr.capabilities['supports_ephemeral_encryption_luks'],
+            "Driver capabilities for 'supports_ephemeral_encryption_luks' "
+            "is invalid",
+        )
 
     def test_driver_raises_on_non_linux_platform(self):
         with utils.temporary_mutation(sys, platform='darwin'):
@@ -14755,6 +14768,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             'qcow2',
             virt_disk_size,
             backing_file=backfile_path,
+            encryption=None,
         )
 
     @mock.patch('nova.virt.libvirt.imagebackend.Image.exists',
@@ -14883,7 +14897,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
-                os_type='linux', target=ephemeral_backing)
+                os_type='linux', target=ephemeral_backing,
+                context=self.context)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
@@ -14905,12 +14920,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                     'qcow2',
                     disk_info_byname['disk']['virt_disk_size'],
                     backing_file=root_backing,
+                    encryption=None,
                 ),
                 mock.call(
                     CONF.instances_path + '/disk.local',
                     'qcow2',
                     disk_info_byname['disk.local']['virt_disk_size'],
                     backing_file=ephemeral_backing,
+                    encryption=None,
                 ),
             ])
 
@@ -30516,7 +30533,9 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         keymgr_call1 = mock.call(self.context, self.instance, driver_bdm)
         libvirt_call1 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret1, uuid=uuids.secret1)
+            password=mock.sentinel.secret1, uuid=uuids.secret1,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
 
         # ephemerals - Assert that the format and secret reflect the expected
         # values. Initially encryption_format and encryption_secret_uuid were
@@ -30527,7 +30546,9 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         keymgr_call2 = mock.call(self.context, self.instance, driver_bdm)
         libvirt_call2 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret2, uuid=uuids.secret2)
+            password=mock.sentinel.secret2, uuid=uuids.secret2,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
 
         # swap - Assert that the format and secret reflect the expected
         # values. Initially encryption_format and encryption_secret_uuid were
@@ -30538,7 +30559,9 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         keymgr_call3 = mock.call(self.context, self.instance, driver_bdm)
         libvirt_call3 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret3, uuid=uuids.secret3)
+            password=mock.sentinel.secret3, uuid=uuids.secret3,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
 
         # Assert that we generated key manager and libvirt secrets.
         self.assertEqual(
@@ -30615,7 +30638,9 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         self.assertEqual(uuids.secret1, driver_bdm['encryption_secret_uuid'])
         create_call1 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret1, uuid=uuids.secret1)
+            password=mock.sentinel.secret1, uuid=uuids.secret1,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
         delete_call1 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}")
 
@@ -30624,7 +30649,9 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         self.assertEqual(uuids.secret2, driver_bdm['encryption_secret_uuid'])
         create_call2 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret2, uuid=uuids.secret2)
+            password=mock.sentinel.secret2, uuid=uuids.secret2,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
         delete_call2 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}")
 
@@ -30676,14 +30703,18 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         keymgr_call1 = mock.call(self.context, self.instance, driver_bdm)
         libvirt_call1 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret1, uuid=uuids.secret1)
+            password=mock.sentinel.secret1, uuid=uuids.secret1,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
         driver_bdm = block_device_info['ephemerals'][0]
         self.assertIsNone(driver_bdm['encryption_format'])
         self.assertIsNone(driver_bdm['encryption_secret_uuid'])
         keymgr_call2 = mock.call(self.context, self.instance, driver_bdm)
         libvirt_call2 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
-            password=mock.sentinel.secret2, uuid=uuids.secret2)
+            password=mock.sentinel.secret2, uuid=uuids.secret2,
+            description='Ephemeral encryption secret for instance '
+            f'{self.instance.uuid} BDM {driver_bdm["uuid"]}')
         driver_bdm = block_device_info['swap']
         self.assertIsNone(driver_bdm['encryption_format'])
         self.assertIsNone(driver_bdm['encryption_secret_uuid'])
