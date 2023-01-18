@@ -20,10 +20,14 @@ from unittest import mock
 
 import fixtures
 
+import nova.conf
 from nova.virt.libvirt import config
 from nova.virt.libvirt import driver
 from nova.virt.libvirt import imagebackend
 from nova.virt.libvirt import utils as libvirt_utils
+
+
+CONF = nova.conf.CONF
 
 
 class LibvirtImageBackendFixture(fixtures.Fixture):
@@ -190,9 +194,6 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
         # Set the SUPPORTS_CLONE member variable to mimic the Image base
         # class.
         image_init.SUPPORTS_CLONE = False
-        # Set the SUPPORTS_LUKS member variable to mimic the Image base
-        # class.
-        image_init.SUPPORTS_LUKS = False
 
         # Ditto for the 'is_shared_block_storage' and
         # 'is_file_in_instance_path' functions
@@ -205,6 +206,9 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
         setattr(image_init, 'is_shared_block_storage', is_shared_block_storage)
         setattr(
             image_init, 'is_file_in_instance_path', is_file_in_instance_path)
+
+        image_init.SUPPORTS_LUKS = (
+            backend_self.BACKEND[CONF.libvirt.images_type].SUPPORTS_LUKS)
 
         return image_init
 
