@@ -1698,6 +1698,9 @@ class LibvirtDriver(driver.ComputeDriver):
             secret_uuid = driver_bdm.get('encryption_secret_uuid')
             if secret_uuid:
                 crypto.delete_encryption_secret(context, instance, secret_uuid)
+                # Reset the encryption_secret_uuid so that if this is a
+                # rebuild, a new secret will be created when spawning
+                driver_bdm['encryption_secret_uuid'] = None
             secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
             if self._host.find_secret('volume', secret_usage):
                 self._host.delete_secret('volume', secret_usage)
