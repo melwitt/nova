@@ -670,9 +670,16 @@ class Qcow2(Image):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
-        def create_qcow2_image(base, target, size):
+        def create_qcow2_image(base, target, size, encryption):
             libvirt_utils.create_image(
-                target, 'qcow2', size, backing_file=base)
+                target, 'qcow2', size, backing_file=base,
+                encryption=encryption)
+
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        context = kwargs.get('context')
+        encryption = self.get_encryption(context)
 
         # Download the unmodified base image unless we already have a copy.
         if not os.path.exists(base):
@@ -711,7 +718,7 @@ class Qcow2(Image):
 
         if not os.path.exists(self.path):
             with fileutils.remove_path_on_error(self.path):
-                create_qcow2_image(base, self.path, size)
+                create_qcow2_image(base, self.path, size, encryption)
 
     def resize_image(self, size):
         image = imgmodel.LocalFileImage(self.path, imgmodel.FORMAT_QCOW2)
