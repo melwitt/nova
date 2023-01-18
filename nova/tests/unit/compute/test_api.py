@@ -1342,6 +1342,7 @@ class _ComputeAPIUnitTestMixIn(object):
                                         tzinfo=iso8601.UTC)
         updates['deleted_at'] = delete_time
         updates['deleted'] = True
+        updates['uuid'] = inst.uuid
         fake_inst = fake_instance.fake_db_instance(**updates)
         mock_inst_destroy.return_value = fake_inst
 
@@ -1439,6 +1440,37 @@ class _ComputeAPIUnitTestMixIn(object):
                                        'delete',
                                        lambda *args, **kwargs: None)
         mock_del_arqs.assert_called_once_with(self.context, inst)
+
+    @mock.patch('nova.compute.utils.notify_about_instance_delete',
+                new=mock.MagicMock())
+    @mock.patch('nova.network.neutron.API.deallocate_for_instance',
+                new=mock.Mock())
+    @mock.patch('nova.objects.Instance.destroy', new=mock.Mock())
+    @mock.patch('nova.compute.utils.delete_ephemeral_encryption_secrets')
+    def test_local_delete_with_ephemeral_encryption(self, mock_delete_secrets):
+        instance = self._create_instance_obj()
+        bdms = objects.BlockDeviceMappingList()
+        self.compute_api._local_delete(
+            self.context, instance, bdms, 'delete', mock.Mock())
+        mock_delete_secrets.assert_called_once_with(
+            self.context, instance.uuid, bdms)
+
+    @mock.patch('nova.compute.utils.delete_ephemeral_encryption_secrets')
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
+    def test_local_delete_cleanup_with_ephemeral_encryption(
+            self, mock_get_bdms, mock_delete_secrets):
+        # Test first without passing BDMs.
+        instance = self._create_instance_obj()
+        self.compute_api._local_delete_cleanup(self.context, instance.uuid)
+        mock_delete_secrets.assert_called_once_with(
+            self.context, instance.uuid, mock_get_bdms.return_value)
+        # Test with passing BDMs.
+        mock_delete_secrets.reset_mock()
+        bdms = objects.BlockDeviceMappingList()
+        self.compute_api._local_delete_cleanup(
+            self.context, instance.uuid, bdms=bdms)
+        mock_delete_secrets.assert_called_once_with(
+            self.context, instance.uuid, bdms)
 
     @mock.patch.object(objects.BlockDeviceMapping, 'destroy')
     def test_local_cleanup_bdm_volumes_stashed_connector(self, mock_destroy):
@@ -1657,9 +1689,11 @@ class _ComputeAPIUnitTestMixIn(object):
 
         test()
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
     @mock.patch('nova.compute.utils.notify_about_instance_delete')
     @mock.patch('nova.objects.Instance.destroy')
-    def test_delete_instance_from_cell0(self, destroy_mock, notify_mock):
+    def test_delete_instance_from_cell0(
+            self, destroy_mock, notify_mock, mock_get_bdms):
         """Tests the case that the instance does not have a host and was not
         deleted while building, so conductor put it into cell0 so the API has
         to delete the instance from cell0.
@@ -3130,16 +3164,19 @@ class _ComputeAPIUnitTestMixIn(object):
                 'user_id': 'meow',
                 'foo': 'bar',
                 'blah': 'bug?',
-                'cache_in_nova': 'dropped',
-                'bittorrent': 'dropped',
-                'img_signature_hash_method': 'dropped',
+                'cache_in_nova': 'false',
+                'bittorrent': 'false',
+                'img_signature_hash_method': 'SHA-256',
                 'img_signature': 'dropped',
-                'img_signature_key_type': 'dropped',
-                'img_signature_certificate_uuid': 'dropped'
+                'img_signature_key_type': 'DSA',
+                'img_signature_certificate_uuid': uuids.cert
             },
         }
         image_type = is_snapshot and 'snapshot' or 'backup'
         sent_meta = {
+            # The @reject_ephemeral_encryption_instances decorator makes
+            # setting 'id' here necessary for some reason ...
+            'id': instance.image_ref,
             'visibility': 'private',
             'name': 'fake-name',
             'disk_format': 'fake',
@@ -3227,7 +3264,8 @@ class _ComputeAPIUnitTestMixIn(object):
                         'fake-backup-type', 'fake-rotation')
 
         mock_create.assert_called_once_with(self.context, sent_meta)
-        mock_get_image.assert_called_once_with(instance.system_metadata)
+        call = mock.call(instance.system_metadata)
+        self.assertEqual([call, call], mock_get_image.mock_calls)
 
         if not is_snapshot:
             mock_is_volume.assert_called_once_with(self.context, instance)
@@ -3699,13 +3737,12 @@ class _ComputeAPIUnitTestMixIn(object):
                     'connection_info': "{'fake': 'connection_info'}",
                     'volume_id': 1,
                     'boot_index': -1})
-        fake_bdm['instance'] = fake_instance.fake_db_instance(
-            launched_at=timeutils.utcnow(),
-            vm_state=vm_states.ACTIVE)
-        fake_bdm['instance_uuid'] = fake_bdm['instance']['uuid']
         fake_bdm = objects.BlockDeviceMapping._from_db_object(
-                self.context, objects.BlockDeviceMapping(),
-                fake_bdm, expected_attrs=['instance'])
+                self.context, objects.BlockDeviceMapping(), fake_bdm)
+        fake_bdm.instance = fake_instance.fake_instance_obj(
+            self.context, launched_at=timeutils.utcnow(),
+            vm_state=vm_states.ACTIVE, expected_attrs=['system_metadata'])
+        fake_bdm.instance_uuid = fake_bdm.instance.uuid
 
         mock_get_bdm.return_value = fake_bdm
 
@@ -3729,10 +3766,10 @@ class _ComputeAPIUnitTestMixIn(object):
     @mock.patch.object(
         objects.BlockDeviceMapping, 'get_by_volume',
         return_value=objects.BlockDeviceMapping(
-            instance=objects.Instance(
-                launched_at=timeutils.utcnow(), uuid=uuids.instance_uuid,
+            instance=fake_instance.fake_instance_obj(
+                None, launched_at=timeutils.utcnow(), uuid=uuids.instance_uuid,
                 vm_state=vm_states.ACTIVE, task_state=task_states.SHELVING,
-                host='fake_host')))
+                host='fake_host', expected_attrs=['system_metadata'])))
     def test_volume_snapshot_create_shelving(self, bdm_get_by_volume):
         """Tests a negative scenario where the instance task_state is not
         accepted for creating a guest-assisted volume snapshot.
@@ -3745,10 +3782,10 @@ class _ComputeAPIUnitTestMixIn(object):
     @mock.patch.object(
         objects.BlockDeviceMapping, 'get_by_volume',
         return_value=objects.BlockDeviceMapping(
-            instance=objects.Instance(
-                launched_at=timeutils.utcnow(), uuid=uuids.instance_uuid,
+            instance=fake_instance.fake_instance_obj(
+                None, launched_at=timeutils.utcnow(), uuid=uuids.instance_uuid,
                 vm_state=vm_states.SHELVED_OFFLOADED, task_state=None,
-                host=None)))
+                host=None, expected_attrs=['system_metadata'])))
     def test_volume_snapshot_create_shelved_offloaded(self, bdm_get_by_volume):
         """Tests a negative scenario where the instance is shelved offloaded
         so we don't have a host to cast to for the guest-assisted snapshot.
