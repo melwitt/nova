@@ -590,6 +590,11 @@ class OperationNotSupportedForVDPAInterface(NotSupported):
     )
 
 
+class OperationNotSupportedForEphemeralEncryption(NotSupported):
+    msg_fmt = _("Operation '%(operation)s' not supported for ephemeral "
+                "encrypted instance (%(instance_uuid)s).")
+
+
 class InvalidHypervisorType(Invalid):
     msg_fmt = _("The supplied hypervisor type of is invalid.")
 
@@ -2561,6 +2566,12 @@ class EphemeralEncryptionCleanupFailed(NovaException):
 class EncryptionSecretCreateFailed(NovaException):
     msg_fmt = _(
         'Failed to create encryption secret with name "%(name)s": %(error)s')
+
+
+class EncryptionSecretCreateForbidden(Forbidden):
+    msg_fmt = _(
+        'The user does not have permission to create an encryption secret in '
+        'the key manager service.')
 
 
 class HostConflict(Exception):
