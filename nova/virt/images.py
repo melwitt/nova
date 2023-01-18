@@ -20,6 +20,7 @@ Handling of VM disk images.
 """
 
 import os
+import typing as ty
 
 from oslo_concurrency import processutils
 from oslo_log import log as logging
@@ -31,6 +32,7 @@ import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova.image import glance
+from nova import objects
 import nova.privsep.qemu
 
 LOG = logging.getLogger(__name__)
@@ -141,7 +143,13 @@ def check_vmdk_image(image_id, data):
         raise exception.ImageUnacceptable(image_id=image_id, reason=msg)
 
 
-def fetch_to_raw(context, image_href, path, trusted_certs=None):
+def fetch_to_raw(
+    context: 'nova.context.RequestContext',
+    image_href: str,
+    path: str,
+    trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None
+) -> None:
     path_tmp = "%s.part" % path
     fetch(context, image_href, path_tmp, trusted_certs)
 
@@ -168,7 +176,8 @@ def fetch_to_raw(context, image_href, path, trusted_certs=None):
             LOG.debug("%s was %s, converting to raw", image_href, fmt)
             with fileutils.remove_path_on_error(staged):
                 try:
-                    convert_image(path_tmp, staged, fmt, 'raw')
+                    convert_image(
+                        path_tmp, staged, fmt, 'raw', encryption=encryption)
                 except exception.ImageUnacceptable as exp:
                     # re-raise to include image_href
                     raise exception.ImageUnacceptable(image_id=image_href,
