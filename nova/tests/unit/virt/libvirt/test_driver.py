@@ -23866,7 +23866,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                       instance, None))
 
             mock_rebase.assert_called_once_with(disk_path,
-                                                expected_backing_file)
+                                                expected_backing_file,
+                                                encryption=None)
         else:
             mock_rebase.assert_not_called()
 
