@@ -1,0 +1,10 @@
+features:
+  - |
+    The libvirt driver with the qcow2 image backend now supports LUKS
+    encryption of ephemeral/local disks including root, ephemeral, and swap
+    disks. Currently only disks created from unencrypted source images are
+    supported. This means that backing files are not encrypted.
+
+    The following server actions are currently supported:
+
+    * create/delete

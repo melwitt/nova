@@ -312,6 +312,26 @@ def reject_vdpa_instances(operation, until=None):
     return outer
 
 
+def reject_ephemeral_encryption_instances(operation):
+    """Reject requests to decorated funcs if instance uses ephemeral encryption
+
+    Raise OperationNotSupportedForEphemeralEncryption if instance uses
+    ephemeral encryption.
+    """
+
+    def outer(f):
+        @functools.wraps(f)
+        def inner(self, context, instance, *args, **kw):
+            if hardware.get_ephemeral_encryption_constraint(
+                instance.flavor, instance.image_meta,
+            ):
+                raise exception.OperationNotSupportedForEphemeralEncryption(
+                    instance_uuid=instance.uuid, operation=operation)
+            return f(self, context, instance, *args, **kw)
+        return inner
+    return outer
+
+
 def load_cells():
     global CELLS
     if not CELLS:
@@ -3308,6 +3328,7 @@ class API:
                     raise exception.InstanceNotFound(instance_id=instance.uuid)
         return instance
 
+    @reject_ephemeral_encryption_instances(instance_actions.BACKUP)
     # NOTE(melwitt): We don't check instance lock for backup because lock is
     #                intended to prevent accidental change/delete of instances
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
@@ -3349,6 +3370,7 @@ class API:
                                             rotation)
         return image_meta
 
+    @reject_ephemeral_encryption_instances(instance_actions.CREATE_IMAGE)
     # NOTE(melwitt): We don't check instance lock for snapshot because lock is
     #                intended to prevent accidental change/delete of instances
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
@@ -3406,6 +3428,7 @@ class API:
 
         return image_meta
 
+    @reject_ephemeral_encryption_instances(instance_actions.CREATE_IMAGE)
     # NOTE(melwitt): We don't check instance lock for snapshot because lock is
     #                intended to prevent accidental change/delete of instances
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
@@ -3588,6 +3611,7 @@ class API:
             if img_arch:
                 fields_obj.Architecture.canonicalize(img_arch)
 
+    @reject_ephemeral_encryption_instances(instance_actions.REBUILD)
     @reject_vtpm_instances(instance_actions.REBUILD)
     @block_accelerators(until_service=SUPPORT_ACCELERATOR_SERVICE_FOR_REBUILD)
     # TODO(stephenfin): We should expand kwargs out to named args
@@ -4223,6 +4247,7 @@ class API:
             }
             raise exception.FlavorImageConflict(emsg % data)
 
+    @reject_ephemeral_encryption_instances(instance_actions.RESIZE)
     # TODO(stephenfin): This logic would be so much easier to grok if we
     # finally split resize and cold migration into separate code paths
     @block_extended_resource_request
@@ -4468,6 +4493,7 @@ class API:
             allow_same_host = CONF.allow_resize_to_same_host
         return allow_same_host
 
+    @reject_ephemeral_encryption_instances(instance_actions.SHELVE)
     @block_port_accelerators()
     @reject_vtpm_instances(instance_actions.SHELVE)
     @block_accelerators(until_service=54)
@@ -4808,6 +4834,7 @@ class API:
         self._record_action_start(context, instance, instance_actions.RESUME)
         self.compute_rpcapi.resume_instance(context, instance)
 
+    @reject_ephemeral_encryption_instances(instance_actions.RESCUE)
     @reject_vtpm_instances(instance_actions.RESCUE)
     @check_instance_lock
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.STOPPED,
@@ -5591,6 +5618,7 @@ class API:
 
         return _metadata
 
+    @reject_ephemeral_encryption_instances(instance_actions.LIVE_MIGRATION)
     @block_extended_resource_request
     @block_port_accelerators()
     @reject_vdpa_instances(
@@ -5728,6 +5756,7 @@ class API:
         self.compute_rpcapi.live_migration_abort(context,
                 instance, migration.id)
 
+    @reject_ephemeral_encryption_instances(instance_actions.EVACUATE)
     @block_extended_resource_request
     @block_port_accelerators()
     @reject_vtpm_instances(instance_actions.EVACUATE)
@@ -5917,6 +5946,7 @@ class API:
         bdm = self._get_bdm_by_volume_id(
             context, volume_id, expected_attrs=['instance'])
 
+        @reject_ephemeral_encryption_instances(instance_actions.CREATE_IMAGE)
         # We allow creating the snapshot in any vm_state as long as there is
         # no task being performed on the instance and it has a host.
         @check_instance_host()
