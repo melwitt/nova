@@ -32,6 +32,7 @@ from nova.compute import power_state
 from nova.compute import task_states
 from nova.compute import vm_states
 import nova.conf
+from nova import crypto
 from nova import exception
 from nova import notifications
 from nova.notifications.objects import aggregate as aggregate_notification
@@ -1603,3 +1604,24 @@ def delete_arqs_if_needed(context, instance, arq_uuids=None):
               {'instance': instance.uuid,
                'uuid': arq_uuids})
         cyclient.delete_arqs_by_uuid(arq_uuids)
+
+
+def delete_ephemeral_encryption_secrets(context, instance_uuid, bdms):
+    # TODO(melwitt): This will also include the backing file secret UUID when
+    # support for encrypted backing files is added.
+    keys = ['encryption_secret_uuid']
+    for bdm in bdms:
+        for key in keys:
+            secret_uuid = getattr(bdm, key, None)
+            if secret_uuid is not None:
+                try:
+                    crypto.delete_encryption_secret(
+                        context, instance_uuid, secret_uuid)
+                except Exception:
+                    # NOTE(melwitt): Ignore all errors here so as not to
+                    # prevent a successful instance delete from the end user's
+                    # perspective. If we fail to delete a secret here, the
+                    # _reclaim_queued_deletes periodic task will try again.
+                    LOG.exception(
+                        f'Failed to delete encryption secret {secret_uuid} '
+                        'from the key manager.', instance_uuid=instance_uuid)
