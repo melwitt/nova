@@ -446,6 +446,7 @@ def fetch_image(
     target: str,
     image_id: str,
     trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
+    encryption: ty.Optional[EncryptionOptions] = None
 ) -> None:
     """Grab image.
 
@@ -453,8 +454,11 @@ def fetch_image(
     :param target: target path to put the image
     :param image_id: id of the image to fetch
     :param trusted_certs: optional objects.TrustedCerts for image validation
+    :param encryption: (Optional) Dict detailing various encryption attributes
+                       such as the format and passphrase.
     """
-    images.fetch_to_raw(context, image_id, target, trusted_certs)
+    images.fetch_to_raw(
+        context, image_id, target, trusted_certs, encryption=encryption)
 
 
 def fetch_raw_image(
