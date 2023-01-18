@@ -820,12 +820,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             "Driver capabilities for 'supports_socket_pci_numa_affinity' "
             "is invalid",
         )
-        self.assertFalse(
+        self.assertTrue(
             drvr.capabilities['supports_ephemeral_encryption'],
             "Driver capabilities for 'supports_ephemeral_encryption' "
             "is invalid",
         )
-        self.assertFalse(
+        self.assertTrue(
             drvr.capabilities['supports_ephemeral_encryption_luks'],
             "Driver capabilities for 'supports_ephemeral_encryption_luks' "
             " is invalid",
@@ -911,6 +911,19 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             "is invalid when host should support this feature"
         )
         mock_supports.assert_called_once_with()
+
+    def test_driver_capabilities_flat(self):
+        self.flags(use_cow_images=False)
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        self.assertFalse(
+            drvr.capabilities['supports_ephemeral_encryption'],
+            "Driver capabilities for 'supports_ephemeral_encryption' "
+            "is invalid")
+        self.assertFalse(
+            drvr.capabilities['supports_ephemeral_encryption_luks'],
+            "Driver capabilities for 'supports_ephemeral_encryption_luks' "
+            "is invalid",
+        )
 
     def test_driver_raises_on_non_linux_platform(self):
         with utils.temporary_mutation(sys, platform='darwin'):
@@ -14755,6 +14768,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             'qcow2',
             virt_disk_size,
             backing_file=backfile_path,
+            encryption=None,
         )
 
     @mock.patch('nova.virt.libvirt.imagebackend.Image.exists',
@@ -14883,7 +14897,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
-                os_type='linux', target=ephemeral_backing)
+                os_type='linux', target=ephemeral_backing,
+                context=self.context)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
@@ -14905,12 +14920,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                     'qcow2',
                     disk_info_byname['disk']['virt_disk_size'],
                     backing_file=root_backing,
+                    encryption=None,
                 ),
                 mock.call(
                     CONF.instances_path + '/disk.local',
                     'qcow2',
                     disk_info_byname['disk.local']['virt_disk_size'],
                     backing_file=ephemeral_backing,
+                    encryption=None,
                 ),
             ])
 
@@ -30870,6 +30887,39 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             f'{self.instance.uuid}_{self.img_bdm.uuid}: error\n'
             f'Failed to delete libvirt secret '
             f'{self.instance.uuid}_{self.eph_bdm.uuid}: error')
+        self.assertEqual(expected_msg, str(exp))
+
+    def test__cleanup_unused_secrets_delete_secret_fails(self):
+        # Test exception handling when libvirt secret deletion fails during
+        # cleanup.
+        error = fakelibvirt.make_libvirtError(
+            fakelibvirt.libvirtError, msg='error',
+            error_code=fakelibvirt.VIR_ERR_INTERNAL_ERROR)
+
+        guest = mock.Mock()
+        guest.get_all_disks.return_value = [mock.Mock()]
+        self.drvr._host.list_guests.return_value = [guest]
+
+        secret1 = mock.Mock()
+        secret1.usageID.return_value = 'fake1'
+        secret2 = mock.Mock()
+        secret2.usageID.return_value = 'fake2'
+        secret3 = mock.Mock()
+        secret3.usageID.return_value = 'fake3'
+        self.drvr._host.list_all_secrets.return_value = [
+            secret1, secret2, secret3]
+
+        # Delete for secret1 and secret2 fail and secret3 succeeds.
+        self.drvr._host.delete_secret.side_effect = [error, error, None]
+
+        exp = self.assertRaises(
+            exception.EphemeralEncryptionCleanupFailed,
+            self.drvr._cleanup_unused_ephemeral_encryption_secrets)
+
+        expected_msg = (
+            'Failed to clean up ephemeral encryption secrets: '
+            'Failed to delete libvirt secret fake1: error\n'
+            'Failed to delete libvirt secret fake2: error')
         self.assertEqual(expected_msg, str(exp))
 
     @mock.patch.object(
