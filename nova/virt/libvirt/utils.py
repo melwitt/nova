@@ -33,6 +33,7 @@ from oslo_utils import fileutils
 
 import nova.conf
 from nova import context as nova_context
+from nova import crypto
 from nova import exception
 from nova.i18n import _
 from nova import objects
@@ -747,3 +748,13 @@ def restore_vtpm_dir(swtpm_dir: str) -> None:
     nova.privsep.path.chown(swtpm_dir, uid, gid, recursive=True)
     # Move instance-specific directory to global dir
     nova.privsep.path.move_tree(swtpm_dir, VTPM_DIR)
+
+
+def create_encryption_from_driver_bdm(context, instance, driver_bdm):
+    secret_uuid, secret = crypto.create_encryption_secret(
+        context, instance, driver_bdm)
+    encryption = {
+        'format': driver_bdm.get('encryption_format'),
+        'secret': secret,
+    }
+    return encryption
