@@ -584,8 +584,9 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_create.assert_called_once_with(
-             self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+             self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH,
+             encryption=None)
+        fn.assert_called_once_with(target=self.TEMPLATE_PATH, encryption=None)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
         mock_utime.assert_called()
@@ -614,6 +615,50 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_create.called)
         self.assertFalse(mock_extend.called)
+
+    @mock.patch.object(imagebackend.utils, 'synchronized')
+    @mock.patch('nova.virt.libvirt.utils.create_image')
+    @mock.patch.object(os.path, 'exists')
+    @mock.patch.object(imagebackend.Qcow2, 'get_disk_size')
+    @mock.patch('nova.privsep.path.utime', new=mock.Mock())
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_create_image_with_encryption(self, mock_get_secret, mock_get_size,
+                                          mock_exists, mock_create, mock_sync):
+        mock_sync.side_effect = lambda *a, **kw: self._fake_deco
+        mock_get_size.return_value = self.SIZE
+        fn = mock.MagicMock()
+        # disk.info does not exist, instance directory exists, base image does
+        # not exist, qcow2 disk does not exist, qcow2 disk does not exist
+        mock_exists.side_effect = [False, True, False, False, False]
+
+        disk_info = {
+            'bus': 'virtio',
+            'dev': '/dev/vda',
+            'type': 'disk',
+            'encrypted': True,
+            'encryption_secret_uuid': uuids.secret,
+            'encryption_format': 'luks',
+        }
+        image = self.image_class(
+            self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
+
+        expected_encryption = {
+            'format': 'luks',
+            'secret': mock_get_secret.return_value,
+        }
+        kwargs = {'context': self.CONTEXT}
+
+        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE, **kwargs)
+
+        mock_get_secret.assert_called_once_with(self.CONTEXT, uuids.secret)
+        # encryption=None here because fn is the fetch_func and the source
+        # image is not encrypted.
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, encryption=None, **kwargs)
+        # encryption attributes are passed to create the (destination) image.
+        mock_create.assert_called_once_with(
+            self.PATH, 'qcow2', self.SIZE,
+            backing_file=self.TEMPLATE_PATH, encryption=expected_encryption)
 
     @mock.patch.object(imagebackend.utils, 'synchronized')
     @mock.patch('nova.virt.libvirt.utils.create_image')
@@ -649,7 +694,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
             imgmodel.LocalFileImage(self.QCOW2_BASE,
                                     imgmodel.FORMAT_QCOW2), self.SIZE)
         mock_exist.assert_has_calls(exist_calls)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(target=self.TEMPLATE_PATH, encryption=None)
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_create.called)
         mock_utime.assert_called()
@@ -679,7 +724,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
 
         mock_get.assert_called_once_with(self.PATH)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(target=self.TEMPLATE_PATH, encryption=None)
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
