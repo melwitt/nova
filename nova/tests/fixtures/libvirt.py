@@ -1700,6 +1700,11 @@ class Secret(object):
         tree = etree.fromstring(xml)
         self._uuid = tree.find('./uuid').text
         self._private = tree.get('private') == 'yes'
+        usage = tree.find('./usage')
+        if usage is not None:
+            self._usage_type = usage.get('type')
+            if self._usage_type == 'volume':
+                self._usage_id = usage.find('volume').text
 
     def setValue(self, value, flags=0):
         self._value = value
@@ -2129,7 +2134,11 @@ class Connection(object):
                   </cpu>"""
 
     def secretLookupByUsage(self, usage_type_obj, usage_id):
-        pass
+        for secret in self._secrets.values():
+            # Ignore usage_type_obj because we don't have a way to map libvrt
+            # usage type constants to strings.
+            if secret._usage_id == usage_id:
+                return secret
 
     def secretDefineXML(self, xml):
         secret = Secret(self, xml)
