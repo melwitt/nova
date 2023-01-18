@@ -368,7 +368,8 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
                  '674736e3-f25c-405c-8362-bbf991e0ce0a'])
         libvirt_utils.fetch_image(context, target, image_id, trusted_certs)
         mock_images.assert_called_once_with(
-            context, image_id, target, trusted_certs)
+            context, image_id, target, trusted_certs, src_encryption=None,
+            dest_encryption=None)
 
     @mock.patch('nova.virt.images.fetch')
     def test_fetch_initrd_image(self, mock_images):
