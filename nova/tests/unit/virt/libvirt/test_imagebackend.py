@@ -584,7 +584,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_create.assert_called_once_with(
-             self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH)
+             self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH,
+             encryption=None)
         fn.assert_called_once_with(target=self.TEMPLATE_PATH)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
@@ -614,6 +615,48 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_create.called)
         self.assertFalse(mock_extend.called)
+
+    @mock.patch.object(imagebackend.utils, 'synchronized')
+    @mock.patch('nova.virt.libvirt.utils.create_image')
+    @mock.patch.object(os.path, 'exists')
+    @mock.patch.object(imagebackend.Qcow2, 'get_disk_size')
+    @mock.patch('nova.privsep.path.utime', new=mock.Mock())
+    @mock.patch('castellan.key_manager.API')
+    def test_create_image_with_encryption(
+        self, mock_key_mgr_api, mock_get, mock_exists, mock_create, mock_sync
+    ):
+        mock_sync.side_effect = lambda *a, **kw: self._fake_deco
+        mock_get.return_value = self.SIZE
+        fn = mock.MagicMock()
+        mock_exists.side_effect = [False, True, False, False, False]
+        mock_key_mgr = mock.Mock()
+        mock_key_mgr_api.return_value = mock_key_mgr
+
+        disk_info = {
+            'bus': 'virtio',
+            'dev': '/dev/vda',
+            'type': 'disk',
+            'encrypted': True,
+            'encryption_secret_uuid': uuids.secret,
+            'encryption_format': 'luks',
+        }
+        image = self.image_class(
+            self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
+
+        expected_encryption = {
+            'format': 'luks',
+            'secret':
+                mock_key_mgr.get.return_value.get_encoded.return_value,
+            }
+        kwargs = {'context': self.CONTEXT}
+
+        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE, **kwargs)
+
+        mock_key_mgr.get.assert_called_once_with(self.CONTEXT, uuids.secret)
+        mock_create.assert_called_once_with(
+            self.PATH, 'qcow2', self.SIZE,
+            backing_file=self.TEMPLATE_PATH, encryption=expected_encryption
+        )
 
     @mock.patch.object(imagebackend.utils, 'synchronized')
     @mock.patch('nova.virt.libvirt.utils.create_image')

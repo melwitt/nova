@@ -14301,6 +14301,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             'qcow2',
             virt_disk_size,
             backing_file=backfile_path,
+            encryption=None,
         )
 
     @mock.patch('nova.virt.libvirt.imagebackend.Image.exists',
@@ -14451,12 +14452,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                     'qcow2',
                     disk_info_byname['disk']['virt_disk_size'],
                     backing_file=root_backing,
+                    encryption=None,
                 ),
                 mock.call(
                     CONF.instances_path + '/disk.local',
                     'qcow2',
                     disk_info_byname['disk.local']['virt_disk_size'],
                     backing_file=ephemeral_backing,
+                    encryption=None,
                 ),
             ])
 
