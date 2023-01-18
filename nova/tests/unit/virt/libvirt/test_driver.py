@@ -14364,7 +14364,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(context=self.context,
                           target=backfile_path,
                           image_id=self.test_instance['image_ref'],
-                          trusted_certs=trusted_certs),
+                          trusted_certs=trusted_certs, encryption=None),
                 mock.call(self.context, kernel_path, instance.kernel_id,
                           trusted_certs),
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
@@ -14378,6 +14378,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             'qcow2',
             virt_disk_size,
             backing_file=backfile_path,
+            encryption=None,
         )
 
     @mock.patch('nova.virt.libvirt.imagebackend.Image.exists',
@@ -14433,7 +14434,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(context=self.context,
                           target=backfile_path,
                           image_id=self.test_instance['image_ref'],
-                          trusted_certs=None),
+                          trusted_certs=None, encryption=None),
                 mock.call(self.context, kernel_path, instance.kernel_id,
                           None),
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
@@ -14506,11 +14507,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
-                os_type='linux', target=ephemeral_backing)
+                os_type='linux', target=ephemeral_backing, encryption=None)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
-                target=root_backing, trusted_certs=instance.trusted_certs)
+                target=root_backing, trusted_certs=instance.trusted_certs,
+                encryption=None)
 
             verify_base_size_mock.assert_has_calls([
                 mock.call(root_backing, instance.flavor.root_gb * units.Gi),
@@ -14528,12 +14530,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                     'qcow2',
                     disk_info_byname['disk']['virt_disk_size'],
                     backing_file=root_backing,
+                    encryption=None,
                 ),
                 mock.call(
                     CONF.instances_path + '/disk.local',
                     'qcow2',
                     disk_info_byname['disk.local']['virt_disk_size'],
                     backing_file=ephemeral_backing,
+                    encryption=None,
                 ),
             ])
 
@@ -23898,7 +23902,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         mock_imagebackend.cache.assert_called_once_with(
             fetch_func=mock.sentinel.fetch, context=self.context,
             filename=mock.sentinel.filename, image_id=uuids.image_id,
-            size=mock.sentinel.size, trusted_certs=instance.trusted_certs)
+            size=mock.sentinel.size, trusted_certs=instance.trusted_certs,
+            encryption=None)
         mock_imagebackend.flatten.assert_called_once()
 
     def test_unshelve_noop_flatten_fetch_image_cache(self):
@@ -23936,7 +23941,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         mock_rbd_imagebackend.cache.assert_called_once_with(
             fetch_func=mock.sentinel.fetch, context=self.context,
             filename=mock.sentinel.filename, image_id=uuids.image_id,
-            size=mock.sentinel.size, trusted_certs=instance.trusted_certs)
+            size=mock.sentinel.size, trusted_certs=instance.trusted_certs,
+            encryption=None)
         mock_rbd_imagebackend.flatten.assert_called_once()
         mock_rbd_driver.flatten.assert_called_once_with(
             mock.sentinel.rbd_name, pool=mock.sentinel.rbd_pool)
