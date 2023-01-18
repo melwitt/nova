@@ -20,6 +20,7 @@ Handling of VM disk images.
 """
 
 import os
+import typing as ty
 
 from oslo_concurrency import processutils
 from oslo_log import log as logging
@@ -31,12 +32,18 @@ import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova.image import glance
+from nova import objects
 import nova.privsep.qemu
 
 LOG = logging.getLogger(__name__)
 
 CONF = nova.conf.CONF
 IMAGE_API = glance.API()
+
+
+class EncryptionOptions(ty.TypedDict):
+    secret: str
+    format: str
 
 
 def qemu_img_info(path, format=None):
@@ -141,7 +148,14 @@ def check_vmdk_image(image_id, data):
         raise exception.ImageUnacceptable(image_id=image_id, reason=msg)
 
 
-def fetch_to_raw(context, image_href, path, trusted_certs=None):
+def fetch_to_raw(
+    context: 'nova.context.RequestContext',
+    image_href: str,
+    path: str,
+    trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
+    encryption: ty.Optional[EncryptionOptions] = None,
+    dest_encryption: ty.Optional[EncryptionOptions] = None
+) -> None:
     path_tmp = "%s.part" % path
     fetch(context, image_href, path_tmp, trusted_certs)
 
@@ -163,25 +177,29 @@ def fetch_to_raw(context, image_href, path, trusted_certs=None):
         if fmt == 'vmdk':
             check_vmdk_image(image_href, data)
 
-        if fmt != "raw" and CONF.force_raw_images:
+        if fmt not in ("raw", "luks") and CONF.force_raw_images:
             staged = "%s.converted" % path
-            LOG.debug("%s was %s, converting to raw", image_href, fmt)
+            dest_fmt = 'raw' if not encryption else 'luks'
+            LOG.debug("%s was %s, converting to %s", image_href, fmt, dest_fmt)
             with fileutils.remove_path_on_error(staged):
                 try:
-                    convert_image(path_tmp, staged, fmt, 'raw')
+                    convert_image(
+                        path_tmp, staged, fmt, dest_fmt, encryption=encryption,
+                        dest_encryption=dest_encryption)
                 except exception.ImageUnacceptable as exp:
                     # re-raise to include image_href
                     raise exception.ImageUnacceptable(image_id=image_href,
-                        reason=_("Unable to convert image to raw: %(exp)s")
-                        % {'exp': exp})
+                        reason=_(
+                            "Unable to convert image to %(dest_fmt)s: %(exp)s")
+                            % {'dest_fmt': dest_fmt, 'exp': exp})
 
                 os.unlink(path_tmp)
 
                 data = qemu_img_info(staged)
-                if data.file_format != "raw":
+                if data.file_format not in ("raw", "luks"):
                     raise exception.ImageUnacceptable(image_id=image_href,
-                        reason=_("Converted to raw, but format is now %s") %
-                        data.file_format)
+                        reason=_("Converted to %s, but format is now %s") %
+                        (dest_fmt, data.file_format))
 
                 os.rename(staged, path)
         else:
