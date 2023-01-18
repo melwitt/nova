@@ -4599,7 +4599,7 @@ class LibvirtDriver(driver.ComputeDriver):
     def _create_ephemeral(target, ephemeral_size,
                           fs_label, os_type, is_block_dev=False,
                           context=None, specified_fs=None,
-                          vm_mode=None):
+                          vm_mode=None, encryption=None):
         if not is_block_dev:
             if (CONF.libvirt.virt_type == "parallels" and
                     vm_mode == fields.VMMode.EXE):
@@ -4608,7 +4608,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                  '%dG' % ephemeral_size,
                                                  specified_fs)
                 return
-            libvirt_utils.create_image(target, 'raw', f'{ephemeral_size}G')
+            libvirt_utils.create_image(
+                target, 'raw', f'{ephemeral_size}G', encryption=encryption)
 
         # Run as root only for block devices.
         disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
