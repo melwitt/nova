@@ -25901,7 +25901,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_remove_volumes.assert_called_once_with(['lvm.rescue'])
 
     def test_unrescue(self):
-        instance = objects.Instance(uuid=uuids.instance, id=1)
+        instance = objects.Instance(
+            uuid=uuids.instance, id=1, system_metadata={})
         self._test_unrescue(instance)
 
     @mock.patch.object(rbd_utils.RBDDriver, '_destroy_volume')
@@ -25913,7 +25914,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                           mock_disconnect, mock_destroy_volume):
         self.flags(images_type='rbd', group='libvirt')
         mock_connect.return_value = mock.MagicMock(), mock.MagicMock()
-        instance = objects.Instance(uuid=uuids.instance, id=1)
+        instance = objects.Instance(
+            uuid=uuids.instance, id=1, system_metadata={})
         all_volumes = [uuids.other_instance + '_disk',
                        uuids.other_instance + '_disk.rescue',
                        instance.uuid + '_disk',

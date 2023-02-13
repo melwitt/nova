@@ -52,6 +52,7 @@ from nova.objects import fields
 from nova import rpc
 from nova import safe_utils
 from nova import utils
+from nova.virt import hardware
 
 CONF = nova.conf.CONF
 LOG = log.getLogger(__name__)
@@ -1589,3 +1590,38 @@ def delete_arqs_if_needed(context, instance, arq_uuids=None):
               {'instance': instance.uuid,
                'uuid': arq_uuids})
         cyclient.delete_arqs_by_uuid(arq_uuids)
+
+
+def update_ephemeral_encryption_bdms(
+    flavor: 'objects.Flavor',
+    image_meta: 'objects.ImageMeta',
+    block_device_mapping: 'objects.BlockDeviceMappingList',
+) -> None:
+    """Update local BlockDeviceMappings when ephemeral encryption requested
+
+    Enable ephemeral encryption in all local BlockDeviceMappings
+    when requested in the flavor or image. Also optionally set the format
+    and options if also provided.
+
+    :param flavor: The instance flavor for the request
+    :param image_meta: The image metadata for the request
+    :block_device_mapping: The current block_device_mapping for the request
+    """
+    if not hardware.get_ephemeral_encryption_constraint(
+            flavor, image_meta):
+        return
+
+    # NOTE(lyarwood): Attempt to find the format in the flavor and image,
+    # if one isn't found then the compute will need to provide and save a
+    # default format during a the initial build.
+    eph_format = hardware.get_ephemeral_encryption_format(
+        flavor, image_meta)
+
+    # NOTE(lyarwood): The term ephemeral is overloaded in the codebase,
+    # what it actually means in the context of ephemeral encryption is
+    # anything local to the compute host so use the is_local property.
+    # TODO(lyarwood): Add .get_local_devices() to BlockDeviceMappingList
+    for bdm in [b for b in block_device_mapping if b.is_local]:
+        bdm.encrypted = True
+        if eph_format:
+            bdm.encryption_format = eph_format
