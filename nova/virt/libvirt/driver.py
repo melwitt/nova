@@ -1708,6 +1708,7 @@ class LibvirtDriver(driver.ComputeDriver):
     ):
         encrypted_bdms = driver.block_device_info_get_encrypted_disks(
             block_device_info)
+
         for driver_bdm in encrypted_bdms:
             secret_uuid = driver_bdm.get('encryption_secret_uuid')
             if secret_uuid:
@@ -4375,6 +4376,8 @@ class LibvirtDriver(driver.ComputeDriver):
                            instance.ramdisk_id),
         }
 
+        image_bdms = driver.block_device_info_get_image(block_device_info)
+
         virt_type = CONF.libvirt.virt_type
         if hardware.check_hw_rescue_props(image_meta):
             LOG.info("Attempting a stable device rescue", instance=instance)
@@ -4409,14 +4412,111 @@ class LibvirtDriver(driver.ComputeDriver):
 
         else:
             LOG.info("Attempting rescue", instance=instance)
-            # NOTE(lyarwood): A legacy rescue only provides the rescue device
-            # and the original root device so we don't need to provide
-            # block_device_info to the get_disk_info call.
+            # NOTE(melwitt): A legacy rescue only provides the rescue device
+            # and the original root device, but we still need to provide
+            # block_device_info to the get_disk_info call because the disk
+            # might be encrypted. The encryption attributes are in the
+            # block_device_info.
             block_device_info = None
 
+        # This will generate the disk mapping.
         disk_info = blockinfo.get_disk_info(virt_type, instance, image_meta,
             rescue=True, block_device_info=block_device_info,
             rescue_image_meta=rescue_image_meta)
+
+        # If ephemeral encryption was requested, add the encryption attributes
+        # to the disk_info_mapping for the rescue disk.
+        if hardware.get_ephemeral_encryption_constraint(
+            instance.flavor, rescue_image_meta or image_meta
+        ):
+            # Create a BDM object for the rescue disk to maintain consistency
+            # with how all other ephemeral encryption is handled. However we
+            # are NOT going to persist it to the database so as not to
+            # interfere with the instance's existing BDM database records.
+            #
+            # boot_index = -1 is equivalent to "None", the boot ordering will
+            # be handled later by passing the boot_order kwarg to
+            # _get_guest_disk_config.
+            bdm_dict = block_device.create_image_bdm(
+                rescue_image_id, boot_index=-1)
+            bdm_obj = objects.BlockDeviceMapping(**bdm_dict)
+
+            # Update the BDM with ephemeral encryption attributes from the
+            # flavor or image.
+            compute_utils.update_ephemeral_encryption_bdms(
+                instance.flavor, rescue_image_meta or image_meta, [bdm_obj])
+
+            # Stash the encryption secret for the rescue image to use when
+            # fetching and potentially converting the encrypted rescue image.
+            secret_image_prop = 'hw_ephemeral_encryption_secret_uuid'
+            if rescue_image_meta:
+                img_secret_uuid = rescue_image_meta.properties.get(
+                    secret_image_prop)
+                if img_secret_uuid:
+                    instance.system_metadata.update(
+                        {'rescue_image_' + secret_image_prop: img_secret_uuid})
+                    instance.save()
+
+            # Get a block_device_info which represents only the rescue disk.
+            rescue_bdi = driver.get_block_device_info(instance, [bdm_obj])
+
+            print(f'BLOCK_DEVICE_INFO = {block_device_info}')
+            print(f'RESCUE_BLOCK_DEVICE_INFO = {rescue_bdi}')
+
+            # Delete any potential leftover rescue disk secrets in libvirt.
+            rescue_disk_sentinel = 'rescue_disk'
+            secret_usage = f'{instance.uuid}_{rescue_disk_sentinel}'
+            if self._host.find_secret('volume', secret_usage) is not None:
+                self._host.delete_secret('volume', secret_usage)
+
+            # Add ephemeral encryption attributes to the driver BDM for the
+            # rescue disk. The 'uuid' is only used for encryption secret name
+            # generation and doesn't have to be a proper UUID.
+            # We don't use a real UUID because this BDM is not going to be
+            # persisted in the database and a real UUID could be misleading
+            # if someone is trying to correlate a secret name with a BDM
+            # database record. A sentinel such as 'rescue_disk' makes it
+            # obvious that the secret is for a temporary rescue disk.
+            rescue_bdi['image'][0]['uuid'] = rescue_disk_sentinel
+            rescue_bdi = self._add_ephemeral_encryption_driver_bdm_attrs(
+                context, instance, rescue_bdi, persist=False)
+
+            print(f'RESCUE_BLOCK_DEVICE_INFO after add = {rescue_bdi}')
+
+            # Extract the driver BDM for the rescue disk which now contains
+            # default encryption attribute values where required.
+            rescue_bdms = driver.block_device_info_get_encrypted_disks(
+                rescue_bdi)
+
+            print(f'RESCUE_BDMS = {rescue_bdms}')
+
+            # Add encryption info to the disk mapping and stash the secret UUID
+            # in the instance system metadata. We need to do this because
+            # normally the secret UUID would be in the BDM database record and
+            # we are not persisting any BDM data for the rescue disk.
+            if rescue_bdms:
+                rescue_bdm = rescue_bdms[0]
+                rescue_encryption = blockinfo.get_encryption_info_from_bdm(
+                    rescue_bdm)
+                disk_info['mapping']['disk.rescue'].update(rescue_encryption)
+                disk_secret_uuid = rescue_bdm.get('encryption_secret_uuid')
+                if disk_secret_uuid:
+                    secret_key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+                    instance.system_metadata.update(
+                        {secret_key: disk_secret_uuid})
+                    instance.save()
+
+                # If this is not a stable rescue, we need to add encryption
+                # info back to the image disk as well.
+                if not rescue_image_meta:
+                    disk_info['mapping']['root'].update(rescue_encryption)
+                    # image_bdms = driver.block_device_info_get_image(
+                    #    block_device_info)
+                    if image_bdms:
+                        image_bdm = image_bdms[0]
+                        disk_info['mapping']['disk'].update(
+                            blockinfo.get_encryption_info_from_bdm(image_bdm))
+
         LOG.debug("rescue generated disk_info: %s", disk_info)
 
         injection_info = InjectionInfo(network_info=network_info,
@@ -4429,6 +4529,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # remember the existing mdevs for reusing them.
         mdevs = self._get_all_assigned_mediated_devices(instance)
         mdevs = list(mdevs.keys())
+
         self._create_image(context, instance, disk_info['mapping'],
                            injection_info=injection_info, suffix='.rescue',
                            disk_images=rescue_images)
@@ -4471,6 +4572,25 @@ class LibvirtDriver(driver.ComputeDriver):
                                       disk.endswith('.rescue'))
             rbd_utils.RBDDriver().cleanup_volumes(filter_fn)
 
+        # Cleanup ephemeral encryption secrets for the rescue disk if needed.
+        # First, cleanup the secret we created for local rescue disk which we
+        # have now destroyed.
+        secret_uuid = instance.system_metadata.get(
+            'rescue_disk_ephemeral_encryption_secret_uuid')
+        if secret_uuid:
+            crypto.delete_encryption_secret(context, instance, secret_uuid)
+            del instance.system_metadata[
+                'rescue_disk_ephemeral_encryption_secret_uuid']
+        secret_usage = f"{instance.uuid}_rescue_disk"
+        if self._host.find_secret('volume', secret_usage):
+            self._host.delete_secret('volume', secret_usage)
+
+        # Then, cleanup the stashed rescue image encryption secret UUID if the
+        # rescue image was encrypted.
+        secret_sysmeta_key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
+        if secret_sysmeta_key in instance.system_metadata:
+            del instance.system_metadata[secret_sysmeta_key]
+
     def poll_rebooting_instances(self, timeout, instances):
         pass
 
@@ -4479,6 +4599,7 @@ class LibvirtDriver(driver.ComputeDriver):
         context: nova_context.RequestContext,
         instance: 'objects.Instance',
         block_device_info: ty.Dict[str, ty.Any],
+        persist: bool = True,
     ) -> ty.Optional[ty.Dict[str, ty.Any]]:
         """Add ephemeral encryption attributes to driver BDMs before use.
         """
@@ -4517,7 +4638,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
             # Ensure this is all saved back down in the database via the o.vo
             # BlockDeviceMapping object
-            driver_bdm.save()
+            if persist:
+                driver_bdm.save()
 
         return block_device_info
 
@@ -11105,9 +11227,15 @@ class LibvirtDriver(driver.ComputeDriver):
         # If the image properties contained an ephemeral encryption secret
         # UUID for the encrypted image, we can retrieve it from the instance
         # system metadata.
-        secret_uuid = instance.system_metadata.get(
-            utils.SM_IMAGE_PROP_PREFIX + 'hw_ephemeral_encryption_secret_uuid')
+        secret_image_prop = 'hw_ephemeral_encryption_secret_uuid'
+        rescue_image_secret_uuid = instance.system_metadata.get(
+            'rescue_' + utils.SM_IMAGE_PROP_PREFIX + secret_image_prop)
+        orig_image_secret_uuid = instance.system_metadata.get(
+        # secret_uuid = instance.system_metadata.get(
+            utils.SM_IMAGE_PROP_PREFIX + secret_image_prop)
+        secret_uuid = rescue_image_secret_uuid or orig_image_secret_uuid
         image_encryption = None
+        # image_encryption = image.get_encryption(context)
         if secret_uuid:
             LOG.debug(
                 f'Fetching image with encryption secret UUID {secret_uuid}',
