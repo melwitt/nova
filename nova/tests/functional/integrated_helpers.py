@@ -680,6 +680,21 @@ class InstanceHelperMixin:
             {'createImage': {'name': snapshot_name}}
         )
 
+    def _rescue_server(
+            self, server, image_uuid=None, admin_pass=None,
+            expected_state='RESCUE'):
+        post = {'rescue': {}}
+        if image_uuid:
+            post['rescue']['rescue_image_ref'] = image_uuid
+        if admin_pass:
+            post['rescue']['adminPass'] = admin_pass
+        self.api.post_server_action(server['id'], post)
+        return self._wait_for_state_change(server, expected_state)
+
+    def _unrescue_server(self, server):
+        self.api.post_server_action(server['id'], {'unrescue': {}})
+        return self._wait_for_state_change(server, 'ACTIVE')
+
     def _attach_volumes(self, server, vol_ids: ty.List[str]):
         # attach volumes to server
         # these attachments are done by nova api, that means
