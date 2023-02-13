@@ -4433,18 +4433,47 @@ class LibvirtDriver(driver.ComputeDriver):
             f.write(unrescue_xml)
 
         rescue_image_id = None
+        # This will be the image metadata for the specified rescue image
+        # (stable rescue). It will remain None if this is not a stable rescue.
         rescue_image_meta = None
+        # NOTE(melwitt): image_meta.id should always be set because the compute
+        # manager calls ImageMeta.from_image_ref() which always sets it.
+        # So ... it doesn't look like there is any way to actually use the
+        # CONF.libvirt.rescue_image_id setting because rescue_image_id will
+        # never be None here.
         if image_meta.obj_attr_is_set("id"):
             rescue_image_id = image_meta.id
 
+        rescue_image_id = (
+            rescue_image_id or
+            CONF.libvirt.rescue_image_id or
+            instance.image_ref)
+
+        LOG.info(
+            f'Using image {rescue_image_id} as rescue image',
+            instance=instance)
+
+        # If we're going to use the configured rescue image, replace image_meta
+        # from the compute manager with the image metadata from
+        # CONF.libvirt.rescue_image_id. Ideally we would determine which
+        # image_meta to pass to driver rescue in the compute manager instead of
+        # replacing it here, but this config based rescue_image_id is libvirt
+        # specific.
+        if rescue_image_id == CONF.libvirt.rescue_image_id:
+            image_meta = objects.ImageMeta.from_image_ref(
+                context, self._image_api, CONF.libvirt.rescue_image_id)
+
         rescue_images = {
-            'image_id': (rescue_image_id or
-                        CONF.libvirt.rescue_image_id or instance.image_ref),
+            'image_id': rescue_image_id,
             'kernel_id': (CONF.libvirt.rescue_kernel_id or
                           instance.kernel_id),
             'ramdisk_id': (CONF.libvirt.rescue_ramdisk_id or
                            instance.ramdisk_id),
         }
+
+        # We will need the original block_device_info later if this is a legacy
+        # rescue in order to add encryption attributes.
+        original_block_device_info = block_device_info
 
         virt_type = CONF.libvirt.virt_type
         if hardware.check_hw_rescue_props(image_meta):
@@ -4485,9 +4514,21 @@ class LibvirtDriver(driver.ComputeDriver):
             # block_device_info to the get_disk_info call.
             block_device_info = None
 
-        disk_info = blockinfo.get_disk_info(virt_type, instance, image_meta,
-            rescue=True, block_device_info=block_device_info,
+        # This will generate a new disk mapping and in the case of a legacy
+        # rescue, the mapping will be built from scratch and will not take into
+        # account the existing block_device_info. This means that if the
+        # block_device_info contains encryption attributes, the new disk_info
+        # will not contain any.
+        disk_info = blockinfo.get_disk_info(
+            virt_type, instance, image_meta, rescue=True,
+            block_device_info=block_device_info,
             rescue_image_meta=rescue_image_meta)
+
+        # Handle ephemeral encryption if needed.
+        self._update_disk_info_and_sysmeta_for_rescue_with_encryption(
+            context, instance, rescue_image_id, image_meta, rescue_image_meta,
+            disk_info, original_block_device_info)
+
         LOG.debug("rescue generated disk_info: %s", disk_info)
 
         injection_info = InjectionInfo(network_info=network_info,
@@ -4513,6 +4554,111 @@ class LibvirtDriver(driver.ComputeDriver):
         self._create_guest(
             context, xml, instance, post_xml_callback=gen_confdrive,
         )
+
+    def _update_disk_info_and_sysmeta_for_rescue_with_encryption(
+            self, context, instance, rescue_image_id, image_meta,
+            rescue_image_meta, disk_info, original_block_device_info):
+        # This will generate a new disk mapping and in the case of a legacy
+        # rescue, the mapping will be built from scratch and will not take into
+        # account the existing block_device_info. This means that if the
+        # block_device_info contains encryption attributes, the new disk_info
+        # will not contain any.
+
+        # We check whether the image is encrypted outside of the ephemeral
+        # encryption constraint check because it is possible for the image to
+        # be encrypted without the flavor or image_meta specifying ephemeral
+        # encryption for the instance itself.
+        active_image_meta = rescue_image_meta or image_meta
+        property_name = 'hw_ephemeral_encryption_secret_uuid'
+        img_secret_uuid = active_image_meta.properties.get(property_name)
+        if img_secret_uuid:
+            # The system metadata key format for the rescue image follows the
+            # existing image property format (image_<property_name>) with a
+            # prefix of 'rescue_'.
+            instance.system_metadata.update(
+                {'rescue_image_' + property_name: img_secret_uuid})
+            instance.save()
+
+        # If ephemeral encryption was requested, add the encryption attributes
+        # to the disk_info_mapping for the rescue disk.
+        if hardware.get_ephemeral_encryption_constraint(
+                instance.flavor, rescue_image_meta or image_meta):
+            # Create a BDM object for the rescue disk to maintain consistency
+            # with how all other ephemeral encryption is handled. However we
+            # are NOT going to persist it to the database so as not to
+            # interfere with the instance's existing BDM database records.
+            #
+            # boot_index = -1 is equivalent to "None", the boot ordering will
+            # be handled later by passing the boot_order kwarg to
+            # _get_guest_disk_config.
+            bdm_dict = block_device.create_image_bdm(
+                rescue_image_id, boot_index=-1)
+            bdm_obj = objects.BlockDeviceMapping(**bdm_dict)
+            # UUID is only generated by the object if it's persisted in the
+            # database.
+            bdm_obj.uuid = uuidutils.generate_uuid()
+
+            # Update the BDM with ephemeral encryption attributes from the
+            # flavor or image.
+            compute_utils.update_ephemeral_encryption_bdms(
+                instance.flavor, rescue_image_meta or image_meta,
+                [bdm_obj])
+
+            # Stash the encryption secret for the rescue image to use when
+            # fetching and potentially converting the encrypted rescue image.
+            # secret_image_prop = 'hw_ephemeral_encryption_secret_uuid'
+
+            # Get a block_device_info which represents only the rescue disk.
+            rescue_bdi = driver.get_block_device_info(instance, [bdm_obj])
+
+            # Delete any potential leftover rescue disk secrets in libvirt.
+            secret_usage = instance.system_metadata.get(
+                'rescue_disk_secret_usage')
+            if (secret_usage and self._host.find_secret(
+                    'volume', secret_usage) is not None):
+                self._host.delete_secret('volume', secret_usage)
+
+            # Don't use a real guest_format for the rescue disk, just in case.
+            rescue_bdi['image'][0]['guest_format'] = 'rescue'
+            rescue_bdi = self._add_ephemeral_encryption_driver_bdm_attrs(
+                context, instance, rescue_bdi, persist=False)
+
+            # Extract the driver BDM for the rescue disk which now contains
+            # default encryption attribute values where required.
+            rescue_bdms = driver.block_device_info_get_encrypted_disks(
+                rescue_bdi)
+
+            # Add encryption info to the disk mapping and stash the secret UUID
+            # in the instance system metadata. We need to do this because
+            # normally the secret UUID would be in the BDM database record but
+            # we are not persisting any BDM data for the rescue disk.
+            if rescue_bdms:
+                rescue_bdm = rescue_bdms[0]
+                rescue_encryption = blockinfo.get_encryption_info_from_bdm(
+                    rescue_bdm)
+                disk_info['mapping']['disk.rescue'].update(rescue_encryption)
+                disk_secret_uuid = rescue_bdm.get('encryption_secret_uuid')
+                if disk_secret_uuid:
+                    secret_key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+                    instance.system_metadata.update(
+                        {secret_key: disk_secret_uuid})
+                    secret_usage = f'{instance.uuid}_{rescue_bdm.uuid}'
+                    instance.system_metadata.update(
+                        {'rescue_disk_secret_usage': secret_usage})
+                    instance.save()
+
+            # If this is not a stable rescue, we need to add encryption
+            # info back to the image disk if it is encrypted.
+            if rescue_image_meta is None:
+                # We need to use the original block_device_info here
+                # because block_device_info will have been set to None for
+                # legacy rescue earlier in this method.
+                image_bdms = driver.block_device_info_get_image(
+                    original_block_device_info)
+                if image_bdms:
+                    image_bdm = image_bdms[0]
+                    disk_info['mapping']['disk'].update(
+                        blockinfo.get_encryption_info_from_bdm(image_bdm))
 
     def unrescue(
         self,
@@ -4542,6 +4688,41 @@ class LibvirtDriver(driver.ComputeDriver):
                                       disk.endswith('.rescue'))
             rbd_utils.RBDDriver().cleanup_volumes(filter_fn)
 
+        # Cleanup ephemeral encryption secrets for the rescue disk if needed.
+        self._cleanup_for_unrescue_with_encryption(context, instance)
+
+    def _cleanup_for_unrescue_with_encryption(self, context, instance):
+        # First, cleanup the secret we created for the local rescue disk which
+        # we have now destroyed.
+        secret_uuid = instance.system_metadata.get(
+            'rescue_disk_ephemeral_encryption_secret_uuid')
+        if secret_uuid:
+            try:
+                crypto.delete_encryption_secret(context, instance, secret_uuid)
+                del instance.system_metadata[
+                    'rescue_disk_ephemeral_encryption_secret_uuid']
+            except Exception:
+                LOG.warning(
+                    f'Failed to delete secret {secret_uuid} from the '
+                    'key manager', instance=instance)
+
+        secret_usage = instance.system_metadata.get('rescue_disk_secret_usage')
+        if secret_usage:
+            try:
+                if self._host.find_secret('volume', secret_usage):
+                    self._host.delete_secret('volume', secret_usage)
+                del instance.system_metadata['rescue_disk_secret_usage']
+            except Exception:
+                LOG.warning(
+                    f'Failed to delete libvirt secret {secret_usage}',
+                    instance=instance)
+
+        # Then, cleanup the stashed rescue image encryption secret UUID if the
+        # rescue image was encrypted.
+        secret_sysmeta_key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
+        if secret_sysmeta_key in instance.system_metadata:
+            del instance.system_metadata[secret_sysmeta_key]
+
     def poll_rebooting_instances(self, timeout, instances):
         pass
 
@@ -4550,6 +4731,7 @@ class LibvirtDriver(driver.ComputeDriver):
         context: nova_context.RequestContext,
         instance: 'objects.Instance',
         block_device_info: ty.Dict[str, ty.Any],
+        persist: bool = True,
     ) -> ty.Optional[ty.Dict[str, ty.Any]]:
         """Add ephemeral encryption attributes to driver BDMs before use."""
         encrypted_bdms = driver.block_device_info_get_encrypted_disks(
@@ -4617,7 +4799,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
-                driver_bdm.save()
+                if persist:
+                    driver_bdm.save()
 
                 # Stash the passphrase itself in a libvirt secret using the
                 # same UUID as the key manager secret for easy retrieval later
@@ -11283,8 +11466,12 @@ class LibvirtDriver(driver.ComputeDriver):
         # metadata. The image properties from the image are stashed in the
         # instance system metadata in _populate_instance_for_create() in
         # nova.compute.API..
-        secret_uuid = instance.system_metadata.get(
-            utils.SM_IMAGE_PROP_PREFIX + 'hw_ephemeral_encryption_secret_uuid')
+        secret_image_prop = 'hw_ephemeral_encryption_secret_uuid'
+        rescue_image_secret_uuid = instance.system_metadata.get(
+            'rescue_' + utils.SM_IMAGE_PROP_PREFIX + secret_image_prop)
+        orig_image_secret_uuid = instance.system_metadata.get(
+            utils.SM_IMAGE_PROP_PREFIX + secret_image_prop)
+        secret_uuid = rescue_image_secret_uuid or orig_image_secret_uuid
         image_encryption = None
         if secret_uuid:
             LOG.debug(
