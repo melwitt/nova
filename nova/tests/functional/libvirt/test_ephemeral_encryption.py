@@ -10,6 +10,8 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+from unittest import mock
+
 import fixtures
 from oslo_log import log as logging
 from oslo_utils.fixture import uuidsentinel as uuids
@@ -17,6 +19,7 @@ from oslo_utils.fixture import uuidsentinel as uuids
 import nova.conf
 from nova import context as nova_context
 from nova import crypto
+from nova import exception
 from nova import objects
 from nova.tests.functional.api import client as api_client
 from nova.tests.functional.libvirt import base
@@ -61,13 +64,14 @@ class EphemeralEncryptionTestBase(base.ServersTestBase):
         # Return a dict of {uuid: secret}
         return {obj.id: obj.value for obj in self.key_mgr.list(ctx)}
 
-    def assertSecretsMatch(self, server, num_expected, driver, bdms=None):
-        # Verify the expected number of secrets are in the key manager.
-        keymgr_secrets = self._get_key_mgr_secrets(self.context)
-        self.assertEqual(num_expected, len(keymgr_secrets))
+    def assertLibvirtSecretsMatch(
+            self, server, num_expected, driver, bdms=None,
+            keymgr_secrets=None):
         if bdms is None:
             bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 self.context, server['id'])
+        if keymgr_secrets is None:
+            keymgr_secrets = self._get_key_mgr_secrets(self.context)
         # Verify the expected number of BDMs.
         self.assertEqual(num_expected, len(bdms))
         # Verify that the BDM libvirt secrets match the secrets in the key
@@ -78,6 +82,13 @@ class EphemeralEncryptionTestBase(base.ServersTestBase):
             self.assertEqual(
                 s.value(), keymgr_secrets[bdm.encryption_secret_uuid])
         return bdms
+
+    def assertSecretsMatch(self, server, num_expected, driver, bdms=None):
+        # Verify the expected number of secrets are in the key manager.
+        keymgr_secrets = self._get_key_mgr_secrets(self.context)
+        self.assertEqual(num_expected, len(keymgr_secrets))
+        return self.assertLibvirtSecretsMatch(
+            server, num_expected, driver, bdms=bdms)
 
     def assertLibvirtSecretsDeleted(self, bdms, driver):
         # Verify that libvirt secrets were deleted for each disk.
@@ -784,3 +795,151 @@ class EphemeralEncryptionTestRebuild(EphemeralEncryptionTestBase):
 
         # Verify that libvirt secrets were deleted for each disk.
         self.assertSecretsDeleted(bdms, self.driver)
+
+
+class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
+
+    def setUp(self):
+        super().setUp()
+        self.useFixture(fixtures.MockPatch('builtins.open'))
+        self.useFixture(fixtures.MockPatch('os.unlink'))
+
+    def test_rescue_server(self, rescue_image_id=None):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Rescue the server.
+        self._rescue_server(server, image_uuid=rescue_image_id)
+
+        # We should have an additional secret created for the rescue disk.
+        keymgr_secrets_after_rescue = self._get_key_mgr_secrets(self.context)
+        self.assertEqual(4, len(keymgr_secrets_after_rescue))
+
+        # We should still have the same libvirt secrets for the disks.
+        self.assertLibvirtSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # We should have secret IDs for the rescue disk stashed in the instance
+        # system metadata.
+        instance = objects.Instance.get_by_uuid(self.context, server['id'])
+        self.assertIn(
+            'rescue_disk_ephemeral_encryption_secret_uuid',
+            instance.system_metadata)
+        self.assertIn(
+            'rescue_disk_ephemeral_encryption_secret_usage',
+            instance.system_metadata)
+
+        # Verify that the rescue disk key manager secret matches.
+        rescue_disk_secret_uuid = instance.system_metadata[
+            'rescue_disk_ephemeral_encryption_secret_uuid']
+        self.assertIn(rescue_disk_secret_uuid, keymgr_secrets_after_rescue)
+
+        # Verify that the rescue disk libvirt secret matches.
+        rescue_disk_secret_usage = instance.system_metadata[
+            'rescue_disk_ephemeral_encryption_secret_usage']
+        s = self.driver._host.find_secret('volume', rescue_disk_secret_usage)
+        self.assertEqual(
+            s.value(), keymgr_secrets_after_rescue[rescue_disk_secret_uuid])
+
+        # Unrescue the server.
+        with mock.patch.object(self.driver._host, 'write_instance_config'):
+            self._unrescue_server(server)
+
+        # We should have cleaned up the rescue disk key manager encryption
+        # secrets.
+        keymgr_secrets_after_unrescue = self._get_key_mgr_secrets(self.context)
+        self.assertEqual(3, len(keymgr_secrets_after_unrescue))
+        self.assertNotIn(
+            rescue_disk_secret_uuid, keymgr_secrets_after_unrescue)
+
+        # We should still have the same libvirt secrets for the non rescue
+        # disks.
+        self.assertSecretsMatch(server, 3, self.driver, bdms=bdms)
+
+        # And we should have also cleaned up the rescue disk libvirt secret.
+        s = self.driver._host.find_secret('volume', rescue_disk_secret_usage)
+        self.assertIsNone(s)
+
+        # We should have cleaned the rescue disk related instance system
+        # metadata.
+        instance.refresh()
+        self.assertNotIn(
+            'rescue_disk_ephemeral_encryption_secret_uuid',
+            instance.system_metadata)
+        self.assertNotIn(
+            'rescue_disk_ephemeral_encryption_secret_usage',
+            instance.system_metadata)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_rescue_server_with_image(self):
+        self.test_rescue_server(
+            rescue_image_id='70a599e0-31e7-49b7-b260-868f441e862b')
+
+    def test_rescue_server_with_config_option(self):
+        self.flags(
+            rescue_image_id='70a599e0-31e7-49b7-b260-868f441e862b',
+            group='libvirt')
+        self.test_rescue_server()
+
+    def test_stable_rescue_server(self):
+        image_properties = {
+            'hw_rescue_device': 'disk',
+            'hw_rescue_bus': 'virtio',
+        }
+        image_id = self._create_image(image_properties)['id']
+        self.test_rescue_server(rescue_image_id=image_id)
+
+    def test_rescue_server_with_encrypted_image_missing_secret(self):
+        # Simulate an encrypted image with secret ID in the image properties.
+        image_properties = {
+            'hw_ephemeral_encryption_secret_uuid': uuids.secret,
+        }
+        image_id = self._create_image(image_properties)['id']
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # Simulate a failure to find the secret for the rescue image in the key
+        # manager.
+        self.driver._create_image.side_effect = (
+            exception.EphemeralEncryptionSecretNotFound(
+            'Failed to find encryption secret in the key manager for image'))
+
+        # Rescue the server.
+        self._rescue_server(
+            server, image_uuid=image_id, expected_state='ACTIVE')
+        self._wait_for_action_fail_completion(
+            server, 'rescue', 'compute_rescue_instance')
+
+        # Verify that the rescue instance action shows an error.
+        actions = objects.InstanceActionList.get_by_instance_uuid(
+            self.context, server['id'])
+        rescue_action = None
+        for action in actions:
+            if action.action == 'rescue':
+                rescue_action = action
+                break
+        self.assertEqual('Error', rescue_action.message)
+
+        # Verify that the instance action event for the rescue shows a result
+        # of error and the expected message in the details.
+        events = objects.InstanceActionEventList.get_by_action(
+            self.context, rescue_action.id)
+        self.assertIn(
+            'Failed to find encryption secret in the key manager for image',
+            events[0].details)
+        self.assertEqual('Error', events[0].result)
+
+        # Verify the server is still in ACTIVE state and we didn't put it into
+        # ERROR.
+        server = self._show_server(server)
+        self.assertEqual('ACTIVE', server['status'])

@@ -25460,9 +25460,12 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
 
             return backend, etree.fromstring(domain_xml[0])
 
-    def test_rescue(self):
-        instance = self._create_instance({'config_drive': None})
-        backend, doc = self._test_rescue(instance)
+    def test_rescue(self, instance=None, image_meta_dict=None):
+        if instance is None:
+            instance = self._create_instance({'config_drive': None})
+
+        backend, doc = self._test_rescue(
+            instance, image_meta_dict=image_meta_dict)
 
         # Assert that we created the expected set of disks, and no others
         self.assertEqual(['disk.rescue', 'kernel.rescue', 'ramdisk.rescue'],
@@ -25501,6 +25504,90 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         self.assertEqual(
             [uuids.mdev1],
             doc.xpath("devices/*[@type='mdev']/source/address/@uuid"))
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch('nova.crypto.create_encryption_secret')
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_rescue_with_ephemeral_encryption_image_encrypted(
+            self, mock_get_secret, mock_create_secret, mock_save,
+            disk_encrypted=False):
+        # A secret will be retrieved to read the encrypted source image.
+        mock_get_secret.return_value = mock.sentinel.img_secret
+        # A secret will be created to write the rescue disk.
+        mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
+        instance = self._create_instance({'config_drive': None})
+        # Simulate an encrypted rescue image.
+        image_meta_dict = {
+            'id': uuids.image_id,
+            'name': 'fake',
+            'properties': {
+                # This is the secret UUID for the encrypted rescue image.
+                'hw_ephemeral_encryption_secret_uuid': uuids.img_secret,
+            }
+        }
+        if disk_encrypted:
+            # This is specifying encryption for disks.
+            image_meta_dict['properties']['hw_ephemeral_encryption'] = 'true'
+
+        self.test_rescue(instance=instance, image_meta_dict=image_meta_dict)
+
+        # Verify that the encryption secret for the encrypted source image for
+        # the rescue disk has been stashed in the instance system metadata.
+        key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
+        self.assertEqual(uuids.img_secret, instance.system_metadata[key])
+        # Verify we retrieved the secret for the encrypted source rescue image.
+        mock_get_secret.assert_called_once_with(self.context, uuids.img_secret)
+
+        save_calls = 1
+        if disk_encrypted:
+            # Verify that the encryption secret for the encrypted rescue disk
+            # has been stashed in the instance system metadata.
+            key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+            self.assertEqual(uuids.secret, instance.system_metadata[key])
+            # Verify we created a secret for the encrypted rescue disk.
+            mock_create_secret.assert_called_once()
+            # We should have saved sysmeta changes to the instance twice, for
+            # the rescue image encryption secret UUID and the rescue disk
+            # encryption secret UUID.
+            save_calls = 2
+
+        self.assertEqual(save_calls, mock_save.call_count)
+
+    def test_rescue_with_ephemeral_encryption_image_and_disk_encrypted(self):
+        self.test_rescue_with_ephemeral_encryption_image_encrypted(
+            disk_encrypted=True)
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch('nova.crypto.create_encryption_secret')
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_rescue_with_ephemeral_encryption_disk_encrypted_but_not_image(
+            self, mock_get_secret, mock_create_secret, mock_save):
+        mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
+        # Create an instance with ephemeral encryption specified in the flavor.
+        flavor = objects.Flavor(
+            memory_mb=512, swap=256, vcpu_weight=None, root_gb=10, id=2,
+            name=u'm1.tiny', ephemeral_gb=20, rxtx_factor=1.0, flavorid=u'1',
+            vcpus=1, extra_specs={'hw:ephemeral_encryption': True})
+        instance = self._create_instance(
+            {'config_drive': None, 'flavor': flavor})
+
+        self.test_rescue(instance=instance)
+
+        # Verify that the encryption secret for the encrypted rescue disk has
+        # been stashed in the instance system metadata.
+        key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+        self.assertEqual(uuids.secret, instance.system_metadata[key])
+        # Verify that we have no source image encryption secret.
+        self.assertNotIn(
+            'rescue_image_ephemeral_encryption_secret_uuid',
+            instance.system_metadata)
+        # Verify we created a secret for the encrypted rescue disk.
+        mock_create_secret.assert_called_once()
+        # Verify we did not retrieve any secrets for the image.
+        mock_get_secret.assert_not_called()
+        # We should have saved sysmeta changes to the instance once, for the
+        # rescue disk encryption secret UUID.
+        mock_save.assert_called_once_with()
 
     def test_rescue_with_different_hw_disk_bus(self):
         params = {'config_drive': None, 'root_device_name': '/dev/vda'}
@@ -25588,14 +25675,21 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                           self.context, instance, network_info,
                           rescue_image_meta, None, None)
 
-    def test_rescue_stable_device(self):
+    def test_rescue_stable_device(
+            self, instance=None, rescue_image_meta_dict=None):
         # Assert the imagebackend behaviour and domain device layout
-        instance = self._create_instance({'config_drive': str(True)})
+        if instance is None:
+            instance = self._create_instance({'config_drive': str(True)})
         inst_image_meta_dict = {'id': uuids.image_id, 'name': 'fake'}
-        rescue_image_meta_dict = {'id': uuids.rescue_image_id,
-                                  'name': 'rescue',
-                                  'properties': {'hw_rescue_device': 'disk',
-                                                 'hw_rescue_bus': 'virtio'}}
+        if rescue_image_meta_dict is None:
+            rescue_image_meta_dict = {
+                'id': uuids.rescue_image_id,
+                'name': 'rescue',
+                'properties': {
+                    'hw_rescue_device': 'disk',
+                    'hw_rescue_bus': 'virtio',
+                }
+            }
         block_device_info = {'root_device_name': '/dev/vda',
                              'ephemerals': [
                                 {'guest_format': None,
@@ -25821,6 +25915,94 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         query = "devices/disk[source/@file = '%s']/boot/@order" % disk_path
         self.assertEqual('1', domain.xpath(query)[0])
 
+    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch('nova.crypto.create_encryption_secret')
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_rescue_stable_with_ephemeral_encryption_image_encrypted(
+            self, mock_get_secret, mock_create_secret, mock_save,
+            disk_encrypted=False):
+        # A secret will be retrieved to read the encrypted source image.
+        mock_get_secret.return_value = mock.sentinel.img_secret
+        # A secret will be created to write the rescue disk.
+        mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
+        instance = self._create_instance({'config_drive': str(True)})
+        # Simulate an encrypted rescue image.
+        image_meta_dict = {
+            'id': uuids.rescue_image_id,
+            'name': 'rescue',
+            'properties': {
+                'hw_rescue_device': 'disk',
+                'hw_rescue_bus': 'virtio',
+                # This is the secret UUID for the encrypted rescue image.
+                'hw_ephemeral_encryption_secret_uuid': uuids.img_secret,
+            }
+        }
+        if disk_encrypted:
+            # This is specifying encryption for disks.
+            image_meta_dict['properties']['hw_ephemeral_encryption'] = 'true'
+
+        self.test_rescue_stable_device(
+            instance=instance, rescue_image_meta_dict=image_meta_dict)
+
+        # Verify that the encryption secret for the encrypted source image for
+        # the rescue disk has been stashed in the instance system metadata.
+        key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
+        self.assertEqual(uuids.img_secret, instance.system_metadata[key])
+        # Verify we retrieved the secret for the encrypted source rescue image.
+        mock_get_secret.assert_called_once_with(self.context, uuids.img_secret)
+
+        save_calls = 1
+        if disk_encrypted:
+            # Verify that the encryption secret for the encrypted rescue disk
+            # has been stashed in the instance system metadata.
+            key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+            self.assertEqual(uuids.secret, instance.system_metadata[key])
+            # Verify we created a secret for the encrypted rescue disk.
+            mock_create_secret.assert_called_once()
+            # We should have saved sysmeta changes to the instance twice, for
+            # the rescue image encryption secret UUID and the rescue disk
+            # encryption secret UUID.
+            save_calls = 2
+
+        self.assertEqual(save_calls, mock_save.call_count)
+
+    def test_rescue_stable_with_ephemeral_encryption_image_and_disk_encrypted(
+            self):
+        self.test_rescue_stable_with_ephemeral_encryption_image_encrypted(
+            disk_encrypted=True)
+
+    @mock.patch('nova.objects.instance.Instance.save')
+    @mock.patch('nova.crypto.create_encryption_secret')
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_rescue_stable_with_ephemeral_encryption_disk_encrypted_not_image(
+            self, mock_get_secret, mock_create_secret, mock_save):
+        mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
+        # Create an instance with ephemeral encryption specified in the flavor.
+        flavor = objects.Flavor(
+            memory_mb=512, swap=0, vcpu_weight=None, root_gb=10, id=2,
+            name=u'm1.tiny', ephemeral_gb=20, rxtx_factor=1.0, flavorid=u'1',
+            vcpus=1, extra_specs={'hw:ephemeral_encryption': True})
+        instance = self._create_instance(
+            {'config_drive': str(True), 'flavor': flavor})
+
+        self.test_rescue_stable_device(instance=instance)
+
+        # Verify that the encryption secret for the encrypted rescue disk has
+        # been stashed in the instance system metadata.
+        key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+        self.assertEqual(uuids.secret, instance.system_metadata[key])
+        # Verify that we have no source image encryption secret.
+        self.assertNotIn(
+            'rescue_image_ephemeral_encryption_secret_uuid',
+            instance.system_metadata)
+        # Verify we created a secret for the encrypted rescue disk.
+        mock_create_secret.assert_called_once()
+        # Verify we did not retrieve any secrets for the image.
+        mock_get_secret.assert_not_called()
+        # We should have saved sysmeta changes to the instance once, for the
+        # rescue disk encryption secret UUID.
+        mock_save.assert_called_once_with()
+
     @mock.patch.object(libvirt_utils, 'get_instance_path')
     @mock.patch.object(libvirt_utils, 'load_file')
     @mock.patch.object(host.Host, '_get_domain')
@@ -25879,7 +26061,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_remove_volumes.assert_called_once_with(['lvm.rescue'])
 
     def test_unrescue(self):
-        instance = objects.Instance(uuid=uuids.instance, id=1)
+        instance = objects.Instance(
+            uuid=uuids.instance, id=1, system_metadata={})
         self._test_unrescue(instance)
 
     @mock.patch.object(rbd_utils.RBDDriver, '_destroy_volume')
@@ -25891,7 +26074,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                           mock_disconnect, mock_destroy_volume):
         self.flags(images_type='rbd', group='libvirt')
         mock_connect.return_value = mock.MagicMock(), mock.MagicMock()
-        instance = objects.Instance(uuid=uuids.instance, id=1)
+        instance = objects.Instance(
+            uuid=uuids.instance, id=1, system_metadata={})
         all_volumes = [uuids.other_instance + '_disk',
                        uuids.other_instance + '_disk.rescue',
                        instance.uuid + '_disk',
@@ -25900,6 +26084,49 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         self._test_unrescue(instance)
         mock_destroy_volume.assert_called_once_with(
             mock.ANY, instance.uuid + '_disk.rescue')
+
+    @mock.patch('nova.virt.libvirt.host.Host.delete_secret')
+    @mock.patch('nova.virt.libvirt.host.Host.find_secret')
+    @mock.patch('nova.crypto.delete_encryption_secret')
+    def test_unrescue_with_ephemeral_encryption(
+            self, mock_delete_secret, mock_find_libvirt_secret,
+            mock_delete_libvirt_secret, system_metadata=None):
+        mock_find_libvirt_secret.return_value = mock.Mock()
+
+        if system_metadata is None:
+            system_metadata = {
+                'rescue_disk_ephemeral_encryption_secret_uuid': uuids.secret,
+                'rescue_disk_ephemeral_encryption_secret_usage':
+                    'fake_secret_usage'
+            }
+
+        instance = objects.Instance(
+            uuid=uuids.instance, id=1, system_metadata=system_metadata)
+        self._test_unrescue(instance)
+        # We should have deleted the rescue disk secret in the key manager.
+        mock_delete_secret.assert_called_once_with(
+            self.context, instance.uuid, uuids.secret)
+        # We should have deleted the rescue disk libvirt secret.
+        mock_find_libvirt_secret.assert_called_once_with(
+            'volume', 'fake_secret_usage')
+        mock_delete_libvirt_secret.assert_called_once_with(
+            'volume', 'fake_secret_usage')
+        # We should have deleted the rescue disk secret UUID (and the rescue
+        # image secret UUID, if applicable) from the instance system metadata.
+        self.assertEqual({}, instance.system_metadata)
+
+    def test_unrescue_with_ephemeral_encryption_image_encrypted(self):
+        # Both the rescue disk and the rescue image are encrypted.
+        disk_key = 'rescue_disk_ephemeral_encryption_secret_uuid'
+        image_key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
+        system_metadata = {
+            disk_key: uuids.secret,
+            image_key: uuids.img_secret,
+            'rescue_disk_ephemeral_encryption_secret_usage':
+                'fake_secret_usage',
+        }
+        self.test_unrescue_with_ephemeral_encryption(
+            system_metadata=system_metadata)
 
     @mock.patch('shutil.rmtree')
     @mock.patch('os.rename')
