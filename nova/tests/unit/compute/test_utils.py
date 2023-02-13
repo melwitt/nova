@@ -41,6 +41,7 @@ from nova import objects
 from nova.objects import base
 from nova.objects import block_device as block_device_obj
 from nova.objects import fields
+from nova.objects import image_meta as image_meta_obj
 from nova import rpc
 from nova.scheduler.client import report
 from nova import test
@@ -1273,6 +1274,41 @@ class ComputeUtilsTestCase(test.NoDBTestCase):
         mock_log_exception.assert_called_once()
         self.assertIn('Error while trying to clean up image',
                       mock_log_exception.call_args[0][0])
+
+    def test_update_ephemeral_encryption_bdms(self):
+        flavor = objects.Flavor(**test_flavor.fake_flavor)
+        flavor.extra_specs = {
+            'hw:ephemeral_encryption': True,
+            'hw:ephemeral_encryption_format': 'luks',
+        }
+        block_device_mapping = [
+                {'device_name': '/dev/sda1',
+                 'source_type': 'snapshot', 'destination_type': 'volume',
+                 'snapshot_id': uuids.snapshot_id,
+                 'delete_on_termination': False,
+                 'boot_index': 0},
+                {'device_name': '/dev/sdb2',
+                 'source_type': 'image', 'destination_type': 'local',
+                 'image_id': uuids.image_id, 'delete_on_termination': False},
+                {'device_name': '/dev/sdb3',
+                 'source_type': 'blank', 'destination_type': 'local',
+                 'guest_format': 'ext3', 'delete_on_termination': False}]
+
+        block_device_mapping = (
+                block_device_obj.block_device_make_list_from_dicts(
+                    self.context,
+                    map(fake_block_device.AnonFakeDbBlockDeviceDict,
+                        block_device_mapping)))
+
+        image_meta = image_meta_obj.ImageMeta.from_dict({})
+        compute_utils.update_ephemeral_encryption_bdms(
+            flavor, image_meta, block_device_mapping)
+
+        for bdm in block_device_mapping:
+            if bdm.is_local:
+                self.assertTrue(bdm.encrypted)
+            else:
+                self.assertFalse(bdm.encrypted)
 
 
 class ServerGroupTestCase(test.TestCase):
