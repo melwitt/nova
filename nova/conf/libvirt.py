@@ -48,6 +48,12 @@ If the rescue REST API operation doesn't provide an ID of an image to
 use, the image which is referenced by this ID is used. If this
 option is not set, the image from the instance is used.
 
+.. warning::
+    Be careful when using an encrypted image as the default rescue image. It
+    would require that all end users have permissions to access the secret
+    indicated in the hw_ephemeral_encryption_secret_uuid image property of the
+    rescue image.
+
 Possible values:
 
 * An ID of an image or nothing. If it points to an *Amazon Machine
