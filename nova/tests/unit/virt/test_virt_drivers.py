@@ -271,7 +271,10 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
                                                   network_info)
 
     @catch_notimplementederror
-    def test_rescue(self):
+    @mock.patch('nova.objects.ImageMeta.from_image_ref')
+    def test_rescue(self, mock_from_image_ref):
+        mock_from_image_ref.return_value = objects.ImageMeta.from_dict({})
+
         image_meta = objects.ImageMeta.from_dict({})
         instance_ref, network_info = self._get_running_instance()
         self.connection.rescue(self.ctxt, instance_ref, network_info,
@@ -283,8 +286,11 @@ class _VirtDriverTestCase(_FakeDriverBackendTestCase):
         self.connection.unrescue(self.ctxt, instance_ref)
 
     @catch_notimplementederror
+    @mock.patch('nova.objects.ImageMeta.from_image_ref')
     @mock.patch('os.unlink')
-    def test_unrescue_rescued_instance(self, mock_unlink):
+    def test_unrescue_rescued_instance(self, mock_unlink, mock_from_image_ref):
+        mock_from_image_ref.return_value = objects.ImageMeta.from_dict({})
+
         image_meta = objects.ImageMeta.from_dict({})
         instance_ref, network_info = self._get_running_instance()
         self.connection.rescue(self.ctxt, instance_ref, network_info,
