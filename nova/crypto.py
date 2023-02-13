@@ -260,17 +260,22 @@ def delete_vtpm_secret(
 
 def create_encryption_secret(
     context: nova_context.RequestContext,
-    instance: 'objects.Instance',
-    driver_bdm: 'driver_block_device.DriverBlockDevice',
+    instance: ty.Optional['objects.Instance'],
+    driver_bdm: ty.Optional['driver_block_device.DriverBlockDevice'],
+    secret_name: str = None,
 ):
+    if secret_name is None and (instance is None or driver_bdm is None):
+        raise ValueError(
+            'must provide either driver_bdm and instance or secret_name')
     # Use oslo.serialization to encode some random data as passphrase
     secret = oslo_base64.encode_as_text(
         os.urandom(_EPHEMERAL_ENCRYPTION_SECRET_BYTE_LENGTH)
     )
-    secret_name = (
-        f"Ephemeral encryption secret for instance "
-        f"{instance.uuid} BDM {driver_bdm['uuid']}"
-    )
+    if secret_name is None:
+        secret_name = (
+            f"Ephemeral encryption secret for instance "
+            f"{instance.uuid} BDM {driver_bdm['uuid']}"
+        )
     cmo = passphrase.Passphrase(secret, name=secret_name)
     key_mgr = _get_key_manager()
     secret_uuid = key_mgr.store(context, cmo)
