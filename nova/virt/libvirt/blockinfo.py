@@ -359,6 +359,21 @@ def get_config_drive_type():
     return config_drive_type
 
 
+def get_encryption_info_from_bdm(bdm):
+    bdm_info = {}
+
+    if bdm.get('encrypted'):
+        bdm_info['encrypted'] = bdm.get('encrypted')
+        bdm_info['encryption_secret_uuid'] = bdm.get('encryption_secret_uuid')
+        bdm_info['encryption_format'] = bdm.get('encryption_format')
+        encryption_options = bdm.get('encryption_options')
+        if encryption_options:
+            bdm_info['encryption_options'] = jsonutils.loads(
+                encryption_options)
+
+    return bdm_info
+
+
 def get_info_from_bdm(instance, virt_type, image_meta, bdm,
                       mapping=None, disk_bus=None,
                       dev_type=None, allowed_types=None,
@@ -402,14 +417,7 @@ def get_info_from_bdm(instance, virt_type, image_meta, bdm,
         bdm_info['boot_index'] = str(boot_index + 1)
 
     # If the device is encrypted pass through the secret, format and options
-    if bdm.get('encrypted'):
-        bdm_info['encrypted'] = bdm.get('encrypted')
-        bdm_info['encryption_secret_uuid'] = bdm.get('encryption_secret_uuid')
-        bdm_info['encryption_format'] = bdm.get('encryption_format')
-        encryption_options = bdm.get('encryption_options')
-        if encryption_options:
-            bdm_info['encryption_options'] = jsonutils.loads(
-                encryption_options)
+    bdm_info.update(get_encryption_info_from_bdm(bdm))
 
     return bdm_info
 
@@ -505,7 +513,7 @@ def get_disk_mapping(virt_type, instance, disk_bus, cdrom_bus, image_meta,
     # the rescue disk, original root disk and optional config drive.
     if rescue and rescue_image_meta is None:
         return _get_rescue_disk_mapping(
-            virt_type, instance, disk_bus, image_meta)
+            virt_type, instance, disk_bus, image_meta, block_device_info)
 
     # NOTE(lyarwood): This is a new stable rescue attempt so provide a mapping
     # with the original mapping *and* rescue disk appended to the end.
@@ -520,7 +528,9 @@ def get_disk_mapping(virt_type, instance, disk_bus, cdrom_bus, image_meta,
         block_device_info)
 
 
-def _get_rescue_disk_mapping(virt_type, instance, disk_bus, image_meta):
+def _get_rescue_disk_mapping(
+    virt_type, instance, disk_bus, image_meta, block_device_info
+):
     """Build disk mapping for a legacy instance rescue
 
     This legacy method of rescue requires that the rescue device is attached
@@ -542,6 +552,12 @@ def _get_rescue_disk_mapping(virt_type, instance, disk_bus, image_meta):
     os_info = get_next_disk_info(mapping,
                                  disk_bus)
     mapping['disk'] = os_info
+
+    # Add ephemeral encryption info to the mapping if disk is encrypted.
+    image = driver.block_device_info_get_image(block_device_info)
+    if image:
+        orig_root_bdm = image[0]
+        mapping['disk'].update(get_encryption_info_from_bdm(orig_root_bdm))
 
     if configdrive.required_by(instance):
         device_type = get_config_drive_type()

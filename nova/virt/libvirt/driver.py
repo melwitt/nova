@@ -4384,10 +4384,10 @@ class LibvirtDriver(driver.ComputeDriver):
 
         else:
             LOG.info("Attempting rescue", instance=instance)
-            # NOTE(lyarwood): A legacy rescue only provides the rescue device
-            # and the original root device so we don't need to provide
-            # block_device_info to the get_disk_info call.
-            block_device_info = None
+            # NOTE(melwitt): A legacy rescue only provides the rescue device
+            # and the original root device, but we still need to provide
+            # block_device_info to the get_disk_info call because the disk
+            # might be encrypted.
 
         disk_info = blockinfo.get_disk_info(virt_type, instance, image_meta,
             rescue=True, block_device_info=block_device_info,
