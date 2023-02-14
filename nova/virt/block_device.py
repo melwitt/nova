@@ -212,10 +212,20 @@ class DriverBlockDevice(dict):
 
 
 class DriverSwapBlockDevice(DriverBlockDevice):
+    _new_only_fields = set([
+        'encrypted',
+        'encryption_secret_uuid',
+        'encryption_format',
+        'encryption_options'
+    ])
     _fields = set(['device_name', 'swap_size', 'disk_bus'])
-
-    _update_on_save = {'disk_bus': None,
-                       'device_name': None}
+    _update_on_save = {
+        'disk_bus': None,
+        'device_name': None,
+        'encryption_secret_uuid': None,
+        'encryption_format': None,
+        'encryption_options': None,
+    }
 
     def _transform(self):
         if not block_device.new_format_is_swap(self._bdm_obj):
@@ -223,7 +233,11 @@ class DriverSwapBlockDevice(DriverBlockDevice):
         self.update({
             'device_name': self._bdm_obj.device_name,
             'swap_size': self._bdm_obj.volume_size or 0,
-            'disk_bus': self._bdm_obj.disk_bus
+            'disk_bus': self._bdm_obj.disk_bus,
+            'encrypted': self._bdm_obj.encrypted,
+            'encryption_secret_uuid': self._bdm_obj.encryption_secret_uuid,
+            'encryption_format': self._bdm_obj.encryption_format,
+            'encryption_options': self._bdm_obj.encryption_options
         })
 
 
