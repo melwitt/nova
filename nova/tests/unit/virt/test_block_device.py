@@ -62,12 +62,20 @@ class TestDriverBlockDevice(test.NoDBTestCase):
          'guest_format': 'swap',
          'disk_bus': 'scsi',
          'volume_size': 2,
-         'boot_index': -1})
+         'boot_index': -1,
+         'encrypted': False,
+         'encryption_secret_uuid': None,
+         'encryption_format': None,
+         'encryption_options': None})
 
     swap_driver_bdm = {
         'device_name': '/dev/sdb1',
         'swap_size': 2,
-        'disk_bus': 'scsi'}
+        'disk_bus': 'scsi',
+        'encrypted': False,
+        'encryption_secret_uuid': None,
+        'encryption_format': None,
+        'encryption_options': None}
 
     ephemeral_bdm_dict = block_device.BlockDeviceDict(
         {'id': 2, 'instance_uuid': uuids.instance,
