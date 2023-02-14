@@ -3319,7 +3319,11 @@ class ComputeTestCase(BaseTestCase,
                 'swap': {
                     'device_name': '/dev/vdd',
                     'swap_size': 1,
-                    'disk_bus': 'virtio'
+                    'disk_bus': 'virtio',
+                    'encrypted': False,
+                    'encryption_secret_uuid': None,
+                    'encryption_format': None,
+                    'encryption_options': None,
                 },
                 'ephemerals': [
                     {
