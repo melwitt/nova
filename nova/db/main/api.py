@@ -4407,6 +4407,9 @@ def _archive_deleted_rows_for_table(
     select = select.order_by(column).limit(max_rows)
     with conn.begin():
         rows = conn.execute(select).fetchall()
+
+    # This is a list of IDs of rows that should be archived from this table,
+    # limited to a length of max_rows.
     records = [r[0] for r in rows]
 
     # We will archive deleted rows for this table and also generate insert and
@@ -4419,51 +4422,72 @@ def _archive_deleted_rows_for_table(
 
     # Keep track of any extra tablenames to number of rows that we archive by
     # following FK relationships.
-    # {tablename: extra_rows_archived}
+    #
+    # extras = {'tablename': number_of_extra_rows_archived}
     extras = collections.defaultdict(int)
     if records:
-        insert = shadow_table.insert().from_select(
-            columns, sql.select(table).where(column.in_(records))
-        ).inline()
-        delete = table.delete().where(column.in_(records))
-        # Walk FK relationships and add insert/delete statements for rows that
-        # refer to this table via FK constraints. fk_inserts and fk_deletes
-        # will be prepended to by _get_fk_stmts if referring rows are found by
-        # FK constraints.
-        fk_inserts, fk_deletes = _get_fk_stmts(
-            metadata, conn, table, column, records)
+        # (melwitt): We will gather rows related by foreign key relationship
+        # for each deleted row, one at a time. We need to do this because in a
+        # large scale database with thousands of deleted rows, if we don't
+        # archive each individual parent row to child rows "tree" together and
+        # we instead try to archive the entire list of deleted rows at the same
+        # time, we can get into a situation where we will never reach the
+        # parent rows because there are far more child rows than max_rows. And
+        # increasing max_rows will eventually result in either a deadlock
+        # timeout or max packet size limit error from the database. In a
+        # deployment with a constant high volume of create/delete traffic, it
+        # could become impossible to ever archive any parent rows.
+        for record in records:
+            insert = shadow_table.insert().from_select(
+                columns, sql.select(table).where(column.in_([record]))
+            ).inline()
+            delete = table.delete().where(column.in_([record]))
+            # Walk FK relationships and add insert/delete statements for rows
+            # that refer to this table via FK constraints. fk_inserts and
+            # fk_deletes will be prepended to by _get_fk_stmts if referring
+            # rows are found by FK constraints.
+            fk_inserts, fk_deletes = _get_fk_stmts(
+                metadata, conn, table, column, [record])
 
-        # NOTE(tssurya): In order to facilitate the deletion of records from
-        # instance_mappings, request_specs and instance_group_member tables in
-        # the nova_api DB, the rows of deleted instances from the instances
-        # table are stored prior to their deletion. Basically the uuids of the
-        # archived instances are queried and returned.
-        if tablename == "instances":
-            query_select = sql.select(table.c.uuid).where(
-                table.c.id.in_(records)
-            )
-            with conn.begin():
-                rows = conn.execute(query_select).fetchall()
-            deleted_instance_uuids = [r[0] for r in rows]
+            # NOTE(tssurya): In order to facilitate the deletion of records
+            # from instance_mappings, request_specs and instance_group_member
+            # tables in the nova_api DB, the rows of deleted instances from the
+            # instances table are stored prior to their deletion. Basically the
+            # uuids of the archived instances are queried and returned.
+            if tablename == "instances":
+                query_select = sql.select(table.c.uuid).where(
+                    table.c.id.in_([record])
+                )
+                with conn.begin():
+                    rows = conn.execute(query_select).fetchall()
+                # deleted_instance_uuids = ['uuid1', 'uuid2', ...]
+                deleted_instance_uuids = [r[0] for r in rows]
 
-        try:
-            # Group the insert and delete in a transaction.
-            with conn.begin():
-                for fk_insert in fk_inserts:
-                    conn.execute(fk_insert)
-                for fk_delete in fk_deletes:
-                    result_fk_delete = conn.execute(fk_delete)
-                    extras[fk_delete.table.name] += result_fk_delete.rowcount
-                conn.execute(insert)
-                result_delete = conn.execute(delete)
-            rows_archived += result_delete.rowcount
-        except db_exc.DBReferenceError as ex:
-            # A foreign key constraint keeps us from deleting some of
-            # these rows until we clean up a dependent table.  Just
-            # skip this table for now; we'll come back to it later.
-            LOG.warning("IntegrityError detected when archiving table "
-                        "%(tablename)s: %(error)s",
-                        {'tablename': tablename, 'error': str(ex)})
+            try:
+                # Group the insert and delete in a transaction.
+                with conn.begin():
+                    for fk_insert in fk_inserts:
+                        # Add child rows to the shadow tables.
+                        conn.execute(fk_insert)
+                    for fk_delete in fk_deletes:
+                        # Delete child rows from the main tables.
+                        result_fk_delete = conn.execute(fk_delete)
+                        extras[fk_delete.table.name] += (
+                            result_fk_delete.rowcount)
+                    # Add parent row to the shadow table.
+                    conn.execute(insert)
+                    # Delete parent row from the main table.
+                    result_delete = conn.execute(delete)
+
+                rows_archived += result_delete.rowcount
+
+            except db_exc.DBReferenceError as ex:
+                # A foreign key constraint keeps us from deleting some of
+                # these rows until we clean up a dependent table.  Just
+                # skip this table for now; we'll come back to it later.
+                LOG.warning("IntegrityError detected when archiving table "
+                            "%(tablename)s: %(error)s",
+                            {'tablename': tablename, 'error': str(ex)})
 
     conn.close()
 

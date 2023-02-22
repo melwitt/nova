@@ -417,10 +417,12 @@ class DbCommands(object):
         """
         ctxt = context.get_admin_context()
         while True:
-            run, deleted_instance_uuids, total_rows_archived = \
+            # table_to_rows = {'tablename': number_of_rows_archived}
+            # deleted_instance_uuids = ['uuid1', 'uuid2', ...]
+            table_to_rows, deleted_instance_uuids, total_rows_archived = \
                 db.archive_deleted_rows(
                     cctxt, max_rows, before=before_date, task_log=task_log)
-            for table_name, rows_archived in run.items():
+            for table_name, rows_archived in table_to_rows.items():
                 if cell_name:
                     table_name = cell_name + '.' + table_name
                 table_to_rows_archived.setdefault(table_name, 0)
@@ -449,7 +451,7 @@ class DbCommands(object):
             # If we're not archiving until there is nothing more to archive, we
             # have reached max_rows in this cell DB or there was nothing to
             # archive.
-            if not until_complete or not run:
+            if not until_complete or not any(table_to_rows.values()):
                 break
             if verbose:
                 sys.stdout.write('.')
