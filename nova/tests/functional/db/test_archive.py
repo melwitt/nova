@@ -19,6 +19,7 @@ from dateutil import parser as dateutil_parser
 from oslo_utils import fixture as osloutils_fixture
 from oslo_utils import timeutils
 import sqlalchemy as sa
+from sqlalchemy import engine as sa_engine
 from sqlalchemy import func
 
 from nova import context
@@ -173,6 +174,72 @@ class TestDatabaseArchive(integrated_helpers._IntegratedTestBase):
             if archived == 0:
                 break
         self.assertFalse(exceptions)
+
+    def test_archive_deleted_rows_parent_rows_one_by_one(self):
+        """Test that we are archiving parent and child "trees" one at a time.
+
+        Previously, we archived deleted rows in batches of parents + child rows
+        rounded to max_rows in a single database query (multiple parent rows
+        and child rows). Doing it that way limited how high a value of max_rows
+        could be specified by the caller because of the size of the database
+        query it could generate.
+
+        For example, in a large scale deployment with hundreds of thousands of
+        deleted rows and constant server creation and deletion activity, a
+        value of max_rows=1000 might exceed the database's configured maximum
+        packet size or timeout due to a database deadlock, forcing the operator
+        to use a much lower max_rows value like 100 or 50.
+
+        And when the operator has e.g. 500,000 deleted instances rows (and
+        millions of deleted rows total) they are trying to archive, being
+        forced to use a max_rows value order(s) of magnitude lower than the
+        number of rows they need to archive was a poor user experience.
+
+        This tests that we are archiving each parent plus their child rows as a
+        tree one at a time. The previous way of archiving produced queries like
+        this for instances, for example with max_rows=2:
+
+          INSERT INTO shadow_instances (created_at, updated_at, ..., )
+            SELECT instances.created_at, instances.updated_at, ...,
+            FROM instances WHERE instances.id IN (:id_1_1, :id_1_2)
+
+        and we want to verify that they now look like this:
+
+          INSERT INTO shadow_instances (created_at, updated_at, ..., )
+            SELECT instances.created_at, instances.updated_at, ...,
+            FROM instances WHERE instances.id IN (:id_1_1)
+        """
+        real_execute = sa_engine.Connection.execute
+
+        def fake_execute(*args, **kwargs):
+            # Verify the IN clause parameters, there should only be one if we
+            # are processing one parent at a time.
+            statement = args[1].compile(
+                compile_kwargs={'render_postcompile': True})
+
+            statement_str = str(statement)
+
+            if 'INSERT INTO shadow_instances ' in statement_str:
+                # There should be only one parameter when archiving records
+                # from the instances table.
+                self.assertEqual(1, len(statement.params))
+
+            return real_execute(*args, **kwargs)
+
+        # Boot two servers and delete them, then try to archive rows.
+        for i in range(2):
+            server = self._create_server()
+            self._delete_server(server)
+
+        # Stub out the execute() method with our fake that verifies the
+        # database query.
+        self.stub_out('sqlalchemy.engine.Connection.execute',
+            fake_execute)
+
+        table_to_rows, _, _ = db.archive_deleted_rows(max_rows=100)
+
+        # We should have archived two instances total.
+        self.assertEqual(2, table_to_rows['instances'])
 
     def _get_table_counts(self):
         engine = db.get_engine()
