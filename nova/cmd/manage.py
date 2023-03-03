@@ -427,6 +427,14 @@ class DbCommands(object):
                     table_name = cell_name + '.' + table_name
                 table_to_rows_archived.setdefault(table_name, 0)
                 table_to_rows_archived[table_name] += rows_archived
+
+            instances_archived = table_to_rows_archived.get('instances', 0)
+            # deleted_instance_uuids does not necessarily mean that any
+            # instances rows were archived as it does a separate query.
+            #if (
+            #    deleted_instance_uuids and
+            #    instances_archived == len(deleted_instance_uuids)
+            #):
             if deleted_instance_uuids:
                 table_to_rows_archived.setdefault(
                     'API_DB.instance_mappings', 0)
