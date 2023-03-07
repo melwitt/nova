@@ -4423,20 +4423,22 @@ def _archive_deleted_rows_for_table(
     # Keep track of any extra tablenames to number of rows that we archive by
     # following FK relationships.
     #
-    # extras = {'tablename': number_of_extra_rows_archived}
+    # extras = {tablename: number_of_extra_rows_archived}
     extras = collections.defaultdict(int)
     if records:
         # (melwitt): We will gather rows related by foreign key relationship
-        # for each deleted row, one at a time. We need to do this because in a
-        # large scale database with thousands of deleted rows, if we don't
-        # archive each individual parent row to child rows "tree" together and
-        # we instead try to archive the entire list of deleted rows at the same
-        # time, we can get into a situation where we will never reach the
-        # parent rows because there are far more child rows than max_rows. And
-        # increasing max_rows will eventually result in either a deadlock
-        # timeout or max packet size limit error from the database. In a
-        # deployment with a constant high volume of create/delete traffic, it
-        # could become impossible to ever archive any parent rows.
+        # for each deleted row, one at a time. We do it this way because in a
+        # large scale database with potentially hundreds of thousands of
+        # deleted rows, if we don't archive each individual parent row to child
+        # rows "tree" together and we instead try to archive the entire list of
+        # deleted rows at the same time, we can get into a situation where we
+        # will get stuck not able to make much progress. The value of max_rows
+        # has to be 1) small enough to not exceed the database's max packet
+        # size limit or timeout with a deadlock but 2) large enough to make
+        # progress in an environment with a constant high volume of create and
+        # delete traffic. By archiving each parent and child rows tree
+        # separately, we can ensure meaningful progress can be made while
+        # staying below database limits.
         for record in records:
             insert = shadow_table.insert().from_select(
                 columns, sql.select(table).where(column.in_([record]))
@@ -4461,7 +4463,7 @@ def _archive_deleted_rows_for_table(
                 with conn.begin():
                     rows = conn.execute(query_select).fetchall()
                 # deleted_instance_uuids = ['uuid1', 'uuid2', ...]
-                deleted_instance_uuids = [r[0] for r in rows]
+                deleted_instance_uuids.extend([r[0] for r in rows])
 
             try:
                 # Group the insert and delete in a transaction.

@@ -417,7 +417,7 @@ class DbCommands(object):
         """
         ctxt = context.get_admin_context()
         while True:
-            # table_to_rows = {'tablename': number_of_rows_archived}
+            # table_to_rows = {table_name: number_of_rows_archived}
             # deleted_instance_uuids = ['uuid1', 'uuid2', ...]
             table_to_rows, deleted_instance_uuids, total_rows_archived = \
                 db.archive_deleted_rows(
@@ -428,14 +428,11 @@ class DbCommands(object):
                 table_to_rows_archived.setdefault(table_name, 0)
                 table_to_rows_archived[table_name] += rows_archived
 
-            instances_archived = table_to_rows_archived.get('instances', 0)
             # deleted_instance_uuids does not necessarily mean that any
-            # instances rows were archived as it does a separate query.
-            #if (
-            #    deleted_instance_uuids and
-            #    instances_archived == len(deleted_instance_uuids)
-            #):
-            if deleted_instance_uuids:
+            # instances rows were archived because it is obtained by a query
+            # separate from the archive queries.
+            instances_archived = table_to_rows_archived.get('instances', 0)
+            if deleted_instance_uuids and instances_archived:
                 table_to_rows_archived.setdefault(
                     'API_DB.instance_mappings', 0)
                 table_to_rows_archived.setdefault(
