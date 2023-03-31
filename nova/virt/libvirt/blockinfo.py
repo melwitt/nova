@@ -558,6 +558,13 @@ def _get_rescue_disk_mapping(
     if image:
         orig_root_bdm = image[0]
         mapping['disk'].update(get_encryption_info_from_bdm(orig_root_bdm))
+        # Do the same for the rescue disk. If the user were to copy files from
+        # the original root disk to the rescue disk, the files will remain
+        # encrypted.
+        rescue_bdms = [bdm for bdm in image if bdm['guest_format'] == 'rescue']
+        if rescue_bdms:
+            mapping['disk.rescue'].update(
+                get_encryption_info_from_bdm(rescue_bdms[0]))
 
     if configdrive.required_by(instance):
         device_type = get_config_drive_type()
@@ -705,6 +712,17 @@ def _get_stable_device_rescue_mapping(virt_type, instance, disk_bus, cdrom_bus,
     rescue_info = get_next_disk_info(mapping, rescue_bus,
                                      device_type=rescue_device)
     mapping['disk.rescue'] = rescue_info
+
+    # Add ephemeral encryption info to the mapping if disk is encrypted.
+    image = driver.block_device_info_get_image(block_device_info)
+    if image:
+        # If the user were to copy files from the original root disk to the
+        # rescue disk, the files will remain encrypted.
+        rescue_bdms = [bdm for bdm in image if bdm['guest_format'] == 'rescue']
+        if rescue_bdms:
+            mapping['disk.rescue'].update(
+                get_encryption_info_from_bdm(rescue_bdms[0]))
+
     return mapping
 
 
