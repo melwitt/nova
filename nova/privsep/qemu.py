@@ -131,11 +131,18 @@ def unprivileged_convert_image(
 
             # When --image-opts is used, the source filename must be passed as
             # part of the option string instead of as a positional arg.
+            #
+            # The basic options include the secret and encryption format
+            # Option names depend on the QEMU disk image file format:
+            # https://www.qemu.org/docs/master/system/qemu-block-drivers.html#disk-image-file-formats # noqa
+            # For 'luks' it is 'key-secret' and format is implied
+            # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
+            prefix = 'encrypt.' if in_format == 'qcow2' else ''
             encryption_opts = [
                 '--object', f"secret,id=sec,file={src_secret_file.name}",
                 '--image-opts',
                 f"{driver_str}file.driver=file,file.filename={source},"
-                "encrypt.key-secret=sec",
+                f"{prefix}key-secret=sec",
             ]
 
         if dest_encryption:
@@ -149,11 +156,20 @@ def unprivileged_convert_image(
             # here as that removes the file when using
             # NamedTemporaryFile
             dest_secret_file.flush()
-            encryption_opts += (
+
+            prefix = 'encrypt.' if out_format == 'qcow2' else ''
+            encryption_opts += [
                 '--object', f"secret,id=sec_dest,file={dest_secret_file.name}",
-                '-o', 'encrypt.key-secret=sec_dest',
-                '-o', f"encrypt.format={dest_encryption.get('format')}",
-            )
+                '-o', f'{prefix}key-secret=sec_dest',
+            ]
+            if prefix:
+                # The encryption format is only relevant for the 'qcow2' disk
+                # format. Otherwise, the disk format is 'luks' and the
+                # encryption format is implied and not accepted as an option in
+                # that case.
+                encryption_opts += [
+                    '-o', f"{prefix}format={dest_encryption['format']}"
+                ]
             # Supported luks options:
             #  cipher-alg=<str>       - Name of cipher algorithm and
             #                           key length
