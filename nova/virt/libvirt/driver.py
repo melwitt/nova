@@ -4837,6 +4837,15 @@ class LibvirtDriver(driver.ComputeDriver):
         disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
                       specified_fs=specified_fs)
 
+        if encryption:
+            images.convert_image(
+                target,
+                target,
+                'raw',
+                encryption.get('format'),
+                dest_encryption=encryption,
+            )
+
     @staticmethod
     def _create_swap(target, swap_mb, context=None, encryption=None):
         """Create a swap file of specified size."""

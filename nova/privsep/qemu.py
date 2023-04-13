@@ -99,82 +99,102 @@ def unprivileged_convert_image(
     if compress:
         cmd += ('-c',)
 
-    if encryption:
-        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+    src_secret_file = None
+    dest_secret_file = None
+    encryption_opts = ()
+    try:
+        if encryption:
+            src_secret_file = tempfile.NamedTemporaryFile(
+                mode='tr+', encoding='utf-8')
+
             # Write out the passphrase secret to a temp file
-            f.write(encryption.get('secret'))
+            src_secret_file.write(encryption.get('secret'))
 
             # Ensure the secret is written to disk, we can't .close() here as
             # that removes the file when using NamedTemporaryFile
-            f.flush()
+            src_secret_file.flush()
 
             # When --image-opts is used, the source filename must be passed as
             # part of the option string instead of as a positional arg.
             encryption_opts = (
-                '--object', f"secret,id=sec,file={f.name}",
+                '--object', f"secret,id=sec,file={src_secret_file.name}",
                 '--image-opts',
-                f"encrypt.key-secret=sec,file.filename={source}",
+            )
+            prefix = 'encrypt.' if in_format == 'qcow2' else ''
+            encryption_opts += (
+                f"{prefix}key-secret=sec,file.filename={source}",
+            )
+            if in_format == 'qcow2':
+                encryption_opts += (
+                '-o',
+                f"{prefix}format={encryption.get('format')}",
             )
 
-            if dest_encryption:
-                with tempfile.NamedTemporaryFile(
-                    mode='tr+',
-                    encoding='utf-8'
-                ) as f_dest:
-                    # Write out the passphrase secret to a temp file
-                    f_dest.write(dest_encryption.get('secret'))
+        if dest_encryption:
+            dest_secret_file = tempfile.NamedTemporaryFile(
+                mode='tr+', encoding='utf-8')
 
-                    # Ensure the secret is written to disk, we can't .close()
-                    # here as that removes the file when using
-                    # NamedTemporaryFile
-                    f_dest.flush()
-                    encryption_opts += (
-                        '--object', f"secret,id=sec_dest,file={f_dest.name}",
-                        '-o', 'encrypt.key-secret=sec_dest',
-                        '-o',
-                        f"encrypt.format={dest_encryption.get('format')}",
-                    )
-                    # Supported luks options:
-                    #  cipher-alg=<str>       - Name of cipher algorithm and
-                    #                           key length
-                    #  cipher-mode=<str>      - Name of encryption cipher mode
-                    #  hash-alg=<str>         - Name of hash algorithm to use
-                    #                           for PBKDF
-                    #  iter-time=<num>        - Time to spend in PBKDF in
-                    #                           milliseconds
-                    #  ivgen-alg=<str>        - Name of IV generator algorithm
-                    #  ivgen-hash-alg=<str>   - Name of IV generator hash
-                    #                           algorithm
-                    #
-                    # NOTE(melwitt): Sensible defaults (that match the qemu
-                    # defaults) are hardcoded at this time for simplicity and
-                    # consistency when instances are migrated. Configuration of
-                    # luks options could be added in a future release.
-                    encryption_options = {
-                        'cipher-alg': 'aes-256',
-                        'cipher-mode': 'xts',
-                        'hash-alg': 'sha256',
-                        'iter-time': 2000,
-                        'ivgen-alg': 'plain64',
-                        'ivgen-hash-alg': 'sha256',
-                    }
-                    for option, value in encryption_options.items():
-                        encryption_opts += (
-                            '-o',
-                            f'encrypt.{option}={value}',
-                        )
-                    # We need to execute the command while the
-                    # NamedTemporaryFile still exists
-                    cmd += encryption_opts + (dest,)
-                    processutils.execute(*cmd)
-            else:
-                # We need to execute the command while the NamedTemporaryFile
-                # still exists
-                cmd += encryption_opts + (dest,)
-                processutils.execute(*cmd)
-    else:
-        cmd = cmd + (source, dest)
-        processutils.execute(*cmd)
+            # Write out the passphrase secret to a temp file
+            dest_secret_file.write(dest_encryption.get('secret'))
+
+            # Ensure the secret is written to disk, we can't .close()
+            # here as that removes the file when using
+            # NamedTemporaryFile
+            dest_secret_file.flush()
+
+            prefix = 'encrypt.' if out_format == 'qcow2' else ''
+            encryption_opts += (
+                '--object', f"secret,id=sec_dest,file={dest_secret_file.name}",
+                '-o',
+                f'{prefix}key-secret=sec_dest',
+            )
+            if out_format == 'qcow2':
+                encryption_opts += (
+                '-o',
+                f"{prefix}format={dest_encryption.get('format')}",
+            )
+            # Supported luks options:
+            #  cipher-alg=<str>       - Name of cipher algorithm and
+            #                           key length
+            #  cipher-mode=<str>      - Name of encryption cipher mode
+            #  hash-alg=<str>         - Name of hash algorithm to use
+            #                           for PBKDF
+            #  iter-time=<num>        - Time to spend in PBKDF in
+            #                           milliseconds
+            #  ivgen-alg=<str>        - Name of IV generator algorithm
+            #  ivgen-hash-alg=<str>   - Name of IV generator hash
+            #                           algorithm
+            #
+            # NOTE(melwitt): Sensible defaults (that match the qemu
+            # defaults) are hardcoded at this time for simplicity and
+            # consistency when instances are migrated. Configuration of
+            # luks options could be added in a future release.
+            encryption_options = {
+                'cipher-alg': 'aes-256',
+                'cipher-mode': 'xts',
+                'hash-alg': 'sha256',
+                'iter-time': 2000,
+                'ivgen-alg': 'plain64',
+                'ivgen-hash-alg': 'sha256',
+            }
+            for option, value in encryption_options.items():
+                encryption_opts += (
+                    '-o',
+                    f'{prefix}{option}={value}',
+                )
+
+        if encryption or dest_encryption:
+            cmd += encryption_opts
+
+        if not encryption:
+            cmd += (source,)
+
+        processutils.execute(*cmd + (dest,))
+    finally:
+        if src_secret_file:
+            src_secret_file.close()
+        if dest_secret_file:
+            dest_secret_file.close()
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint
