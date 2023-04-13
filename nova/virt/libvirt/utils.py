@@ -182,10 +182,25 @@ def create_image(
             f.flush()
 
             # The basic options include the secret and encryption format
+            # Option names depend on the QEMU disk image file format:
+            # https://www.qemu.org/docs/master/system/qemu-block-drivers.html#disk-image-file-formats # noqa
+            # For 'luks' it is 'key-secret' and format is implied
+            # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
             encryption_opts = [
                 '--object', f"secret,id=sec,file={f.name}",
-                '-o', 'encrypt.key-secret=sec',
-                '-o', f"encrypt.format={encryption['format']}",
+            ]
+            prefix = ''
+            if disk_format == 'qcow2':
+                # The encryption format is only relevant for the 'qcow2' disk
+                # format. Otherwise, the disk format is 'luks' and the
+                # encryption format is implied and is not accepted as an option
+                # in that case.
+                prefix = 'encrypt.'
+                encryption_opts += [
+                    '-o', f"encrypt.format={encryption['format']}",
+                ]
+            encryption_opts += [
+                '-o', f'{prefix}key-secret=sec',
             ]
             # Supported luks options:
             #  cipher-alg=<str>       - Name of cipher algorithm and key length
@@ -211,7 +226,7 @@ def create_image(
             for option, value in encryption_options.items():
                 encryption_opts += [
                     '-o',
-                    f'encrypt.{option}={value}',
+                    f'{prefix}{option}={value}',
                 ]
 
             # We need to execute the command while the NamedTemporaryFile still
@@ -472,6 +487,7 @@ def fetch_raw_image(
     target: str,
     image_id: str,
     trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
+    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
 ) -> None:
     """Grab initrd or kernel image.
 
@@ -482,6 +498,11 @@ def fetch_raw_image(
     :param target: target path to put the image
     :param image_id: id of the image to fetch
     :param trusted_certs: optional objects.TrustedCerts for image validation
+    :param encryption: (Optional) Dict detailing various encryption attributes
+                       such as the format and passphrase.
+
+    This function is used as a fetch_func, so its signature needs to support
+    the 'encryption' keyword argument even though it doesn't use it.
     """
     images.fetch(context, image_id, target, trusted_certs)
 

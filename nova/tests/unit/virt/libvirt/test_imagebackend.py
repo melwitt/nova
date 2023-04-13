@@ -438,7 +438,8 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
         image.create_image(fn, self.TEMPLATE_PATH, None, image_id=None)
 
         mock_copy.assert_called_once_with(self.TEMPLATE_PATH, self.PATH)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH, image_id=None)
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, image_id=None, encryption=None)
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_extend.called)
         mock_utime.assert_called()
@@ -453,7 +454,7 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
 
         image.create_image(fn, self.TEMPLATE_PATH, None)
 
-        fn.assert_called_once_with(target=self.PATH)
+        fn.assert_called_once_with(target=self.PATH, encryption=None)
         self.assertFalse(mock_copy.called)
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_extend.called)
@@ -479,7 +480,7 @@ class FlatTestCase(_ImageTestCase, test.NoDBTestCase):
         self.assertTrue(mock_sync.called)
         mock_extend.assert_called_once_with(
             imgmodel.LocalFileImage(self.PATH, imgmodel.FORMAT_RAW),
-            self.SIZE)
+            self.SIZE, encryption=None)
         mock_qemu.assert_called_once_with(self.TEMPLATE_PATH)
         mock_utime.assert_called()
 
