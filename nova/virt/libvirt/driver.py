@@ -5275,6 +5275,16 @@ class LibvirtDriver(driver.ComputeDriver):
         raise exception.ConsoleTypeUnavailable(console_type='serial')
 
     @staticmethod
+    @contextlib.contextmanager
+    def _dmcrypt_open(device, name, key, device_type='luks'):
+        nova.privsep.dmcrypt_open_volume(
+            device, name, key, device_type=device_type)
+        try:
+            yield
+        finally:
+            nova.privsep.dmcrypt_close_volume(name)
+
+    @staticmethod
     def _create_ephemeral(target, ephemeral_size,
                           fs_label, os_type, is_block_dev=False,
                           context=None, specified_fs=None,
@@ -5287,18 +5297,57 @@ class LibvirtDriver(driver.ComputeDriver):
                                                  '%dG' % ephemeral_size,
                                                  specified_fs)
                 return
-            libvirt_utils.create_image(target, 'raw', f'{ephemeral_size}G')
 
-        # Run as root only for block devices.
-        disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
-                      specified_fs=specified_fs)
+            disk_format = 'raw'
+            if dest_encryption:
+                disk_format = dest_encryption.get('format')
+            libvirt_utils.create_image(
+                target, disk_format, f'{ephemeral_size}G',
+                encryption=dest_encryption)
+
+        with contextlib.ExitStack() as stack:
+            if dest_encryption:
+                inst_dirname = os.path.dirname(target).rsplit('/')[-1]
+                diskname = os.path.basename(target)
+                # <instance_uuid>.(disk|disk.eph0|disk.swap), for example
+                mapped_dev_name = inst_dirname + '.' + diskname
+                stack.enter_context(LibvirtDriver._dmcrypt_open(
+                    target, mapped_dev_name, dest_encryption.get('secret')))
+                # Replace target with the device mapper name
+                target = f'/dev/mapper/{mapped_dev_name}'
+
+            #  Run as root only for block devices or encrypted devices.
+            disk_api.mkfs(
+                os_type, fs_label, target,
+                run_as_root=is_block_dev or dest_encryption,
+                specified_fs=specified_fs)
 
     @staticmethod
     def _create_swap(target, swap_mb, context=None, encryption=None,
                      dest_encryption=None):
         """Create a swap file of specified size."""
-        libvirt_utils.create_image(target, 'raw', f'{swap_mb}M')
-        nova.privsep.fs.unprivileged_mkfs('swap', target)
+        disk_format = 'raw'
+        if dest_encryption:
+            disk_format = dest_encryption.get('format')
+
+        libvirt_utils.create_image(
+            target, disk_format, f'{swap_mb}M', encryption=dest_encryption)
+
+        mkfs = nova.privsep.fs.unprivileged_mkfs
+
+        with contextlib.ExitStack() as stack:
+            if dest_encryption:
+                inst_dirname = os.path.dirname(target).rsplit('/')[-1]
+                diskname = os.path.basename(target)
+                # <instance_uuid>.(disk|disk.eph0|disk.swap), for example
+                mapped_dev_name = inst_dirname + '.' + diskname
+                stack.enter_context(LibvirtDriver._dmcrypt_open(
+                    target, mapped_dev_name, dest_encryption.get('secret')))
+                # Replace target with the device mapper name
+                target = f'/dev/mapper/{mapped_dev_name}'
+                mkfs = nova.privsep.fs.mkfs
+
+            mkfs('swap', target)
 
     @staticmethod
     def _get_console_log_path(instance):
