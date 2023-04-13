@@ -4831,12 +4831,21 @@ class LibvirtDriver(driver.ComputeDriver):
                                                  '%dG' % ephemeral_size,
                                                  specified_fs)
                 return
-            libvirt_utils.create_image(
-                target, 'raw', f'{ephemeral_size}G', encryption=encryption)
+
+            libvirt_utils.create_image(target, 'raw', f'{ephemeral_size}G')
 
         # Run as root only for block devices.
         disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
                       specified_fs=specified_fs)
+
+        if encryption:
+            images.convert_image(
+                target,
+                target,
+                'raw',
+                encryption.get('format'),
+                dest_encryption=encryption,
+            )
 
     @staticmethod
     def _create_swap(target, swap_mb, context=None):
