@@ -810,7 +810,13 @@ class API:
             # since libvirt interpreted the value differently than other
             # drivers. A value of 0 means don't check size.
             if dest_size != 0:
-                if image_size > dest_size:
+                # If the image is encrypted, the image size reported by glance
+                # could be larger than the disk size requested in the flavor
+                # due to overhead such as the encryption header.
+                encryption = strutils.bool_from_string(
+                    image_properties.get('hw_ephemeral_encryption'))
+
+                if image_size > dest_size and not encryption:
                     raise exception.FlavorDiskSmallerThanImage(
                         flavor_size=dest_size, image_size=image_size)
 

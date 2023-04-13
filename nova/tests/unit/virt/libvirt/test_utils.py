@@ -139,8 +139,8 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
         if encryption:
             encryption_opts = [
                 '--object', f"secret,id=sec,file={fh.name}",
-                '-o', 'encrypt.key-secret=sec',
                 '-o', f"encrypt.format={encryption.get('format')}",
+                '-o', 'encrypt.key-secret=sec',
             ]
 
             encryption_options = {
