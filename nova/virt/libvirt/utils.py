@@ -182,11 +182,23 @@ def create_image(
             f.flush()
 
             # The basic options include the secret and encryption format
+            # Option names depend on the QEMU disk image file format:
+            # https://www.qemu.org/docs/master/system/qemu-block-drivers.html#disk-image-file-formats # noqa
+            # For 'luks' it is 'key-secret' and format is implied
+            # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
+            prefix = 'encrypt.' if disk_format == 'qcow2' else ''
             encryption_opts = [
                 '--object', f"secret,id=sec,file={f.name}",
-                '-o', 'encrypt.key-secret=sec',
-                '-o', f"encrypt.format={encryption['format']}",
+                '-o', f'{prefix}key-secret=sec',
             ]
+            if prefix:
+                # The encryption format is only relevant for the 'qcow2' disk
+                # format. Otherwise, the disk format is 'luks' and the
+                # encryption format is implied and is not accepted as an option
+                # in that case.
+                encryption_opts += [
+                    '-o', f"{prefix}format={encryption['format']}",
+                ]
             # Supported luks options:
             #  cipher-alg=<str>       - Name of cipher algorithm and key length
             #  cipher-mode=<str>      - Name of encryption cipher mode
@@ -211,7 +223,7 @@ def create_image(
             for option, value in encryption_options.items():
                 encryption_opts += [
                     '-o',
-                    f'encrypt.{option}={value}',
+                    f'{prefix}{option}={value}',
                 ]
 
             # We need to execute the command while the NamedTemporaryFile still
