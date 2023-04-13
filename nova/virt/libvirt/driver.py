@@ -4841,6 +4841,22 @@ class LibvirtDriver(driver.ComputeDriver):
         raise exception.ConsoleTypeUnavailable(console_type='serial')
 
     @staticmethod
+    def _convert_for_ephemeral_encryption_raw(target, encryption):
+        # Do conversion like nova.virt.images.fetch_to_raw does.
+        LOG.debug(f"Converting 'raw' to '{encryption.get('format')}'")
+        staged = f'{target}.converted'
+        with fileutils.remove_path_on_error(staged):
+            images.convert_image(
+                target,
+                staged,
+                'raw',
+                encryption.get('format'),
+                dest_encryption=encryption,
+            )
+            os.unlink(target)
+            os.rename(staged, target)
+
+    @staticmethod
     def _create_ephemeral(target, ephemeral_size,
                           fs_label, os_type, is_block_dev=False,
                           context=None, specified_fs=None,
@@ -4859,11 +4875,19 @@ class LibvirtDriver(driver.ComputeDriver):
         disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
                       specified_fs=specified_fs)
 
+        if encryption:
+            LibvirtDriver._convert_for_ephemeral_encryption_raw(
+                target, encryption)
+
     @staticmethod
     def _create_swap(target, swap_mb, context=None, encryption=None):
         """Create a swap file of specified size."""
         libvirt_utils.create_image(target, 'raw', f'{swap_mb}M')
         nova.privsep.fs.unprivileged_mkfs('swap', target)
+
+        if encryption:
+            LibvirtDriver._convert_for_ephemeral_encryption_raw(
+                target, encryption)
 
     @staticmethod
     def _get_console_log_path(instance):
