@@ -15,11 +15,14 @@
 
 from unittest import mock
 
+import ddt
+
 import nova.privsep.qemu
 from nova import test
 from nova.tests import fixtures
 
 
+@ddt.ddt
 class QemuTestCase(test.NoDBTestCase):
     """Test qemu related utility methods."""
 
@@ -57,7 +60,12 @@ class QemuTestCase(test.NoDBTestCase):
     @mock.patch('tempfile.NamedTemporaryFile')
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
-    def test_convert_image_encrypted_source(self, mock_tempfile, mock_execute):
+    @ddt.data(
+        ('qcow2', 'qcow2'), ('qcow2', 'luks'),
+        ('luks', 'luks'), ('luks', 'qcow2'))
+    @ddt.unpack
+    def test_convert_image_encrypted_source(
+            self, in_format, out_format, mock_tempfile, mock_execute):
         # Simulate an encrypted source image conversion to an unencrypted
         # destination image.
         mock_file = mock.Mock()
@@ -66,22 +74,28 @@ class QemuTestCase(test.NoDBTestCase):
         encryption = {'format': 'luks', 'secret': '12345'}
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', 'informat', 'outformat',
+            '/fake/source', '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True, encryption=encryption)
 
         mock_file.write.assert_called_once_with('12345')
         mock_file.flush.assert_called_once()
+        prefix = 'encrypt.' if in_format == 'qcow2' else ''
         mock_execute.assert_called_once_with(
-            'qemu-img', 'convert', '-t', 'none', '-O', 'outformat', '-c',
+            'qemu-img', 'convert', '-t', 'none', '-O', out_format, '-c',
             '--object', 'secret,id=sec,file=/tmp/filename', '--image-opts',
-            'encrypt.key-secret=sec,file.filename=/fake/source', '/fake/dest')
+            f'{prefix}key-secret=sec,file.filename=/fake/source', '/fake/dest')
         mock_file.close.assert_called_once()
 
     @mock.patch('oslo_concurrency.processutils.execute')
     @mock.patch('tempfile.NamedTemporaryFile')
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
-    def test_convert_image_encrypted_dest(self, mock_tempfile, mock_execute):
+    @ddt.data(
+        ('qcow2', 'qcow2'), ('qcow2', 'luks'),
+        ('luks', 'luks'), ('luks', 'qcow2'))
+    @ddt.unpack
+    def test_convert_image_encrypted_dest(
+            self, in_format, out_format, mock_tempfile, mock_execute):
         # Simulate an unencrypted source image conversion to an encrypted
         # destination image.
         mock_file = mock.Mock()
@@ -90,29 +104,44 @@ class QemuTestCase(test.NoDBTestCase):
         encryption = {'format': 'luks', 'secret': '12345'}
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', 'informat', 'outformat',
+            '/fake/source', '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True, dest_encryption=encryption)
 
         mock_file.write.assert_called_once_with('12345')
         mock_file.flush.assert_called_once()
-        mock_execute.assert_called_once_with(
-            'qemu-img', 'convert', '-t', 'none', '-O', 'outformat',
-            '-f', 'informat', '-c',
+
+        prefix = 'encrypt.' if out_format == 'qcow2' else ''
+        expected_args = [
+            'qemu-img', 'convert', '-t', 'none', '-O', out_format,
+            '-f', in_format, '-c',
             '--object', 'secret,id=sec_dest,file=/tmp/filename',
-            '-o', 'encrypt.key-secret=sec_dest', '-o', 'encrypt.format=luks',
-            '-o', 'encrypt.cipher-alg=aes-256',
-            '-o', 'encrypt.cipher-mode=xts', '-o', 'encrypt.hash-alg=sha256',
-            '-o', 'encrypt.iter-time=2000', '-o', 'encrypt.ivgen-alg=plain64',
-            '-o', 'encrypt.ivgen-hash-alg=sha256',
-            '/fake/source', '/fake/dest')
+            '-o', f'{prefix}key-secret=sec_dest',
+        ]
+        if prefix:
+            expected_args += ['-o', f'{prefix}format=luks']
+
+        expected_args += [
+            '-o', f'{prefix}cipher-alg=aes-256',
+            '-o', f'{prefix}cipher-mode=xts',
+            '-o', f'{prefix}hash-alg=sha256',
+            '-o', f'{prefix}iter-time=2000',
+            '-o', f'{prefix}ivgen-alg=plain64',
+            '-o', f'{prefix}ivgen-hash-alg=sha256',
+            '/fake/source', '/fake/dest',
+        ]
+        mock_execute.assert_called_once_with(*expected_args)
         mock_file.close.assert_called_once()
 
     @mock.patch('oslo_concurrency.processutils.execute')
     @mock.patch('tempfile.NamedTemporaryFile')
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
+    @ddt.data(
+        ('qcow2', 'qcow2'), ('qcow2', 'luks'),
+        ('luks', 'luks'), ('luks', 'qcow2'))
+    @ddt.unpack
     def test_convert_image_encrypted_source_and_dest(
-            self, mock_tempfile, mock_execute):
+            self, in_format, out_format, mock_tempfile, mock_execute):
         # Simulate an encrypted source image conversion to an encrypted
         # destination image.
         mock_file1 = mock.Mock()
@@ -124,7 +153,7 @@ class QemuTestCase(test.NoDBTestCase):
         dest_encryption = {'format': 'luks', 'secret': '67890'}
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', 'informat', 'outformat',
+            '/fake/source', '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True, encryption=encryption,
             dest_encryption=dest_encryption)
 
@@ -132,16 +161,27 @@ class QemuTestCase(test.NoDBTestCase):
         mock_file1.flush.assert_called_once()
         mock_file2.write.assert_called_once_with('67890')
         mock_file2.flush.assert_called_once()
-        mock_execute.assert_called_once_with(
-            'qemu-img', 'convert', '-t', 'none', '-O', 'outformat', '-c',
+
+        in_prefix = 'encrypt.' if in_format == 'qcow2' else ''
+        out_prefix = 'encrypt.' if out_format == 'qcow2' else ''
+        expected_args = [
+            'qemu-img', 'convert', '-t', 'none', '-O', out_format, '-c',
             '--object', 'secret,id=sec,file=/tmp/filename1', '--image-opts',
-            'encrypt.key-secret=sec,file.filename=/fake/source',
+            f'{in_prefix}key-secret=sec,file.filename=/fake/source',
             '--object', 'secret,id=sec_dest,file=/tmp/filename2',
-            '-o', 'encrypt.key-secret=sec_dest', '-o', 'encrypt.format=luks',
-            '-o', 'encrypt.cipher-alg=aes-256',
-            '-o', 'encrypt.cipher-mode=xts', '-o', 'encrypt.hash-alg=sha256',
-            '-o', 'encrypt.iter-time=2000', '-o', 'encrypt.ivgen-alg=plain64',
-            '-o', 'encrypt.ivgen-hash-alg=sha256', '/fake/dest')
+            '-o', f'{out_prefix}key-secret=sec_dest',
+        ]
+        if out_prefix:
+            expected_args += ['-o', f'{out_prefix}format=luks']
+        expected_args += [
+            '-o', f'{out_prefix}cipher-alg=aes-256',
+            '-o', f'{out_prefix}cipher-mode=xts',
+            '-o', f'{out_prefix}hash-alg=sha256',
+            '-o', f'{out_prefix}iter-time=2000',
+            '-o', f'{out_prefix}ivgen-alg=plain64',
+            '-o', f'{out_prefix}ivgen-hash-alg=sha256', '/fake/dest',
+        ]
+        mock_execute.assert_called_once_with(*expected_args)
         mock_file1.close.assert_called_once()
         mock_file2.close.assert_called_once()
 
