@@ -4583,6 +4583,7 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         encrypted_bdms = driver.block_device_info_get_encrypted_disks(
             block_device_info)
+        print(f'encrypted_bdms = {encrypted_bdms}')
 
         for driver_bdm in encrypted_bdms:
             # NOTE(lyarwood): Users can request that their ephemeral storage
@@ -4850,9 +4851,16 @@ class LibvirtDriver(driver.ComputeDriver):
     @staticmethod
     def _create_swap(target, swap_mb, context=None, encryption=None):
         """Create a swap file of specified size."""
-        libvirt_utils.create_image(
-            target, 'raw', f'{swap_mb}M', encryption=encryption)
+        libvirt_utils.create_image(target, 'raw', f'{swap_mb}M')
         nova.privsep.fs.unprivileged_mkfs('swap', target)
+        if encryption:
+            images.convert_image(
+                target,
+                target,
+                'raw',
+                encryption.get('format'),
+                dest_encryption=encryption,
+            )
 
     @staticmethod
     def _get_console_log_path(instance):
@@ -5120,7 +5128,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if swap_mb > 0:
             size = swap_mb * units.Mi
-            swap = image('disk.swap')
+            disk_info_mapping = disk_mapping['disk.swap']
+            swap = image('disk.swap', disk_info_mapping=disk_info_mapping)
             # Short circuit the exists() tests if we already created a disk
             created_disks = created_disks or not swap.exists()
             swap.cache(fetch_func=self._create_swap, context=context,
