@@ -2176,6 +2176,7 @@ class ComputeManager(manager.Manager):
                 mapping, context, instance, self.volume_api, self.driver,
                 wait_func=self._await_block_device_map_created)
 
+            print(f'_prep_block_device block_device_info = {block_device_info}')
             return block_device_info
 
         except exception.OverQuota as e:
@@ -2539,6 +2540,7 @@ class ComputeManager(manager.Manager):
             block_device_mapping, node, limits, filter_properties,
             request_spec=None, accel_uuids=None):
 
+        print(f'block_device_mapping = {(*block_device_mapping,)}')
         image_name = image.get('name')
         self._notify_about_instance_usage(context, instance, 'create.start',
                 extra_usage_info={'image_name': image_name})

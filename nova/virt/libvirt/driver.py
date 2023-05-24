@@ -4851,6 +4851,14 @@ class LibvirtDriver(driver.ComputeDriver):
         """Create a swap file of specified size."""
         libvirt_utils.create_image(target, 'raw', f'{swap_mb}M')
         nova.privsep.fs.unprivileged_mkfs('swap', target)
+        if encryption:
+            images.convert_image(
+                target,
+                target,
+                'raw',
+                encryption.get('format'),
+                dest_encryption=encryption,
+            )
 
     @staticmethod
     def _get_console_log_path(instance):
