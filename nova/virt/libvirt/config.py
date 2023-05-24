@@ -1201,7 +1201,11 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
             dev.append(drv)
 
         if self.source_type == "file":
-            dev.append(etree.Element("source", file=self.source_path))
+            #dev.append(etree.Element("source", file=self.source_path))
+            source = etree.Element("source", file=self.source_path)
+            if self.encryption:
+                source.append(self.encryption.format_dom())
+            dev.append(source)
         elif self.source_type == "block":
             dev.append(etree.Element("source", dev=self.source_path))
         elif self.source_type == "mount":
@@ -1260,8 +1264,8 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         if self.device_addr:
             dev.append(self.device_addr.format_dom())
 
-        if self.encryption:
-            dev.append(self.encryption.format_dom())
+        #if self.encryption:
+        #    dev.append(self.encryption.format_dom())
 
         return dev
 
