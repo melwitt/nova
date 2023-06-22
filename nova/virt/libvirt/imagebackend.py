@@ -189,23 +189,12 @@ class Image(metaclass=abc.ABCMeta):
         info.source_path = self.path
         info.boot_order = boot_order
 
-        if (self.SUPPORTS_LUKS and
-            self.disk_info_mapping and
-            self.disk_info_mapping.get('encrypted') and
-            self.disk_info_mapping.get('encryption_format') == 'luks'
-        ):
-            encryption = vconfig.LibvirtConfigGuestDiskEncryption()
-            secret = vconfig.LibvirtConfigGuestDiskEncryptionSecret()
-            secret.type = 'passphrase'
-            secret.uuid = self.disk_info_mapping.get('encryption_secret_uuid')
-            encryption.secret = secret
-            encryption.format = self.disk_info_mapping.get('encryption_format')
-            info.ephemeral_encryption = encryption
-
         if disk_bus == 'scsi':
             self.disk_scsi(info, disk_unit)
 
         self.disk_qos(info, extra_specs)
+
+        self.disk_encryption(info)
 
         return info
 
@@ -235,6 +224,20 @@ class Image(metaclass=abc.ABCMeta):
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in tune_items:
                     setattr(info, scope[1], value)
+
+    def disk_encryption(self, info):
+        if (self.SUPPORTS_LUKS and
+            self.disk_info_mapping and
+            self.disk_info_mapping.get('encrypted') and
+            self.disk_info_mapping.get('encryption_format') == 'luks'
+        ):
+            encryption = vconfig.LibvirtConfigGuestDiskEncryption()
+            secret = vconfig.LibvirtConfigGuestDiskEncryptionSecret()
+            secret.type = 'passphrase'
+            secret.uuid = self.disk_info_mapping.get('encryption_secret_uuid')
+            encryption.secret = secret
+            encryption.format = self.disk_info_mapping.get('encryption_format')
+            info.ephemeral_encryption = encryption
 
     def libvirt_fs_info(self, target, driver_type=None):
         """Get `LibvirtConfigGuestFilesys` filled for this image.
@@ -655,12 +658,10 @@ class Flat(Image):
             else:
                 # If the source image is encrypted, copy the image for the
                 # instance and use a new secret for it.
-                src_fmt = 'raw'
-                if image_encryption:
-                    src_fmt = image_encryption.get('format')
-                dest_fmt = 'raw'
-                if bdm_encryption:
-                    dest_fmt = bdm_encryption.get('format')
+                src_fmt = ('raw' if not image_encryption else
+                               image_encryption.get('format'))
+                dest_fmt = ('raw' if not bdm_encryption else
+                                bdm_encryption.get('format'))
                 images.convert_image(
                     base, target, src_fmt, dest_fmt,
                     encryption=image_encryption,
@@ -703,12 +704,10 @@ class Flat(Image):
 
     def snapshot_extract(self, target, out_format, encryption=None,
                          dest_encryption=None):
-        src_fmt = self.driver_format
-        if encryption:
-            src_fmt = encryption.get('format')
-        dest_fmt = out_format
-        if dest_encryption:
-            dest_fmt = dest_encryption.get('format')
+        src_fmt = (self.driver_format if not encryption else
+                        encryption.get('format'))
+        dest_fmt = (out_format if not dest_encryption else
+                        dest_encryption.get('format'))
         images.convert_image(
             self.path, target, src_fmt, dest_fmt,
             encryption=encryption, dest_encryption=dest_encryption)
@@ -974,6 +973,7 @@ class Lvm(Image):
 class Rbd(Image):
 
     SUPPORTS_CLONE = True
+    SUPPORTS_LUKS = True
 
     def __init__(
         self, instance=None, disk_name=None, path=None, disk_info_mapping=None
@@ -1046,6 +1046,8 @@ class Rbd(Image):
 
         self.disk_qos(info, extra_specs)
 
+        self.disk_encryption(info)
+
         return info
 
     def _can_fallocate(self):
@@ -1086,10 +1088,49 @@ class Rbd(Image):
             self._remove_non_raw_cache_image(base)
             prepare_template(target=base, *args, **kwargs)
 
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        context = kwargs.get('context')
+        # bdm_encryption contains the encryption attributes for the destination
+        # image, if encryption was specified.
+        bdm_encryption = self.get_encryption(context)
+        # image_encryption contains the encryption attributes for the source
+        # image, if it is encrypted.
+        image_encryption = kwargs.pop('encryption', None)
+
+        filename = self._get_lock_name(base)
+
+        @utils.synchronized(filename, external=True, lock_path=self.lock_path)
+        def convert_and_import_rbd_image(in_path, out_path):
+            # If the source image is encrypted, copy the image for the
+            # instance and use a new secret for it.
+            src_fmt = 'raw'
+            if image_encryption:
+                src_fmt = image_encryption.get('format')
+            dest_fmt = 'raw'
+            if bdm_encryption:
+                dest_fmt = bdm_encryption.get('format')
+
+            images.convert_image(
+                in_path, out_path, src_fmt, dest_fmt,
+                encryption=image_encryption,
+                dest_encryption=bdm_encryption)
+            self.driver.import_image(out_path, self.rbd_name)
+
         # prepare_template() may have cloned the image into a new rbd
         # image already instead of downloading it locally
         if not self.exists():
-            self.driver.import_image(base, self.rbd_name)
+            # If the destination image needs to be encrypted, convert the
+            # image. The source image (base image) is never encrypted.
+            if bdm_encryption:
+                staged = f'{base}.converted'
+                with fileutils.remove_path_on_error(staged):
+                    convert_and_import_rbd_image(base, staged)
+                    os.unlink(staged)
+            else:
+                self.driver.import_image(base, self.rbd_name)
+
         self.verify_base_size(base, size)
 
         if size and size > self.get_disk_size(self.rbd_name):
@@ -1100,7 +1141,14 @@ class Rbd(Image):
 
     def snapshot_extract(self, target, out_format, encryption=None,
                          dest_encryption=None):
-        images.convert_image(self.path, target, 'raw', out_format)
+        src_fmt = ('raw' if not encryption else
+                        encryption.get('format'))
+        dest_fmt = (out_format if not dest_encryption else
+                        dest_encryption.get('format'))
+        images.convert_image(
+            self.path, target, src_fmt, dest_fmt,
+            encryption=encryption,
+            dest_encryption=dest_encryption)
 
     @staticmethod
     def is_shared_block_storage():
@@ -1177,6 +1225,15 @@ class Rbd(Image):
                   'store': store_name})
 
     def clone(self, context, image_id_or_uri, copy_to_store=True):
+        encryption = self.get_encryption(context)
+        if encryption:
+            # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
+            # with an encryption key different from its parent is not
+            # supported. Support should be available in v18 and when we can
+            # require >= v18 we can support clone of encrypted images.
+            # See https://github.com/ceph/ceph/commit/1d3de19
+            raise NotImplementedError(
+                _('clone() with encryption is not implemented'))
         image_meta = IMAGE_API.get(context, image_id_or_uri,
                                    include_locations=True)
         locations = image_meta['locations']
