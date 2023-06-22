@@ -285,7 +285,7 @@ def create_ephemeral_encryption_secret(
     driver_bdm: 'driver_block_device.DriverBlockDevice',
     for_detail: ty.Optional[str] = None,
     secret: ty.Optional[str] = None,
-):
+) -> ty.Tuple[str, str]:
     # Use oslo.serialization to encode some random data as passphrase
     if secret is None:
         secret = oslo_base64.encode_as_text(
