@@ -30164,6 +30164,8 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
         rbd.remove_snap.assert_called_with('c', 'd', ignore_errors=True,
                                            pool='b', force=True)
 
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid',
                 new=mock.MagicMock())
     @mock.patch('nova.virt.libvirt.blockinfo.get_disk_info',
