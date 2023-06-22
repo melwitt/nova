@@ -62,12 +62,13 @@ class QemuTestCase(test.NoDBTestCase):
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
     @ddt.data(
-        ('qcow2', 'qcow2', False), ('qcow2', 'qcow2', True),
-        ('qcow2', 'raw', False), ('qcow2', 'raw', True),
-        ('luks', 'raw', False), ('luks', 'qcow2', False))
+        ('qcow2', 'qcow2', False, False), ('qcow2', 'qcow2', True, False),
+        ('qcow2', 'raw', False, False), ('qcow2', 'raw', True, False),
+        ('luks', 'raw', False, False), ('luks', 'raw', False, True),
+        ('luks', 'qcow2', False, False), ('luks', 'qcow2', False, True))
     @ddt.unpack
     def test_convert_image_encrypted_source_to_unencrypted_dest(
-            self, in_format, out_format, backing_secret, mock_tempfile,
+            self, in_format, out_format, backing_secret, is_rbd, mock_tempfile,
             mock_execute):
         # Simulate an encrypted source image conversion to an unencrypted
         # destination image.
@@ -81,9 +82,14 @@ class QemuTestCase(test.NoDBTestCase):
             mock_tempfile.return_value.__enter__.side_effect = [
                 mock_file1, mock_file2]
             src_encryption['backing_secret'] = '67890'
+        source_filename = '/fake/source'
+        file_driver = 'file'
+        if is_rbd:
+            source_filename = 'rbd:pool/image:id=cinder:conf=ceph.conf'
+            file_driver = 'rbd'
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', in_format, out_format,
+            source_filename, '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True,
             src_encryption=src_encryption)
 
@@ -98,8 +104,8 @@ class QemuTestCase(test.NoDBTestCase):
             'qemu-img', 'convert', '-t', 'none', '-O', out_format, '-c',
             '--object', 'secret,id=sec0,file=/tmp/filename1',
             '--image-opts',
-            f'driver={in_format},file.driver=file,file.filename=/fake/source,'
-            f'{prefix}key-secret=sec0']
+            f'driver={in_format},file.driver={file_driver},'
+            f'file.filename={source_filename},{prefix}key-secret=sec0']
         if backing_secret:
             expected_command[-1] += ',backing.key-secret=sec2'
             expected_command += [
@@ -160,12 +166,13 @@ class QemuTestCase(test.NoDBTestCase):
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
     @ddt.data(
-        ('qcow2', 'qcow2', False), ('qcow2', 'qcow2', True),
-        ('qcow2', 'luks', False), ('qcow2', 'luks', True),
-        ('luks', 'luks', False), ('luks', 'qcow2', False))
+        ('qcow2', 'qcow2', False, False), ('qcow2', 'qcow2', True, False),
+        ('qcow2', 'luks', False, False), ('qcow2', 'luks', True, False),
+        ('luks', 'luks', False, False), ('luks', 'luks', False, True),
+        ('luks', 'qcow2', False, False), ('luks', 'qcow2', False, True))
     @ddt.unpack
     def test_convert_image_encrypted_source_and_dest(
-            self, in_format, out_format, backing_secret, mock_tempfile,
+            self, in_format, out_format, backing_secret, is_rbd, mock_tempfile,
             mock_execute):
         # Simulate an encrypted source image conversion to an encrypted
         # destination image.
@@ -187,9 +194,14 @@ class QemuTestCase(test.NoDBTestCase):
             'secret': '67890',
             'options': encrypt_options.EncryptOptions.get_default(),
         }
+        source_filename = '/fake/source'
+        file_driver = 'file'
+        if is_rbd:
+            source_filename = 'rbd:pool/image:id=cinder:conf=ceph.conf'
+            file_driver = 'rbd'
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', in_format, out_format,
+            source_filename, '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True,
             src_encryption=src_encryption,
             dest_encryption=dest_encryption)
@@ -207,8 +219,8 @@ class QemuTestCase(test.NoDBTestCase):
         expected_args = [
             'qemu-img', 'convert', '-t', 'none', '-O', out_format, '-c',
             '--object', 'secret,id=sec0,file=/tmp/filename1', '--image-opts',
-            f'driver={in_format},file.driver=file,file.filename=/fake/source,'
-            f'{in_prefix}key-secret=sec0']
+            f'driver={in_format},file.driver={file_driver},'
+            f'file.filename={source_filename},{in_prefix}key-secret=sec0']
         if backing_secret:
             expected_args[-1] += ',backing.key-secret=sec2'
             expected_args += [
