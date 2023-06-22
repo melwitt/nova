@@ -228,6 +228,8 @@ class _ImageTestCase(object):
     def test_libvirt_info_scsi_with_unit(self, disk_unit):
         self._test_libvirt_info_scsi_with_unit(disk_unit)
 
+    @mock.patch('nova.storage.rbd_utils.RBDDriver.get_mon_addrs',
+                new=mock.Mock(return_value=(['host'], ['port'])))
     def test_libvirt_info_with_encryption(self):
         disk_info = {
             'bus': 'virtio',
@@ -1447,7 +1449,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         self.assertEqual(fake_processutils.fake_execute_get_log(),
                          [' '.join(cmd)])
         mock_exists.assert_has_calls([mock.call(), mock.call()])
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(target=self.TEMPLATE_PATH, encryption=None)
 
     @mock.patch.object(images, 'qemu_img_info')
     @mock.patch.object(os.path, 'exists', return_value=False)
@@ -1512,7 +1514,7 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         mock_get.assert_called_once_with(rbd_name)
         mock_resize.assert_called_once_with(rbd_name, full_size)
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, full_size)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(target=self.TEMPLATE_PATH, encryption=None)
 
     @mock.patch.object(images, 'qemu_img_info',
                        return_value=imageutils.QemuImgInfo())
