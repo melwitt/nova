@@ -150,12 +150,13 @@ def unprivileged_convert_image(
             # For 'luks' it is 'key-secret' and format is implied
             # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
             prefix = 'encrypt.' if in_format == 'qcow2' else ''
+            file_driver = 'rbd' if source.startswith('rbd:') else 'file'
             encryption_opts = [
                 '--object', f"secret,id=sec0,file={src_secret_file.name}",
                 '--image-opts',
             ]
             csv_opts = [
-                f'{driver_str}file.driver=file',
+                f'{driver_str}file.driver={file_driver}',
                 f'file.filename={source}',
                 f'{prefix}key-secret=sec0',
             ]
