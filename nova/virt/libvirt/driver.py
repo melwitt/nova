@@ -3278,6 +3278,18 @@ class LibvirtDriver(driver.ComputeDriver):
                           expected_state=task_states.IMAGE_PENDING_UPLOAD)
 
         try:
+            if source_type == 'rbd' and encryption:
+                # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
+                # with an encryption key different from its parent is not
+                # supported. Support should be available in v18 and when we can
+                # require >= v18 we can support clone of encrypted images.
+                # See https://github.com/ceph/ceph/commit/1d3de19
+                LOG.info('Performing standard snapshot because direct '
+                         'snapshot does not currently support creation of a '
+                         'cloned image with an encryption key different from '
+                         'its parent.', instance=instance)
+                raise NotImplementedError(
+                    _('direct_snapshot() with encryption is not implemented'))
             metadata['location'] = root_disk.direct_snapshot(
                 context, snapshot_name, image_format, image_id,
                 instance.image_ref)
@@ -5867,8 +5879,26 @@ class LibvirtDriver(driver.ComputeDriver):
                         libvirt_utils.fetch_image(
                             context, target, image_id, trusted_certs,
                             src_encryption=src_encryption,
-                            dest_encryption=dest_encryption,
-                        )
+                            dest_encryption=dest_encryption)
+                    except NotImplementedError:
+                        # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned
+                        # image with an encryption key different from its
+                        # parent is not supported. Support should be available
+                        # in v18 and when we can require >= v18 we can support
+                        # clone of encrypted images.
+                        # See https://github.com/ceph/ceph/commit/1d3de19
+
+                        # We ignore [workarounds]never_download_image_if_on_rbd
+                        # here because if the image is encrypted and if we also
+                        # never download images, we wouldn't be able to support
+                        # encryption with RBD at all.
+                        if CONF.libvirt.images_type == 'rbd':
+                            libvirt_utils.fetch_image(
+                                context, target, image_id, trusted_certs,
+                                src_encryption=src_encryption,
+                                dest_encryption=dest_encryption)
+                        else:
+                            raise
                 fetch_func = clone_fallback_to_fetch
             else:
                 fetch_func = libvirt_utils.fetch_image
