@@ -1216,6 +1216,8 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
                 if port is not None:
                     host.set('port', port)
                 source.append(host)
+            if self.encryption:
+                source.append(self.encryption.format_dom())
             dev.append(source)
 
         if self.auth_secret_type is not None:
@@ -1260,8 +1262,8 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         if self.device_addr:
             dev.append(self.device_addr.format_dom())
 
-        if self.encryption:
-            dev.append(self.encryption.format_dom())
+        #if self.encryption:
+        #    dev.append(self.encryption.format_dom())
 
         return dev
 
