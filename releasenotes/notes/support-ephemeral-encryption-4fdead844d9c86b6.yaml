@@ -1,8 +1,17 @@
 features:
   - |
-    The libvirt driver with the qcow2 and raw image backends now support LUKS
-    encryption of ephemeral/local disks including root, ephemeral, and swap
-    disks.
+    The libvirt driver with the qcow2, raw, and rbd image backends now support
+    LUKS encryption of ephemeral/local disks including root, ephemeral, and
+    swap disks.
+
+    .. note::
+
+       In Ceph v17 (Quincy) creating a cloned image with an encryption key
+       different from its parent is not supported. Support should be available
+       in v18 and when we can require >= v18 we can support clone of encrypted
+       images.
+
+       See https://github.com/ceph/ceph/commit/1d3de19
 
     .. note::
 
