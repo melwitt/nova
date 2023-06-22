@@ -478,7 +478,7 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
         mock_convert_image.assert_called_with(
             't.qcow2.part', 't.qcow2.converted', 'qcow2', 'raw',
             CONF.instances_path, False, src_encryption=None,
-            dest_encryption=None)
+            dest_encryption=None, skip_image_creation=False)
         mock_convert_image.reset_mock()
 
         target = 't.raw'
