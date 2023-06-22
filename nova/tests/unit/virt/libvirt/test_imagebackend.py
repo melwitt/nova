@@ -228,6 +228,8 @@ class _ImageTestCase(object):
     def test_libvirt_info_scsi_with_unit(self, disk_unit):
         self._test_libvirt_info_scsi_with_unit(disk_unit)
 
+    @mock.patch('nova.storage.rbd_utils.RBDDriver.get_mon_addrs',
+                new=mock.Mock(return_value=(['host'], ['port'])))
     def test_libvirt_info_with_encryption(self):
         disk_info = {
             'bus': 'virtio',
@@ -1760,6 +1762,62 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         mock_get.assert_has_calls([mock.call(self.TEMPLATE_PATH),
                                    mock.call(rbd_name)])
 
+    @mock.patch.object(imagebackend.Rbd, 'exists')
+    @mock.patch('nova.crypto.get_encryption_secret')
+    @mock.patch('nova.virt.images.convert_image')
+    @mock.patch.object(rbd_utils.RBDDriver, 'import_image')
+    @mock.patch('os.unlink')
+    @mock.patch.object(imagebackend.Rbd, 'verify_base_size')
+    @mock.patch.object(imagebackend.Rbd, 'get_disk_size')
+    @mock.patch.object(rbd_utils.RBDDriver, 'resize')
+    def test_image_create_with_encryption(self, mock_resize, mock_get_size,
+            mock_verify, mock_unlink, mock_import, mock_convert,
+            mock_get_secret, mock_exists, size=None):
+        # base image does not exist, rbd disk does not exist
+        mock_exists.side_effect = [False, False]
+        mock_get_size.return_value = self.SIZE
+        fn = mock.MagicMock()
+        if size is None:
+            size = self.SIZE
+
+        disk_info = {
+            'bus': 'virtio',
+            'dev': '/dev/vda',
+            'type': 'disk',
+            'encrypted': True,
+            'encryption_secret_uuid': uuids.secret,
+            'encryption_format': 'luks',
+        }
+        image = self.image_class(
+            self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
+
+        expected_encryption = {
+            'format': 'luks',
+            'secret': mock_get_secret.return_value,
+        }
+        kwargs = {'context': self.CONTEXT}
+
+        image.create_image(fn, self.TEMPLATE_PATH, size, **kwargs)
+
+        mock_get_secret.assert_called_once_with(self.CONTEXT, uuids.secret)
+        # encryption=None here because fn is the fetch_func and the source
+        # image is not encrypted.
+        fn.assert_called_once_with(target=self.TEMPLATE_PATH, **kwargs)
+        # encryption attributes are passed to create the (destination) image.
+        mock_convert.assert_called_once_with(
+            self.TEMPLATE_PATH, self.TEMPLATE_PATH + '.converted', 'raw',
+            'luks', encryption=None, dest_encryption=expected_encryption)
+        mock_import.assert_called_once_with(
+            self.TEMPLATE_PATH + '.converted', image.rbd_name)
+        mock_unlink.assert_called_once_with(self.TEMPLATE_PATH + '.converted')
+        if size > self.SIZE:
+            mock_resize.assert_called_once_with(image.rbd_name, size)
+        else:
+            mock_resize.assert_not_called()
+
+    def test_image_create_resize_with_encryption(self):
+        self.test_image_create_with_encryption(size=self.SIZE + 5)
+
     def test_prealloc_image(self):
         CONF.set_override('preallocate_images', 'space')
 
@@ -2284,6 +2342,39 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
                               image.clone, self.CONTEXT, 'foo')
             mock_copy.assert_not_called()
         mock_driver.is_cloneable.assert_called_once_with('fake', fake_image)
+
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_clone_with_encryption(self, mock_get_secret):
+        # At this time (Ceph 17 aka Quincy) there is not support for cloning an
+        # encrypted image that has a different passphrase than the parent. So
+        # we have to do a standard snapshot.
+        disk_info = {
+            'bus': 'virtio',
+            'dev': '/dev/vda',
+            'type': 'disk',
+            'encrypted': True,
+            'encryption_secret_uuid': uuids.secret,
+            'encryption_format': 'luks',
+        }
+        image = self.image_class(
+            self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
+        ex = self.assertRaises(
+            NotImplementedError, image.clone, self.CONTEXT, 'fake_image_id')
+        self.assertIn('clone() with encryption is not implemented', str(ex))
+        mock_get_secret.assert_called_once_with(self.CONTEXT, uuids.secret)
+
+    @mock.patch('nova.virt.images.convert_image')
+    def test_snapshot_extract_with_encryption(self, mock_convert):
+        image = self.image_class(self.INSTANCE, self.NAME)
+        encryption = {'format': 'luks', 'secret': mock.sentinel.secret}
+        dest_encryption = {
+            'format': 'luks', 'secret': mock.sentinel.dest_secret}
+        image.snapshot_extract(
+            mock.sentinel.target, 'luks', encryption=encryption,
+            dest_encryption=dest_encryption)
+        mock_convert.assert_called_once_with(
+            image.path, mock.sentinel.target, 'luks', 'luks',
+            encryption=encryption, dest_encryption=dest_encryption)
 
 
 class PloopTestCase(_ImageTestCase, test.NoDBTestCase):
