@@ -61,20 +61,27 @@ class QemuTestCase(test.NoDBTestCase):
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
     @ddt.data(
-        ('qcow2', 'qcow2'), ('qcow2', 'luks'),
-        ('luks', 'luks'), ('luks', 'qcow2'))
+        ('qcow2', 'qcow2', False), ('qcow2', 'luks', False),
+        ('luks', 'luks', False), ('luks', 'qcow2', False),
+        ('luks', 'luks', True))
     @ddt.unpack
     def test_convert_image_encrypted_source(
-            self, in_format, out_format, mock_tempfile, mock_execute):
+            self, in_format, out_format, is_rbd, mock_tempfile,
+            mock_execute):
         # Simulate an encrypted source image conversion to an unencrypted
         # destination image.
         mock_file = mock.Mock()
         mock_file.name = '/tmp/filename'
         mock_tempfile.return_value.__enter__.return_value = mock_file
         encryption = {'format': 'luks', 'secret': '12345'}
+        source_filename = '/fake/source'
+        file_driver = 'file'
+        if is_rbd:
+            source_filename = 'rbd:pool/image:id=cinder:conf=ceph.conf'
+            file_driver = 'rbd'
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', in_format, out_format,
+            source_filename, '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True, encryption=encryption)
 
         mock_file.write.assert_called_once_with('12345')
@@ -83,8 +90,8 @@ class QemuTestCase(test.NoDBTestCase):
         mock_execute.assert_called_once_with(
             'qemu-img', 'convert', '-t', 'none', '-O', out_format, '-c',
             '--object', 'secret,id=sec,file=/tmp/filename', '--image-opts',
-            f'driver={in_format},file.driver=file,file.filename=/fake/source,'
-            f'{prefix}key-secret=sec', '/fake/dest')
+            f'driver={in_format},file.driver={file_driver},'
+            f'file.filename={source_filename},{prefix}key-secret=sec', '/fake/dest')
 
     @mock.patch('oslo_concurrency.processutils.execute')
     @mock.patch('tempfile.NamedTemporaryFile')
@@ -136,11 +143,12 @@ class QemuTestCase(test.NoDBTestCase):
     @mock.patch('nova.privsep.utils.supports_direct_io',
                 new=mock.Mock(return_value=True))
     @ddt.data(
-        ('qcow2', 'qcow2'), ('qcow2', 'luks'),
-        ('luks', 'luks'), ('luks', 'qcow2'))
+        ('qcow2', 'qcow2', False), ('qcow2', 'luks', False),
+        ('luks', 'luks', False), ('luks', 'qcow2', False),
+        ('luks', 'luks', True))
     @ddt.unpack
     def test_convert_image_encrypted_source_and_dest(
-            self, in_format, out_format, mock_tempfile, mock_execute):
+            self, in_format, out_format, is_rbd, mock_tempfile, mock_execute):
         # Simulate an encrypted source image conversion to an encrypted
         # destination image.
         mock_file1 = mock.Mock()
@@ -151,9 +159,14 @@ class QemuTestCase(test.NoDBTestCase):
         mock_tempfile.return_value.__enter__.side_effect = [
             mock_file1, mock_file2]
         dest_encryption = {'format': 'luks', 'secret': '67890'}
+        source_filename = '/fake/source'
+        file_driver = 'file'
+        if is_rbd:
+            source_filename = 'rbd:pool/image:id=cinder:conf=ceph.conf'
+            file_driver = 'rbd'
 
         nova.privsep.qemu.convert_image(
-            '/fake/source', '/fake/dest', in_format, out_format,
+            source_filename, '/fake/dest', in_format, out_format,
             '/fake/instances/path', compress=True, encryption=encryption,
             dest_encryption=dest_encryption)
 
@@ -167,8 +180,8 @@ class QemuTestCase(test.NoDBTestCase):
         expected_args = [
             'qemu-img', 'convert', '-t', 'none', '-O', out_format, '-c',
             '--object', 'secret,id=sec,file=/tmp/filename1', '--image-opts',
-            f'driver={in_format},file.driver=file,file.filename=/fake/source,'
-            f'{in_prefix}key-secret=sec',
+            f'driver={in_format},file.driver={file_driver},'
+            f'file.filename={source_filename},{in_prefix}key-secret=sec',
             '--object', 'secret,id=sec_dest,file=/tmp/filename2',
             '-o', f'{out_prefix}key-secret=sec_dest',
         ]
