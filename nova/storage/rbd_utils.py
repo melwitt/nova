@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import tempfile
 import urllib
 
 from eventlet import tpool
@@ -28,6 +29,7 @@ from oslo_utils import excutils
 import nova.conf
 from nova import exception
 from nova.i18n import _
+from nova.virt import images
 
 try:
     import rados
@@ -312,8 +314,14 @@ class RBDDriver(object):
         :pool: Name of pool
         """
         LOG.debug('flattening %(pool)s/%(vol)s', dict(pool=pool, vol=volume))
+        #if not encryption:
         with RBDVolumeProxy(self, str(volume), pool=pool) as vol:
             vol.flatten()
+        #else:
+        #    options = ['--encryption-format', encryption.get('format'),
+        #        '--encryption-passphrase-file', f.name]
+        #    processutils.execute('rbd', 'flatten', *options, volume)
+
 
     def exists(self, name, pool=None, snapshot=None):
         try:
@@ -324,6 +332,10 @@ class RBDDriver(object):
                 return True
         except rbd.ImageNotFound:
             return False
+
+    def rename_image(self, current_name, new_name):
+        with RADOSClient(self, self.pool) as client:
+            RbdProxy().rename(client.ioctx, str(current_name), str(new_name))
 
     def remove_image(self, name):
         """Remove RBD volume
@@ -377,6 +389,14 @@ class RBDDriver(object):
                 '--snap', snap]
         args += self.ceph_args()
         processutils.execute('rbd', 'export', *args)
+
+    def create_image(self, name, size):
+        args = ['--pool', self.pool, '--size', f'{size}G']
+        args += ['--image-format=2']
+        args += self.ceph_args()
+        #processutils.execute('rbd', 'create', *args)
+        with RADOSClient(self, self.pool) as client:
+            RbdProxy().create(client.ioctx, name, size)
 
     def _destroy_volume(self, client, volume, pool=None):
         """Destroy an RBD volume, retrying as needed.
@@ -513,3 +533,108 @@ class RBDDriver(object):
         """
         with RADOSClient(self, pool) as client:
             self._destroy_volume(client, volume)
+
+    def encryption_format(self, name, encryption_format, encryption_secret):
+        """Format an image to an encrypted format.
+
+        All data previously written to the image will become unreadable.
+        Supported formats: luks1, luks2. Supported cipher algorithms: aes-128,
+        aes-256 (default).
+        """
+        if not encryption_format.startswith('luks'):
+            raise ValueError('RBD encryption supports only the LUKS format')
+
+        if encryption_format == 'luks':
+            encryption_format_int = rbd.RBD_ENCRYPTION_FORMAT_LUKS2
+        else:
+            encryption_format_int = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
+
+        with RBDVolumeProxy(self, name) as image:
+            image.encryption_format(
+                encryption_format_int, encryption_secret,
+                cipher_alg=rbd.RBD_ENCRYPTION_ALGORITHM_AES256)
+
+    def encryption_load(self, name, encryption_format, encryption_secret):
+        if not encryption_format.startswith('luks'):
+            raise ValueError('RBD encryption supports only the LUKS format')
+
+        if encryption_format == 'luks':
+            encryption_format_int = rbd.RBD_ENCRYPTION_FORMAT_LUKS2
+        else:
+            encryption_format_int = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
+
+        with RBDVolumeProxy(self, name) as image:
+            image.encryption_load(encryption_format_int, encryption_secret)
+
+    def encryption_format_manual(self, name, encryption_format,
+                                 encryption_secret, pool=None):
+        """Format an image to an encrypted format.
+
+        All data previously written to the image will become unreadable.
+        Supported formats: luks1, luks2. Supported cipher algorithms: aes-128,
+        aes-256 (default).
+        """
+        if not encryption_format.startswith('luks'):
+            raise ValueError('RBD encryption supports only the LUKS format')
+
+        pool = pool or self.pool
+
+        format_arg = encryption_format
+        if encryption_format == 'luks':
+            format_arg  = 'luks1'
+
+        # NOTE(melwitt): Sensible defaults (that match the qemu defaults)
+        # are hardcoded at this time for simplicity and consistency when
+        # instances are migrated. Configuration of luks options could be added
+        # in a future release.
+        args = ['--cipher-alg', 'aes-256'] + self.ceph_args()
+
+        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+            # Write out the passphrase secret to a temp file
+            f.write(encryption_secret)
+
+            # Ensure the secret is written to disk, we can't .close() here as
+            # that removes the file when using NamedTemporaryFile
+            f.flush()
+
+            processutils.execute(
+                'rbd', 'encryption', 'format', f'{pool}/{name}', format_arg,
+                f.name, *args)
+
+    def migrate_data(self, name, dest_name):
+        #with RBDVolumeProxy(self, volume) as vol:
+        #    vol.migration_prepare_import(name, dest_name)
+        #with RBDVolumeProxy(self, name) as image:
+        #    source_spec = image.migration_source_spec()
+
+        with RADOSClient(self) as client:
+            try:
+                # Prepare the data migration with the source image in read-only
+                # mode by using 'rbd migration prepare --import-only'
+                #RbdProxy().migration_prepare_import(
+                #    source_spec, client.ioctx, str(dest_name),
+                #    features=client.features)
+
+                RbdProxy().migration_prepare(
+                    client.ioctx, name, client.ioctx, str(dest_name),
+                    features=client.features)
+
+                RbdProxy().migration_execute(client.ioctx, name)
+                RbdProxy().migration_commit(client.ioctx, name)
+            except Exception:
+                RbdProxy().migration_abort(client.ioctx, name)
+
+        # Flatten the image, which detaches it from the source image
+        with RBDVolumeProxy(self, dest_name) as dest_image:
+            dest_image.flatten()
+
+    def copy_data(self, name, dest_name):
+        source = ('rbd:' + self.pool + '/' + name + ':id=' + self.rbd_user +
+                  ':conf=' + self.ceph_conf)
+
+        dest = ('rbd:' + self.pool + '/' + dest_name + ':id=' + self.rbd_user +
+                ':conf=' + self.ceph_conf)
+
+        processutils.execute(
+            'qemu-img', 'convert', '-t', 'writeback', '-f', 'raw', '-O', 'luks',
+            '-n', source, dest)

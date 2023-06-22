@@ -189,23 +189,12 @@ class Image(metaclass=abc.ABCMeta):
         info.source_path = self.path
         info.boot_order = boot_order
 
-        if (self.SUPPORTS_LUKS and
-            self.disk_info_mapping and
-            self.disk_info_mapping.get('encrypted') and
-            self.disk_info_mapping.get('encryption_format') == 'luks'
-        ):
-            encryption = vconfig.LibvirtConfigGuestDiskEncryption()
-            secret = vconfig.LibvirtConfigGuestDiskEncryptionSecret()
-            secret.type = 'passphrase'
-            secret.uuid = self.disk_info_mapping.get('encryption_secret_uuid')
-            encryption.secret = secret
-            encryption.format = self.disk_info_mapping.get('encryption_format')
-            info.encryption = encryption
-
         if disk_bus == 'scsi':
             self.disk_scsi(info, disk_unit)
 
         self.disk_qos(info, extra_specs)
+
+        self.disk_encryption(info)
 
         return info
 
@@ -235,6 +224,20 @@ class Image(metaclass=abc.ABCMeta):
             if len(scope) > 1 and scope[0] == 'quota':
                 if scope[1] in tune_items:
                     setattr(info, scope[1], value)
+
+    def disk_encryption(self, info):
+        if (self.SUPPORTS_LUKS and
+            self.disk_info_mapping and
+            self.disk_info_mapping.get('encrypted') and
+            self.disk_info_mapping.get('encryption_format') == 'luks'
+        ):
+            encryption = vconfig.LibvirtConfigGuestDiskEncryption()
+            secret = vconfig.LibvirtConfigGuestDiskEncryptionSecret()
+            secret.type = 'passphrase'
+            secret.uuid = self.disk_info_mapping.get('encryption_secret_uuid')
+            encryption.secret = secret
+            encryption.format = self.disk_info_mapping.get('encryption_format')
+            info.encryption = encryption
 
     def libvirt_fs_info(self, target, driver_type=None):
         """Get `LibvirtConfigGuestFilesys` filled for this image.
@@ -964,6 +967,7 @@ class Lvm(Image):
 class Rbd(Image):
 
     SUPPORTS_CLONE = True
+    SUPPORTS_LUKS = True
 
     def __init__(
         self, instance=None, disk_name=None, path=None, disk_info_mapping=None
@@ -1036,6 +1040,8 @@ class Rbd(Image):
 
         self.disk_qos(info, extra_specs)
 
+        self.disk_encryption(info)
+
         return info
 
     def _can_fallocate(self):
@@ -1071,16 +1077,49 @@ class Rbd(Image):
                             "%(error)s", {'path': base, 'error': e})
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
+        # We can't use the bdm_encryption because that is what will be used
+        # to create the new disk image whereas image_encryption will be
+        # used to access the encrypted source image.
+        image_encryption = kwargs.pop('encryption', None)
 
         if not self.exists():
             self._remove_non_raw_cache_image(base)
-            prepare_template(target=base, *args, **kwargs)
+            prepare_template(
+                target=base, encryption=image_encryption, *args, **kwargs)
+
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        context = kwargs.get('context')
+        bdm_encryption = self.get_encryption(context)
 
         # prepare_template() may have cloned the image into a new rbd
         # image already instead of downloading it locally
         if not self.exists():
-            self.driver.import_image(base, self.rbd_name)
-        self.verify_base_size(base, size)
+            # If the source image is not encrypted but the destination needs to
+            # be encrypted, convert the image.
+            if bdm_encryption and not image_encryption:
+                staged = f'{base}.converted'
+                with fileutils.remove_path_on_error(staged):
+                    images.convert_image(
+                        base,
+                        staged,
+                        'raw',
+                        bdm_encryption.get('format'),
+                        encryption=image_encryption,
+                        dest_encryption=bdm_encryption,
+                    )
+                    self.driver.import_image(staged, self.rbd_name)
+                    os.unlink(staged)
+            else:
+                self.driver.import_image(base, self.rbd_name)
+
+        # With encryption, the virtual size of the root disk is expected to be
+        # smaller than the base image if the encryption metadata like the
+        # encryption header is stored as part of the image data. Skip base
+        # image size verification in that case.
+        if not bdm_encryption:
+            self.verify_base_size(base, size)
 
         if size and size > self.get_disk_size(self.rbd_name):
             self.driver.resize(self.rbd_name, size)
