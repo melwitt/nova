@@ -262,20 +262,27 @@ def create_encryption_secret(
     context: nova_context.RequestContext,
     instance: 'objects.Instance',
     driver_bdm: 'driver_block_device.DriverBlockDevice',
+    for_snapshot: bool = False,
 ):
     # Use oslo.serialization to encode some random data as passphrase
     secret = oslo_base64.encode_as_text(
         os.urandom(_EPHEMERAL_ENCRYPTION_SECRET_BYTE_LENGTH)
     )
+    # Let the name indicate if the secret is for a snapshot to help with
+    # debugging and to add clarity. Snapshots are standalone images in glance
+    # that are not directly associated with an instance. Noting whether the
+    # secret is for a snapshot lets us know whether the secret is for a
+    # standalone image as opposed to a secret for an instance.
+    snapshot = 'for snapshot of' if for_snapshot else ''
     secret_name = (
-        f"Ephemeral encryption secret for instance "
+        f"Ephemeral encryption secret for instance {snapshot}"
         f"{instance.uuid} BDM {driver_bdm['uuid']}"
     )
     cmo = passphrase.Passphrase(secret, name=secret_name)
     key_mgr = _get_key_manager()
     secret_uuid = key_mgr.store(context, cmo)
     LOG.debug(
-        f"Created {secret_name} with UUID {secret_uuid}",
+        f'Created "{secret_name}" with UUID {secret_uuid}',
         instance=instance
     )
     return secret_uuid, secret
