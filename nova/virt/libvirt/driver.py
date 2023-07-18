@@ -3002,8 +3002,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         snapshot = self._image_api.get(context, image_id)
 
-        # source_format is an on-disk format
-        # source_type is a backend type
+        # source_format is an on-disk format such as qcow2 or raw
+        # source_type is a backend type such as qcow2 or rbd
         disk_path, source_format = libvirt_utils.find_disk(guest)
         source_type = libvirt_utils.get_disk_type_from_path(disk_path)
 
@@ -3045,11 +3045,9 @@ class LibvirtDriver(driver.ComputeDriver):
                                             instance.image_meta,
                                             block_device_info)
 
-        disk_name = os.path.basename(disk_path)
-
         root_disk = self.image_backend.by_libvirt_path(
             instance, disk_path, image_type=source_type,
-            disk_info_mapping=disk_info['mapping'][disk_name])
+            disk_info_mapping=disk_info['mapping']['root'])
 
         encryption = root_disk.get_encryption(context)
 
@@ -3067,8 +3065,8 @@ class LibvirtDriver(driver.ComputeDriver):
             # shutdown instances
             original_power_state != power_state.SHUTDOWN and
             # NOTE(melwitt): Live snapshot doesn't work with ephemeral
-            # encryption as there is no way to provide the secret to
-            # blockRebase().
+            # encryption because there is no way to provide the secret to
+            # libvirt blockRebase(), which is used by _live_snapshot.
             not encryption
         ):
             live_snapshot = True
@@ -3224,8 +3222,10 @@ class LibvirtDriver(driver.ComputeDriver):
                 # that we will be able to read it if/when an instance is booted
                 # from the snapshot in the future.
                 secret_uuid, secret = crypto.create_encryption_secret(
-                    context, instance, root_bdm)
+                    context, instance, root_bdm, for_snapshot=True)
             else:
+                LOG.info('Re-using existing ephemeral encryption secret for '
+                         'the snapshot', instance=instance)
                 # Reuse the existing secret to avoid a potential change in
                 # ownership.  Example: an admin shelves the instance of a
                 # non-admin. We don't want the non-admin user to lose access to
