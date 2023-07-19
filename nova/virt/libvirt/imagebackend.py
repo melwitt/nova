@@ -752,7 +752,7 @@ class Qcow2(Image):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
-        def create_qcow2_image(base, target, size, encryption):
+        def create_qcow2_image(base, target, size, encryption=None):
             libvirt_utils.create_image(
                 target, 'qcow2', size, backing_file=base,
                 encryption=encryption)
@@ -761,6 +761,8 @@ class Qcow2(Image):
         # the legacy ephemeral encryption implementation. It should likely
         # be an arg but the required refactor isn't trivial.
         context = kwargs.get('context')
+        # bdm_encryption contains the encryption attributes for the destination
+        # image, if encryption was specified.
         bdm_encryption = self.get_encryption(context)
 
         # Download the unmodified base image unless we already have a copy.
@@ -773,7 +775,6 @@ class Qcow2(Image):
             # to create the new disk image whereas image_encryption will be
             # used to access the encrypted source image.
             image_encryption = kwargs.pop('encryption', None)
-
             prepare_template(
                 target=base, encryption=image_encryption, *args, **kwargs)
 
@@ -806,12 +807,12 @@ class Qcow2(Image):
                     libvirt_utils.copy_image(base, legacy_base)
                     image = imgmodel.LocalFileImage(legacy_base,
                                                     imgmodel.FORMAT_QCOW2)
-                    disk.extend(
-                        image, legacy_backing_size, encryption=bdm_encryption)
+                    disk.extend(image, legacy_backing_size)
 
         if not os.path.exists(self.path):
             with fileutils.remove_path_on_error(self.path):
-                create_qcow2_image(base, self.path, size, bdm_encryption)
+                create_qcow2_image(
+                    base, self.path, size, encryption=bdm_encryption)
 
     def resize_image(self, size, encryption=None):
         image = imgmodel.LocalFileImage(self.path, imgmodel.FORMAT_QCOW2)
