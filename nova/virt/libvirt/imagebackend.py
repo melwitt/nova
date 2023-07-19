@@ -644,29 +644,34 @@ class Flat(Image):
         # the legacy ephemeral encryption implementation. It should likely
         # be an arg but the required refactor isn't trivial.
         context = kwargs.get('context')
-        encryption = self.get_encryption(context)
+        # bdm_encryption contains the encryption attributes for the destination
+        # image, if encryption was specified.
+        bdm_encryption = self.get_encryption(context)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
-            if not encryption:
+            if not bdm_encryption:
                 libvirt_utils.copy_image(base, target)
             else:
+                # Copy from the unencrypted base image and then encrypt the
+                # target image if encryption has been specified.
                 images.convert_image(
                     base,
                     target,
                     self.driver_format,
-                    encryption.get('format'),
-                    dest_encryption=encryption,
+                    bdm_encryption.get('format'),
+                    dest_encryption=bdm_encryption,
                 )
             if size:
-                self.resize_image(size, encryption=encryption)
+                self.resize_image(size, encryption=bdm_encryption)
 
         generating = 'image_id' not in kwargs
         if generating:
             if not self.exists():
                 # Generating image in place
                 prepare_template(
-                    target=self.path, encryption=encryption, *args, **kwargs)
+                    target=self.path, encryption=bdm_encryption,
+                    *args, **kwargs)
 
             # NOTE(plibeau): extend the disk in the case of image is not
             # accessible anymore by the customer and the base image is
@@ -674,10 +679,19 @@ class Flat(Image):
             # instance.
             else:
                 if size:
-                    self.resize_image(size, encryption=encryption)
+                    self.resize_image(size, encryption=bdm_encryption)
         else:
             if not os.path.exists(base):
-                prepare_template(target=base, *args, **kwargs)
+                # Create unencrypted base image, decrypting the source image if
+                # needed.
+                #
+                # image_encryption contains the encryption attributes for the
+                # source image, if it is encrypted. We need it to create the
+                # base image which is never encrypted. If the source image is
+                # not encrypted, we pass None.
+                image_encryption = kwargs.pop('encryption', None)
+                prepare_template(
+                    target=base, encryption=image_encryption, *args, **kwargs)
 
             # NOTE(mikal): Update the mtime of the base file so the image
             # cache manager knows it is in use.
@@ -701,6 +715,7 @@ class Flat(Image):
             self.driver_format,
             out_format,
             encryption=encryption,
+            dest_encryption=dest_encryption,
         )
 
     @staticmethod
