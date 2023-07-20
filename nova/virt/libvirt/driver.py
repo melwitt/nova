@@ -4367,16 +4367,28 @@ class LibvirtDriver(driver.ComputeDriver):
         if image_meta.obj_attr_is_set("id"):
             rescue_image_id = image_meta.id
 
+        rescue_image_id = (
+            rescue_image_id or
+            CONF.libvirt.rescue_image_id or
+            instance.image_ref)
+
+        # If we're going to use the configured rescue image, replace image_meta
+        # with the image metadata from CONF.libvirt.rescue_image_id.
+        if rescue_image_id == CONF.libvirt.rescue_image_id:
+            image_meta = objects.ImageMeta.from_image_ref(
+                context, self._image_api, CONF.libvirt.rescue_image_id)
+
         rescue_images = {
-            'image_id': (rescue_image_id or
-                        CONF.libvirt.rescue_image_id or instance.image_ref),
+            'image_id': rescue_image_id,
             'kernel_id': (CONF.libvirt.rescue_kernel_id or
                           instance.kernel_id),
             'ramdisk_id': (CONF.libvirt.rescue_ramdisk_id or
                            instance.ramdisk_id),
         }
 
-        image_bdms = driver.block_device_info_get_image(block_device_info)
+        # We will need the original block_device_info later if this is a legacy
+        # rescue.
+        original_block_device_info = block_device_info
 
         virt_type = CONF.libvirt.virt_type
         if hardware.check_hw_rescue_props(image_meta):
@@ -4392,13 +4404,13 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise exception.InstanceNotRescuable(
                     instance_id=instance.uuid, reason=reason % virt_type)
             # NOTE(lyarwood): Stable device rescue provides the original disk
-            # mapping of the instance with the rescue device appened to the
+            # mapping of the instance with the rescue device appended to the
             # end. As a result we need to provide the original image_meta, the
             # new rescue_image_meta and block_device_info when calling
             # get_disk_info.
             rescue_image_meta = image_meta
             if instance.image_ref:
-                image_meta = objects.ImageMeta.from_image_ref(
+                original_image_meta = objects.ImageMeta.from_image_ref(
                     context, self._image_api, instance.image_ref)
             else:
                 # NOTE(lyarwood): If instance.image_ref isn't set attempt to
@@ -4408,26 +4420,26 @@ class LibvirtDriver(driver.ComputeDriver):
                     context, self._image_api, self._volume_api,
                     block_device_info['block_device_mapping'],
                     legacy_bdm=False)
-                image_meta = objects.ImageMeta.from_dict(image_meta_dict)
+                original_image_meta = objects.ImageMeta.from_dict(
+                    image_meta_dict)
 
         else:
             LOG.info("Attempting rescue", instance=instance)
-            # NOTE(melwitt): A legacy rescue only provides the rescue device
-            # and the original root device, but we still need to provide
-            # block_device_info to the get_disk_info call because the disk
-            # might be encrypted. The encryption attributes are in the
-            # block_device_info.
+            # NOTE(lyarwood): A legacy rescue only provides the rescue device
+            # and the original root device so we don't need to provide
+            # block_device_info to the get_disk_info call.
             block_device_info = None
 
         # This will generate the disk mapping.
-        disk_info = blockinfo.get_disk_info(virt_type, instance, image_meta,
-            rescue=True, block_device_info=block_device_info,
+        disk_info = blockinfo.get_disk_info(
+            virt_type, instance, original_image_meta, rescue=True,
+            block_device_info=block_device_info,
             rescue_image_meta=rescue_image_meta)
 
         # If ephemeral encryption was requested, add the encryption attributes
         # to the disk_info_mapping for the rescue disk.
         if hardware.get_ephemeral_encryption_constraint(
-            instance.flavor, rescue_image_meta or image_meta
+            instance.flavor, rescue_image_meta or original_image_meta
         ):
             # Create a BDM object for the rescue disk to maintain consistency
             # with how all other ephemeral encryption is handled. However we
@@ -4444,7 +4456,8 @@ class LibvirtDriver(driver.ComputeDriver):
             # Update the BDM with ephemeral encryption attributes from the
             # flavor or image.
             compute_utils.update_ephemeral_encryption_bdms(
-                instance.flavor, rescue_image_meta or image_meta, [bdm_obj])
+                instance.flavor, rescue_image_meta or original_image_meta,
+                [bdm_obj])
 
             # Stash the encryption secret for the rescue image to use when
             # fetching and potentially converting the encrypted rescue image.
@@ -4492,7 +4505,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
             # Add encryption info to the disk mapping and stash the secret UUID
             # in the instance system metadata. We need to do this because
-            # normally the secret UUID would be in the BDM database record and
+            # normally the secret UUID would be in the BDM database record but
             # we are not persisting any BDM data for the rescue disk.
             if rescue_bdms:
                 rescue_bdm = rescue_bdms[0]
@@ -4510,8 +4523,11 @@ class LibvirtDriver(driver.ComputeDriver):
                 # info back to the image disk as well.
                 if not rescue_image_meta:
                     disk_info['mapping']['root'].update(rescue_encryption)
-                    # image_bdms = driver.block_device_info_get_image(
-                    #    block_device_info)
+                    # We need to use the original block_device_info here
+                    # because block_device_info will have been set to None for
+                    # legacy rescue earlier in this method.
+                    image_bdms = driver.block_device_info_get_image(
+                        original_block_device_info)
                     if image_bdms:
                         image_bdm = image_bdms[0]
                         disk_info['mapping']['disk'].update(
