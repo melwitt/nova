@@ -4390,6 +4390,10 @@ class LibvirtDriver(driver.ComputeDriver):
             CONF.libvirt.rescue_image_id or
             instance.image_ref)
 
+        LOG.info(
+            f'Using image {rescue_image_id} as rescue image',
+            instance=instance)
+
         # If we're going to use the configured rescue image, replace image_meta
         # with the image metadata from CONF.libvirt.rescue_image_id. Ideally we
         # would determine which image_meta to pass to driver rescue in the
@@ -4543,19 +4547,19 @@ class LibvirtDriver(driver.ComputeDriver):
                         {secret_key: disk_secret_uuid})
                     instance.save()
 
-                # If this is not a stable rescue, we need to add encryption
-                # info back to the image disk as well.
-                if not rescue_image_meta:
-                    disk_info['mapping']['root'].update(rescue_encryption)
-                    # We need to use the original block_device_info here
-                    # because block_device_info will have been set to None for
-                    # legacy rescue earlier in this method.
-                    image_bdms = driver.block_device_info_get_image(
-                        original_block_device_info)
-                    if image_bdms:
-                        image_bdm = image_bdms[0]
-                        disk_info['mapping']['disk'].update(
-                            blockinfo.get_encryption_info_from_bdm(image_bdm))
+        # If this is not a stable rescue, we need to add encryption
+        # info back to the image disk if it is encrypted.
+        if not rescue_image_meta:
+            # We need to use the original block_device_info here
+            # because block_device_info will have been set to None for
+            # legacy rescue earlier in this method.
+            image_bdms = driver.block_device_info_get_image(
+                original_block_device_info)
+            print(f'image_bdms = {image_bdms}')
+            if image_bdms:
+                image_bdm = image_bdms[0]
+                disk_info['mapping']['disk'].update(
+                    blockinfo.get_encryption_info_from_bdm(image_bdm))
 
         LOG.debug("rescue generated disk_info: %s", disk_info)
 

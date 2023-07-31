@@ -727,6 +727,7 @@ def get_disk_info(virt_type, instance, image_meta, block_device_info=None,
                                rescue=rescue,
                                rescue_image_meta=rescue_image_meta)
 
+    print(f'mapping = {mapping}')
     return {'disk_bus': disk_bus,
             'cdrom_bus': cdrom_bus,
             'mapping': mapping}
