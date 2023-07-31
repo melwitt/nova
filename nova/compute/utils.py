@@ -1287,10 +1287,6 @@ def initialize_instance_snapshot_metadata(context, instance, name,
     for key in keys_to_pop:
         properties.pop(key, None)
 
-    # A snapshot image is a "fresh" image, it should not have a base_image_ref
-    # set.
-    properties.pop('base_image_ref', None)
-
     # The properties in extra_properties have precedence
     properties.update(extra_properties)
 
