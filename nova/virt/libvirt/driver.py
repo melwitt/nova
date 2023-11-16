@@ -1745,6 +1745,14 @@ class LibvirtDriver(driver.ComputeDriver):
                         f'Failed to delete encryption secret {secret_uuid} '
                         'from key manager', instance=instance)
                     exception_raised = e
+                    # Skip deletion of the libvirt secret if we failed to
+                    # delete the secret in the key manager.
+                    continue
+
+                # Reset the encryption_secret_uuid so that if this is a
+                # rebuild, a new secret will be created when spawning.
+                driver_bdm['encryption_secret_uuid'] = None
+                driver_bdm.save()
 
             secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
             if self._host.find_secret('volume', secret_usage):
@@ -4425,34 +4433,24 @@ class LibvirtDriver(driver.ComputeDriver):
                 driver_bdm['encryption_format'] = (
                     CONF.ephemeral_storage_encryption.default_format)
 
-            secret_uuid = driver_bdm.get('encryption_secret_uuid')
-            if secret_uuid is None:
+            if driver_bdm.get('encryption_secret_uuid') is None:
                 # Create a passphrase and stash it in the key manager
                 secret_uuid, secret = crypto.create_encryption_secret(
                     context, instance, driver_bdm)
                 # Stash the UUID of said secret in our driver BDM
                 driver_bdm['encryption_secret_uuid'] = secret_uuid
-            else:
-                secret = crypto.get_encryption_secret(context, secret_uuid)
-                if secret is None:
-                    LOG.info(
-                        f'Failed to find encryption secret {secret_uuid} in '
-                        f"the key manager for driver BDM {driver_bdm['uuid']}",
-                        instance=instance)
-                    # Skip creation of a libvirt secret if we couldn't find the
-                    # secret in the key manager.
-                    continue
+
+                # Stash the passphrase itself in a libvirt secret using the
+                # same UUID as the key manager secret for easy retrieval later
+                secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
+                if self._host.find_secret('volume', secret_usage) is None:
+                    self._host.create_secret(
+                        'volume', secret_usage, password=secret,
+                        uuid=secret_uuid)
 
             # Ensure this is all saved back down in the database via the o.vo
             # BlockDeviceMapping object
             driver_bdm.save()
-
-            # Stash the passphrase itself in a libvirt secret using the
-            # same UUID as the key manager secret for easy retrieval later
-            secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
-            if self._host.find_secret('volume', secret_usage) is None:
-                self._host.create_secret(
-                    'volume', secret_usage, password=secret, uuid=secret_uuid)
 
         return block_device_info
 

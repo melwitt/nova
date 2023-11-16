@@ -708,6 +708,7 @@ def _create_test_instance():
         'resources': None,
         'migration_context': None,
         'info_cache': None,
+        'cleaned': False,
     }
 
 
@@ -15900,7 +15901,6 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
     @mock.patch('nova.virt.block_device.DriverBlockDevice.save')
     @mock.patch('nova.crypto.create_encryption_secret')
-    @mock.patch('nova.crypto.get_encryption_secret')
     @mock.patch.object(
         libvirt_driver.LibvirtDriver, '_register_undefined_instance_details',
         new=mock.Mock())
@@ -15912,19 +15912,13 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         'nova.virt.libvirt.driver.LibvirtDriver._get_guest_xml',
         new=mock.Mock())
     def _test_spawn_with_ephemeral_encryption(
-        self, mock_get_info, mock_get_secret, mock_create_secret, mock_save,
-        encryption_format=None, encryption_secret_uuid=None,
-        secret_not_found=False,
+        self, mock_get_info, mock_create_secret, mock_save,
+        encryption_format=None,
     ):
         self.useFixture(nova_fixtures.LibvirtImageBackendFixture())
         mock_get_info.return_value = hardware.InstanceInfo(
             state=power_state.RUNNING)
         mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
-        if not secret_not_found:
-            mock_get_secret.return_value = mock.sentinel.secret
-        else:
-            mock_get_secret.side_effect = [
-                mock.sentinel.secret, None, mock.sentinel.secret]
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         drvr._host = mock.Mock()
@@ -15946,23 +15940,21 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             device_name='/dev/vda', volume_size=1, source_type='image',
             destination_type='local', guest_format=None, encrypted=True,
             encryption_format=encryption_format, encryption_options=None,
-            encryption_secret_uuid=encryption_secret_uuid,
+            encryption_secret_uuid=None,
         )
         eph_bdm = block_device_obj.BlockDeviceMapping(
             id=2, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdb', volume_size=1,
             source_type='blank', destination_type='local', guest_format=None,
             encrypted=True, encryption_format=encryption_format,
-            encryption_options=None,
-            encryption_secret_uuid=encryption_secret_uuid,
+            encryption_options=None, encryption_secret_uuid=None,
         )
         swap_bdm = block_device_obj.BlockDeviceMapping(
             id=3, uuid=uuids.swap, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdc', volume_size=1,
             source_type='blank', destination_type='local', guest_format='swap',
             encrypted=True, encryption_format=encryption_format,
-            encryption_options=None,
-            encryption_secret_uuid=encryption_secret_uuid,
+            encryption_options=None, encryption_secret_uuid=None,
         )
 
         block_device_info = driver.get_block_device_info(
@@ -15971,9 +15963,20 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         #  Call spawn() with encrypted ephemeral block device.
         drvr.spawn(
             self.context, instance, image_meta, [], None, {},
-            block_device_info=block_device_info
-        )
+            block_device_info=block_device_info)
 
+        # Assert that we generated key manager secrets.
+        img_call = mock.call(
+            self.context, instance, block_device_info['image'][0])
+        eph_call = mock.call(
+            self.context, instance, block_device_info['ephemerals'][0])
+        swap_call = mock.call(
+            self.context, instance, block_device_info['swap'])
+
+        self.assertEqual(
+            [img_call, eph_call, swap_call], mock_create_secret.mock_calls)
+
+        # Assert that we generated libvirt secrets.
         expected_libvirt_secret_calls = []
         for bdm_uuid in (uuids.image, uuids.ephemeral, uuids.swap):
             call = mock.call(
@@ -15981,45 +15984,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 password=mock.sentinel.secret, uuid=uuids.secret)
             expected_libvirt_secret_calls.append(call)
 
-        if encryption_secret_uuid is None:
-            # Assert that we generated key manager secrets.
-            img_call = mock.call(
-                self.context, instance, block_device_info['image'][0])
-            eph_call = mock.call(
-                self.context, instance, block_device_info['ephemerals'][0])
-            swap_call = mock.call(
-                self.context, instance, block_device_info['swap'])
-
-            self.assertEqual(
-                [img_call, eph_call, swap_call], mock_create_secret.mock_calls)
-
-            # Assert that we generated libvirt secrets.
-            self.assertEqual(
-                expected_libvirt_secret_calls,
-                drvr._host.create_secret.mock_calls)
-
-            # And we did not retrieve an existing secret.
-            mock_get_secret.assert_not_called()
-        else:
-            # Assert that we didn't generate any key manager secrets.
-            mock_create_secret.assert_not_called()
-            # We should have attempted to retrieve 3 secrets.
-            call = mock.call(self.context, encryption_secret_uuid)
-            self.assertEqual([call, call, call], mock_get_secret.mock_calls)
-            # Assert that we created libvirt secrets if needed.
-            if secret_not_found:
-                expected_libvirt_secret_calls.pop(1)
-            self.assertEqual(
-                expected_libvirt_secret_calls,
-                drvr._host.create_secret.mock_calls)
+        self.assertEqual(
+            expected_libvirt_secret_calls, drvr._host.create_secret.mock_calls)
 
         # Assert the contents of block_device_info now contain the expected
         # values.
         expected_format = (
             encryption_format or
-            CONF.ephemeral_storage_encryption.default_format
-        )
-        expected_secret_uuid = encryption_secret_uuid or uuids.secret
+            CONF.ephemeral_storage_encryption.default_format)
 
         for name in ('image', 'ephemerals', 'swap'):
             new_block_device_info = block_device_info[name]
@@ -16030,13 +16002,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 new_block_device_info['encryption_format']
             )
             self.assertEqual(
-                expected_secret_uuid,
+                uuids.secret,
                 new_block_device_info['encryption_secret_uuid']
             )
 
         # Assert that updates were saved to the database.
-        self.assertEqual(
-            2 if secret_not_found else 3, mock_save.call_count)
+        self.assertEqual(3, mock_save.call_count)
 
     def test_spawn_with_ephemeral_encryption_defaults(self):
         # Test that encryption defaults are set during spawn() if not
@@ -16045,13 +16016,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
     def test_spawn_with_ephemeral_encryption(self):
         self._test_spawn_with_ephemeral_encryption(
-            encryption_format='plain',
-            encryption_secret_uuid=uuids.secret
-        )
-
-    def test_spawn_with_ephemeral_encryption_secret_not_found(self):
-        self._test_spawn_with_ephemeral_encryption(
-            encryption_secret_uuid=uuids.secret, secret_not_found=True)
+            encryption_format='luks')
 
     def _test_create_image_plain(self, os_type='', filename='', mkfs=False):
         gotFiles = []
@@ -20694,8 +20659,9 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
     @mock.patch('nova.objects.instance.Instance.save', new=mock.Mock())
     @mock.patch('nova.crypto.delete_encryption_secret')
+    @mock.patch('nova.objects.block_device.BlockDeviceMapping.save')
     def _test_cleanup_with_ephemeral_encryption(
-        self, mock_delete_secret, has_key_mgr_secret=True,
+        self, mock_bdm_save, mock_delete_secret, has_key_mgr_secret=True,
         has_libvirt_secret=True, destroy_disks=True
     ):
         mock_domain = mock.Mock(fakelibvirt.virDomain)
@@ -20723,8 +20689,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         )
         ephemerals = [driver_block_device.DriverEphemeralBlockDevice(bdm)]
         block_device_info = {'ephemerals': ephemerals}
-        instance = objects.Instance(
-            self.context, cleaned=True, **self.test_instance)
+        instance = objects.Instance(self.context, **self.test_instance)
+        instance.cleaned = True
 
         # Call cleanup() with encrypted ephemeral block device.
         drvr.cleanup(
@@ -20735,8 +20701,10 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         if has_key_mgr_secret and destroy_disks:
             mock_delete_secret.assert_called_once_with(
                 self.context, instance, encryption_secret_uuid)
+            mock_bdm_save.assert_called_once_with()
         else:
             mock_delete_secret.assert_not_called()
+            mock_bdm_save.assert_not_called()
 
         # Assert that we deleted the libvirt secret.
         if has_libvirt_secret and destroy_disks:
@@ -20766,8 +20734,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         libvirt_driver.LibvirtDriver, '_cleanup_ephemeral_encryption_secrets')
     def test__cleanup_with_ephemeral_encryption_no_cleanup_instance_dir(
             self, mock_cleanup_secrets):
-        instance = objects.Instance(
-            self.context, cleaned=False, **self.test_instance)
+        instance = objects.Instance(self.context, **self.test_instance)
         bdm_dict = {
             'source_type': 'image',
             'destination_type': 'local',
@@ -20807,8 +20774,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         # Simulate a failure to delete the instance files.
         mock_delete_files.return_value = False
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        instance = objects.Instance(
-            self.context, cleaned=False, **self.test_instance)
+        instance = objects.Instance(self.context, **self.test_instance)
         bdm_dict = {
             'source_type': 'image',
             'destination_type': 'local',
