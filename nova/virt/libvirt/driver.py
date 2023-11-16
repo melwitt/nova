@@ -1716,8 +1716,14 @@ class LibvirtDriver(driver.ComputeDriver):
 
         if cleanup_instance_disks:
             crypto.delete_vtpm_secret(context, instance)
-            self._cleanup_ephemeral_encryption_secrets(
-                context, instance, block_device_info)
+            # Make sure that the instance directory files were successfully
+            # deleted before destroying the encryption secrets in the case of
+            # image backends that are not 'lvm' or 'rbd'. We don't want to
+            # leave any chance that we delete the secrets if the disks have not
+            # been deleted.
+            if CONF.libvirt.images_type in ('lvm', 'rbd') or instance.cleaned:
+                self._cleanup_ephemeral_encryption_secrets(
+                    context, instance, block_device_info)
 
         self._undefine_domain(instance)
 

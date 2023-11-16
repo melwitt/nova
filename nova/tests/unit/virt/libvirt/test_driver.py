@@ -20723,7 +20723,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         )
         ephemerals = [driver_block_device.DriverEphemeralBlockDevice(bdm)]
         block_device_info = {'ephemerals': ephemerals}
-        instance = objects.Instance(self.context, **self.test_instance)
+        instance = objects.Instance(
+            self.context, cleaned=True, **self.test_instance)
 
         # Call cleanup() with encrypted ephemeral block device.
         drvr.cleanup(
@@ -20756,6 +20757,75 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
     def test_cleanup_with_ephemeral_encryption_no_destroy_disks(self):
         self._test_cleanup_with_ephemeral_encryption(destroy_disks=False)
+
+    @mock.patch.object(
+        libvirt_driver.LibvirtDriver, '_cleanup_lvm', new=mock.Mock())
+    @mock.patch.object(
+        libvirt_driver.LibvirtDriver, '_cleanup_rbd', new=mock.Mock())
+    @mock.patch.object(
+        libvirt_driver.LibvirtDriver, '_cleanup_ephemeral_encryption_secrets')
+    def test__cleanup_with_ephemeral_encryption_no_cleanup_instance_dir(
+            self, mock_cleanup_secrets):
+        instance = objects.Instance(
+            self.context, cleaned=False, **self.test_instance)
+        bdm_dict = {
+            'source_type': 'image',
+            'destination_type': 'local',
+            'encrypted': True,
+            'encryption_format': 'luks',
+            'encryption_options': None,
+            'encryption_secret_uuid': None,
+        }
+        bdm = fake_block_device.fake_bdm_object(self.context, bdm_dict)
+        bdi = {'image': [driver_block_device.DriverImageBlockDevice(bdm)]}
+        # Pass clean_instance_dir=False + clean_instance_disks=True
+        for images_type in ('raw', 'flat', 'qcow2', 'lvm', 'rbd',
+                            'ploop', 'default'):
+            self.flags(images_type=images_type, group='libvirt')
+            drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+            drvr._cleanup(
+                self.context, instance, [], block_device_info=bdi,
+                cleanup_instance_dir=False, cleanup_instance_disks=True)
+            if images_type not in ('lvm', 'rbd'):
+                # We should not have cleaned up encryption secrets because the
+                # disks were not deleted.
+                mock_cleanup_secrets.assert_not_called()
+            else:
+                # For 'lvm' and 'rbd' we should have cleaned up the secrets
+                # because cleanup for their disks is not related to the
+                # instance directory.
+                mock_cleanup_secrets.assert_called_once_with(
+                    self.context, instance, bdi)
+            mock_cleanup_secrets.reset_mock()
+
+    @mock.patch('nova.objects.instance.Instance.save', new=mock.Mock())
+    @mock.patch.object(libvirt_driver.LibvirtDriver, 'delete_instance_files')
+    @mock.patch.object(
+        libvirt_driver.LibvirtDriver, '_cleanup_ephemeral_encryption_secrets')
+    def test__cleanup_with_ephemeral_encryption_cleanup_instance_dir_failed(
+            self, mock_cleanup_secrets, mock_delete_files):
+        # Simulate a failure to delete the instance files.
+        mock_delete_files.return_value = False
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        instance = objects.Instance(
+            self.context, cleaned=False, **self.test_instance)
+        bdm_dict = {
+            'source_type': 'image',
+            'destination_type': 'local',
+            'encrypted': True,
+            'encryption_format': 'luks',
+            'encryption_options': None,
+            'encryption_secret_uuid': None,
+        }
+        bdm = fake_block_device.fake_bdm_object(self.context, bdm_dict)
+        bdi = {'image': [driver_block_device.DriverImageBlockDevice(bdm)]}
+        # Pass clean_instance_dir=True + clean_instance_disks=True
+        drvr._cleanup(
+            self.context, instance, [], block_device_info=bdi,
+            cleanup_instance_dir=True, cleanup_instance_disks=True)
+        # We should not have cleaned up encryption secrets because the disks
+        # were not deleted.
+        mock_cleanup_secrets.assert_not_called()
 
     @mock.patch.object(libvirt_driver.LibvirtDriver, '_get_volume_encryption')
     @mock.patch.object(libvirt_driver.LibvirtDriver, '_allow_native_luksv1')
