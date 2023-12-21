@@ -100,7 +100,7 @@ def unprivileged_convert_image(
     # If the source is encrypted, we will need to pass encryption related
     # options using --image-opts.
     if in_format is not None and not encryption:
-        cmd = cmd + ('-f', in_format)
+        cmd += ('-f', in_format)
 
     if compress:
         cmd += ('-c',)
@@ -134,7 +134,7 @@ def unprivileged_convert_image(
             # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
             prefix = 'encrypt.' if in_format == 'qcow2' else ''
             encryption_opts += (
-                f"{prefix}key-secret=sec,file.filename={source}",
+                f"file.filename={source},{prefix}key-secret=sec",
             )
 
         if dest_encryption:
