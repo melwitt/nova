@@ -4281,6 +4281,9 @@ class API:
                     reason = _('Resize to zero disk flavor is not allowed.')
                     raise exception.CannotResizeDisk(reason=reason)
 
+            self._validate_resize_for_ephemeral_encryption(
+                context, instance, current_flavor, new_flavor)
+
         current_flavor_name = current_flavor['name']
         new_flavor_name = new_flavor['name']
         LOG.debug("Old instance type %(current_flavor_name)s, "
