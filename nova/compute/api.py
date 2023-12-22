@@ -3709,6 +3709,9 @@ class API:
         if orig_image_ref != image_href:
             self._validate_numa_rebuild(instance, image, flavor)
 
+        if orig_image_ref != image_href:
+            self._validate_rebuild_for_ephemeral_encryption(flavor, image)
+
         kernel_id, ramdisk_id = self._handle_kernel_and_ramdisk(
                 context, None, None, image)
 
@@ -4158,6 +4161,68 @@ class API:
 
         return node
 
+    @staticmethod
+    def _validate_resize_for_ephemeral_encryption(
+            context, instance, current_flavor, new_flavor):
+        # Check if this is a request to resize from a flavor without
+        # ephemeral encryption to a flavor with ephemeral encryption and
+        # vice versa.
+        current_flavor_encryption = strutils.bool_from_string(
+            current_flavor.extra_specs.get('hw:ephemeral_encryption'))
+        new_flavor_encryption = strutils.bool_from_string(
+            new_flavor.extra_specs.get('hw:ephemeral_encryption'))
+        if current_flavor_encryption != new_flavor_encryption:
+            reason = _(
+                'Resize from a flavor with ephemeral encryption to a '
+                'flavor without ephemeral encryption and vice versa is not '
+                'allowed.')
+            raise exception.ResizeEphemeralEncryptionConflict(reason=reason)
+        # If both flavors specify encryption, check if the formats match.
+        if current_flavor_encryption and new_flavor_encryption:
+            current_format = current_flavor.extra_specs.get(
+                'hw:ephemeral_encryption_format')
+            new_format = new_flavor.extra_specs.get(
+                'hw:ephemeral_encryption_format')
+            if new_format is not None and current_format != new_format:
+                # Check BDM first before failing. If the BDM encryption format
+                # matches the new flavor format, we don't need to reject it.
+                bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                    context, instance.uuid)
+                if bdms.root_bdm().encryption_format != new_format:
+                    reason = _(
+                        'Resize to a different ephemeral encryption format is '
+                        'not allowed.')
+                    raise exception.ResizeEphemeralEncryptionConflict(
+                        reason=reason)
+
+    @staticmethod
+    def _validate_rebuild_for_ephemeral_encryption(flavor, image):
+        image_meta = objects.ImageMeta.from_dict(image)
+        # This will validate hw:ephemeral_encryption and
+        # hw_ephemeral_encryption.
+        hardware.get_ephemeral_encryption_constraint(flavor, image_meta)
+        # This will validate hw:ephemeral_encryption_format and
+        # hw_ephemeral_encryption_format.
+        flavor_format = flavor.get('extra_specs', {}).get(
+            'hw:ephemeral_encryption_format')
+        image_format = image_meta.properties.get(
+            'hw_ephemeral_encryption_format')
+        if (flavor_format is not None and image_format is not None and
+                flavor_format != image_format):
+            emsg = _(
+                'Flavor %(flavor_name)s has hw:ephemeral_encryption_format '
+                'extra spec explicitly set to %(flavor_val)s, conflicting '
+                'with image %(image_name)s which has '
+                'hw_ephemeral_encryption_format property explicitly set to '
+                '%(image_val)s')
+            data = {
+                'flavor_name': flavor.name,
+                'flavor_val': flavor_format,
+                'image_name': image_meta.name,
+                'image_val': image_format,
+            }
+            raise exception.FlavorImageConflict(emsg % data)
+
     # TODO(stephenfin): This logic would be so much easier to grok if we
     # finally split resize and cold migration into separate code paths
     @block_extended_resource_request
@@ -4221,6 +4286,9 @@ class API:
                 if not volume_backed:
                     reason = _('Resize to zero disk flavor is not allowed.')
                     raise exception.CannotResizeDisk(reason=reason)
+
+            self._validate_resize_for_ephemeral_encryption(
+                context, instance, current_flavor, new_flavor)
 
         current_flavor_name = current_flavor['name']
         new_flavor_name = new_flavor['name']
