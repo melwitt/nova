@@ -2530,3 +2530,7 @@ class NotSupportedComputeForEvacuateV295(NotSupported):
                 "instance on destination. To evacuate before upgrades are "
                 "complete please use an older microversion. Required version "
                 "for compute %(expected), current version %(currently)s")
+
+
+class ResizeEphemeralEncryptionConflict(NovaException):
+    msg_fmt = _('Conflict in resize with ephemeral encryption: %(reason)s')
