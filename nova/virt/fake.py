@@ -1136,6 +1136,14 @@ class EphEncryptionDriverPLAIN(MediumFakeDriver):
         supports_ephemeral_encryption_plain=True)
 
 
+class EphEncryptionDriverLUKSPLAIN(MediumFakeDriver):
+    capabilities = dict(
+        FakeDriver.capabilities,
+        supports_ephemeral_encryption=True,
+        supports_ephemeral_encryption_luks=True,
+        supports_ephemeral_encryption_plain=True)
+
+
 class FakeDriverWithoutFakeNodes(FakeDriver):
     """FakeDriver that behaves like a real single-node driver.
 
