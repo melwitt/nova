@@ -204,6 +204,7 @@ instance for these kind of workloads.
    uefi
    secure-boot
    sev
+   ephemeral-encryption
    managing-resource-providers
    compute-node-identification
    resource-limits
