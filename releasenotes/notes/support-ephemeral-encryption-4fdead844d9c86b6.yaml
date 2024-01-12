@@ -10,3 +10,4 @@ features:
     * create/delete
     * resize
     * cold migration
+    * live migration
