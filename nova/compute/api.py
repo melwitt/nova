@@ -5600,7 +5600,6 @@ class API:
 
         return _metadata
 
-    @reject_ephemeral_encryption_instances(instance_actions.LIVE_MIGRATION)
     @block_extended_resource_request
     @block_port_accelerators()
     @reject_vdpa_instances(
