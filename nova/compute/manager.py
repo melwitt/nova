@@ -839,7 +839,8 @@ class ComputeManager(manager.Manager):
                 destroy_disks = True
             self.driver.destroy(context, instance,
                                 network_info,
-                                bdi, destroy_disks)
+                                bdi, destroy_disks,
+                                destroy_ephemeral_secrets=False)
 
         hostname_to_cn_uuid = {
             cn.hypervisor_hostname: cn.uuid
@@ -3152,7 +3153,8 @@ class ComputeManager(manager.Manager):
                       instance=instance)
             with timeutils.StopWatch() as timer:
                 self.driver.destroy(context, instance, network_info,
-                                    block_device_info)
+                                    block_device_info,
+                                    destroy_ephemeral_secrets=True)
             LOG.info('Took %0.2f seconds to destroy the instance on the '
                      'hypervisor.', timer.elapsed(), instance=instance)
         except exception.InstancePowerOffFailure:
@@ -5211,7 +5213,8 @@ class ComputeManager(manager.Manager):
         LOG.debug('Destroying guest from destination hypervisor including '
                   'disks.', instance=instance)
         self.driver.destroy(
-            ctxt, instance, network_info, block_device_info=block_device_info)
+            ctxt, instance, network_info, block_device_info=block_device_info,
+            destroy_ephemeral_secrets=False)
 
         # Activate source host port bindings. We need to do this before
         # deleting the (active) dest host port bindings in
@@ -5458,7 +5461,8 @@ class ComputeManager(manager.Manager):
             destroy_disks = not self._is_instance_storage_shared(
                 context, instance, host=migration.source_compute)
             self.driver.destroy(context, instance, network_info,
-                                block_device_info, destroy_disks)
+                                block_device_info, destroy_disks,
+                                destroy_ephemeral_secrets=False)
 
             self._terminate_volume_connections(context, instance, bdms)
 
@@ -6079,7 +6083,8 @@ class ComputeManager(manager.Manager):
                       instance=instance)
             self.driver.destroy(
                 ctxt, instance, network_info,
-                block_device_info=block_device_info, destroy_disks=False)
+                block_device_info=block_device_info, destroy_disks=False,
+                destroy_ephemeral_secrets=False)
 
             # At this point the volumes are disconnected from this source host.
             # Delete the old volume attachment records and create new empty

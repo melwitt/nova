@@ -4138,7 +4138,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # scratch, and hopefully fix, most aspects of a non-functioning guest.
         self.destroy(context, instance, network_info, destroy_disks=False,
                      block_device_info=block_device_info,
-                     destroy_secrets=False)
+                     destroy_secrets=False, destroy_ephemeral_secrets=False)
 
         # Convert the system metadata to image metadata
         # NOTE(mdbooth): This is a workaround for stateless Nova compute
@@ -4170,7 +4170,8 @@ class LibvirtDriver(driver.ComputeDriver):
             backing_disk_info = self._get_instance_disk_info_from_config(
                 config, block_device_info)
             self._create_images_and_backing(context, instance, instance_dir,
-                                            backing_disk_info)
+                                            backing_disk_info,
+                                            block_device_info)
 
         # Initialize all the necessary networking, block devices and
         # start the instance.
@@ -4708,6 +4709,45 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def poll_rebooting_instances(self, timeout, instances):
         pass
+
+    def _create_ephemeral_encryption_libvirt_secrets(
+            self, context, instance_uuid, flavor, image_meta,
+            block_device_info):
+        """Create ephemeral encryption libvirt secrets on the host.
+
+        This is used during migrations to create secrets on the destination.
+        """
+        if hardware.get_ephemeral_encryption_constraint(flavor, image_meta):
+            encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                block_device_info)
+            for driver_bdm in encrypted_bdms:
+                secret_uuid = driver_bdm['encryption_secret_uuid']
+                secret = crypto.get_encryption_secret(context, secret_uuid)
+                if secret is None:
+                    msg = (
+                        f'Failed to find encryption secret {secret_uuid} '
+                        f'in the key manager for driver BDM '
+                        f"{driver_bdm['uuid']}")
+                    raise exception.InvalidBDM(msg)
+                secret_usage = f"{instance_uuid}_{driver_bdm['uuid']}"
+                if not self._host.find_secret('volume', secret_usage):
+                    self._host.create_secret(
+                        'volume', secret_usage, password=secret,
+                        uuid=secret_uuid)
+
+    def _destroy_ephemeral_encryption_libvirt_secrets(
+            self, instance_uuid, flavor, image_meta, block_device_info):
+        """Destroy ephemeral encryption libvirt secrets on the host.
+
+        This is used during migrations to destroy secrets on the source.
+        """
+        if hardware.get_ephemeral_encryption_constraint(flavor, image_meta):
+            encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                block_device_info)
+            for driver_bdm in encrypted_bdms:
+                secret_usage = f"{instance_uuid}_{driver_bdm['uuid']}"
+                if self._host.find_secret('volume', secret_usage):
+                    self._host.delete_secret('volume', secret_usage)
 
     def _add_ephemeral_encryption_driver_bdm_attrs(
         self,
@@ -6120,6 +6160,7 @@ class LibvirtDriver(driver.ComputeDriver):
             connection_info = vol['connection_info']
             vol_dev = block_device.prepend_dev(vol['mount_device'])
             info = disk_mapping[vol_dev]
+            # Volume encryption secrets are created in _connect_volume.
             self._connect_volume(context, connection_info, instance)
             if scsi_controller and scsi_controller.model == 'virtio-scsi':
                 # Check if this is the bootable volume when in a
@@ -11349,7 +11390,7 @@ class LibvirtDriver(driver.ComputeDriver):
                           'present before live migration.', instance=instance)
                 self._create_images_and_backing(
                     context, instance, instance_dir, disk_info,
-                    fallback_from_host=instance.host)
+                    block_device_info, fallback_from_host=instance.host)
                 if (configdrive.required_by(instance) and
                         CONF.config_drive_format == 'iso9660'):
                     # NOTE(pkoniszewski): Due to a bug in libvirt iso config
@@ -11385,12 +11426,19 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('Connecting volumes before live migration.',
                       instance=instance)
 
+        # Libvirt secrets for volume encryption are created on the destination
+        # in _connect_volume.
         for bdm in block_device_mapping:
             connection_info = bdm['connection_info']
             self._connect_volume(context, connection_info, instance)
 
         self._pre_live_migration_plug_vifs(
             instance, network_info, migrate_data)
+
+        # Create libvirt secrets for ephemeral encryption on the destination.
+        self._create_ephemeral_encryption_libvirt_secrets(
+            context, instance.uuid, instance.flavor, instance.image_meta,
+            block_device_info)
 
         # Store server_listen and latest disk device info
         if not migrate_data:
@@ -11484,7 +11532,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                          dest=target,
                                          host=fallback_from_host,
                                          receive=True)
-            image.cache(fetch_func=copy_from_host, size=size,
+            image.cache(fetch_func=copy_from_host, context=context, size=size,
                         filename=filename)
 
         # NOTE(lyarwood): If the instance vm_state is shelved offloaded then we
@@ -11518,7 +11566,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 pass
 
     def _create_images_and_backing(self, context, instance, instance_dir,
-                                   disk_info, fallback_from_host=None):
+                                   disk_info, block_device_info,
+                                   fallback_from_host=None):
         """:param context: security context
            :param instance:
                nova.db.main.models.Instance object
@@ -11529,6 +11578,8 @@ class LibvirtDriver(driver.ComputeDriver):
            :param disk_info:
                disk info specified in _get_instance_disk_info_from_config
                (list of dicts)
+           :param block_device_info:
+               result of _get_instance_block_device_info
            :param fallback_from_host:
                host where we can retrieve images if the glance images are
                not available.
@@ -11548,14 +11599,25 @@ class LibvirtDriver(driver.ComputeDriver):
             # Get image type and create empty disk image, and
             # create backing file in case of qcow2.
             instance_disk = os.path.join(instance_dir, base)
+
+            disk_info_mapping = blockinfo.get_disk_info(
+                CONF.libvirt.virt_type, instance, instance.image_meta,
+                    block_device_info)['mapping'][base]
+            disk = self.image_backend.by_name(
+                instance, instance_disk, disk_info_mapping=disk_info_mapping)
+
             if not info['backing_file'] and not os.path.exists(instance_disk):
+                encryption = disk.get_encryption(context)
+                disk_format = info['type']
+                if encryption:
+                    disk_format = encryption.get('format')
                 libvirt_utils.create_image(
-                    instance_disk, info['type'], info['virt_disk_size'])
+                    instance_disk, disk_format, info['virt_disk_size'],
+                    encryption=encryption)
             elif info['backing_file']:
                 # Creating backing file follows same way as spawning instances.
                 cache_name = os.path.basename(info['backing_file'])
 
-                disk = self.image_backend.by_name(instance, instance_disk)
                 if cache_name.startswith('ephemeral'):
                     # The argument 'size' is used by image.cache to
                     # validate disk size retrieved from cache against
@@ -11565,6 +11627,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     # cached.
                     disk.cache(
                         fetch_func=self._create_ephemeral,
+                        context=context,
                         fs_label=cache_name,
                         os_type=instance.os_type,
                         filename=cache_name,
@@ -11574,6 +11637,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     flavor = instance.get_flavor()
                     swap_mb = flavor.swap
                     disk.cache(fetch_func=self._create_swap,
+                                context=context,
                                 filename="swap_%s" % swap_mb,
                                 size=swap_mb * units.Mi,
                                 swap_mb=swap_mb)
@@ -11612,6 +11676,11 @@ class LibvirtDriver(driver.ComputeDriver):
                               "disconnect volume %s from the source host "
                               "during post_live_migration", volume_id,
                               instance=instance)
+
+        # Destroy libvirt secrets for ephemeral encryption on the source.
+        self._destroy_ephemeral_encryption_libvirt_secrets(
+            instance.uuid, instance.flavor, instance.image_meta,
+            block_device_info)
 
     def post_live_migration_at_source(self, context, instance, network_info):
         """Unplug VIFs from networks at source.
@@ -11769,8 +11838,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 over_commit_size = max(0, int(virt_size) - dk_size)
 
             elif disk_type == 'file':
-                dk_size = os.stat(path).st_blocks * 512
-                virt_size = os.path.getsize(path)
+                qemu_img_info = disk_api.get_disk_info(path)
+                dk_size = qemu_img_info.disk_size
+                virt_size = qemu_img_info.virtual_size
                 backing_file = ""
                 over_commit_size = int(virt_size) - dk_size
 
@@ -12067,6 +12137,12 @@ class LibvirtDriver(driver.ComputeDriver):
             connection_info = vol['connection_info']
             self._disconnect_volume(context, connection_info, instance)
 
+        # Destroy libvirt secrets for ephemeral encryption on the source.
+        # Volume encryption libvirt secrets were destroyed in
+        # _disconnect_volume.
+        self._destroy_ephemeral_encryption_libvirt_secrets(
+            instance.uuid, flavor, instance.image_meta, block_device_info)
+
         disk_info = self._get_instance_disk_info(instance, block_device_info)
 
         try:
@@ -12272,6 +12348,11 @@ class LibvirtDriver(driver.ComputeDriver):
         # Handle the case where the guest has emulated TPM
         self._finish_migration_vtpm(context, instance)
 
+        # Create libvirt secrets for ephemeral encryption on the destination.
+        self._create_ephemeral_encryption_libvirt_secrets(
+            context, instance.uuid, instance.flavor, image_meta,
+            block_device_info)
+
         xml = self._get_guest_xml(context, instance, network_info,
                                   block_disk_info, image_meta,
                                   block_device_info=block_device_info,
@@ -12364,6 +12445,11 @@ class LibvirtDriver(driver.ComputeDriver):
             root_disk.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
 
         self._finish_revert_migration_vtpm(context, instance)
+
+        # Create libvirt secrets for ephemeral encryption on the source.
+        self._create_ephemeral_encryption_libvirt_secrets(
+            context, instance.uuid, instance.flavor, instance.image_meta,
+            block_device_info)
 
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
