@@ -4709,6 +4709,45 @@ class LibvirtDriver(driver.ComputeDriver):
     def poll_rebooting_instances(self, timeout, instances):
         pass
 
+    def _create_ephemeral_encryption_libvirt_secrets(
+            self, context, instance_uuid, flavor, image_meta,
+            block_device_info):
+        """Create ephemeral encryption libvirt secrets on the host.
+
+        This is used during migrations to create secrets on the destination.
+        """
+        if hardware.get_ephemeral_encryption_constraint(flavor, image_meta):
+            encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                block_device_info)
+            for driver_bdm in encrypted_bdms:
+                secret_uuid = driver_bdm['encryption_secret_uuid']
+                secret = crypto.get_encryption_secret(context, secret_uuid)
+                if secret is None:
+                    msg = (
+                        f'Failed to find encryption secret {secret_uuid} '
+                        f'in the key manager for driver BDM '
+                        f"{driver_bdm['uuid']}")
+                    raise exception.InvalidBDM(msg)
+                secret_usage = f"{instance_uuid}_{driver_bdm['uuid']}"
+                if not self._host.find_secret('volume', secret_usage):
+                    self._host.create_secret(
+                        'volume', secret_usage, password=secret,
+                        uuid=secret_uuid)
+
+    def _destroy_ephemeral_encryption_libvirt_secrets(
+            self, instance_uuid, flavor, image_meta, block_device_info):
+        """Destroy ephemeral encryption libvirt secrets on the host.
+
+        This is used during migrations to destroy secrets on the source.
+        """
+        if hardware.get_ephemeral_encryption_constraint(flavor, image_meta):
+            encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                block_device_info)
+            for driver_bdm in encrypted_bdms:
+                secret_usage = f"{instance_uuid}_{driver_bdm['uuid']}"
+                if self._host.find_secret('volume', secret_usage):
+                    self._host.delete_secret('volume', secret_usage)
+
     def _add_ephemeral_encryption_driver_bdm_attrs(
         self,
         context: nova_context.RequestContext,
@@ -6120,6 +6159,7 @@ class LibvirtDriver(driver.ComputeDriver):
             connection_info = vol['connection_info']
             vol_dev = block_device.prepend_dev(vol['mount_device'])
             info = disk_mapping[vol_dev]
+            # Volume encryption secrets are created in _connect_volume.
             self._connect_volume(context, connection_info, instance)
             if scsi_controller and scsi_controller.model == 'virtio-scsi':
                 # Check if this is the bootable volume when in a
@@ -11385,12 +11425,19 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('Connecting volumes before live migration.',
                       instance=instance)
 
+        # Libvirt secrets for volume encryption are created on the destination
+        # in _connect_volume.
         for bdm in block_device_mapping:
             connection_info = bdm['connection_info']
             self._connect_volume(context, connection_info, instance)
 
         self._pre_live_migration_plug_vifs(
             instance, network_info, migrate_data)
+
+        # Create libvirt secrets for ephemeral encryption on the destination.
+        self._create_ephemeral_encryption_libvirt_secrets(
+            context, instance.uuid, instance.flavor, instance.image_meta,
+            block_device_info)
 
         # Store server_listen and latest disk device info
         if not migrate_data:
@@ -11612,6 +11659,11 @@ class LibvirtDriver(driver.ComputeDriver):
                               "disconnect volume %s from the source host "
                               "during post_live_migration", volume_id,
                               instance=instance)
+
+        # Destroy libvirt secrets for ephemeral encryption on the source.
+        self._destroy_ephemeral_encryption_libvirt_secrets(
+            instance.uuid, instance.flavor, instance.image_meta,
+            block_device_info)
 
     def post_live_migration_at_source(self, context, instance, network_info):
         """Unplug VIFs from networks at source.
@@ -12067,6 +12119,12 @@ class LibvirtDriver(driver.ComputeDriver):
             connection_info = vol['connection_info']
             self._disconnect_volume(context, connection_info, instance)
 
+        # Destroy libvirt secrets for ephemeral encryption on the source.
+        # Volume encryption libvirt secrets were destroyed in
+        # _disconnect_volume.
+        self._destroy_ephemeral_encryption_libvirt_secrets(
+            instance.uuid, flavor, instance.image_meta, block_device_info)
+
         disk_info = self._get_instance_disk_info(instance, block_device_info)
 
         try:
@@ -12272,6 +12330,11 @@ class LibvirtDriver(driver.ComputeDriver):
         # Handle the case where the guest has emulated TPM
         self._finish_migration_vtpm(context, instance)
 
+        # Create libvirt secrets for ephemeral encryption on the destination.
+        self._create_ephemeral_encryption_libvirt_secrets(
+            context, instance.uuid, instance.flavor, image_meta,
+            block_device_info)
+
         xml = self._get_guest_xml(context, instance, network_info,
                                   block_disk_info, image_meta,
                                   block_device_info=block_device_info,
@@ -12364,6 +12427,11 @@ class LibvirtDriver(driver.ComputeDriver):
             root_disk.remove_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
 
         self._finish_revert_migration_vtpm(context, instance)
+
+        # Create libvirt secrets for ephemeral encryption on the source.
+        self._create_ephemeral_encryption_libvirt_secrets(
+            context, instance.uuid, instance.flavor, instance.image_meta,
+            block_device_info)
 
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
