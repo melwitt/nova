@@ -11707,10 +11707,13 @@ class LibvirtDriver(driver.ComputeDriver):
                               "during post_live_migration", volume_id,
                               instance=instance)
 
+        # FIXME(melwitt): This seems to not be needed because in compute
+        # manager post_live_migration it can call driver.cleanup which would
+        # destroy the secrets.
         # Destroy libvirt secrets for ephemeral encryption on the source.
-        self._destroy_ephemeral_encryption_libvirt_secrets(
-            instance.uuid, instance.flavor, instance.image_meta,
-            block_device_info)
+        # self._destroy_ephemeral_encryption_libvirt_secrets(
+        #    instance.uuid, instance.flavor, instance.image_meta,
+        #    block_device_info)
 
     def post_live_migration_at_source(self, context, instance, network_info):
         """Unplug VIFs from networks at source.
