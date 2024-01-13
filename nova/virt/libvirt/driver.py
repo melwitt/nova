@@ -4150,7 +4150,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # scratch, and hopefully fix, most aspects of a non-functioning guest.
         self.destroy(context, instance, network_info, destroy_disks=False,
                      block_device_info=block_device_info,
-                     destroy_secrets=False)
+                     destroy_secrets=False, destroy_ephemeral_secrets=False)
 
         # Convert the system metadata to image metadata
         # NOTE(mdbooth): This is a workaround for stateless Nova compute
@@ -11564,7 +11564,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                          dest=target,
                                          host=fallback_from_host,
                                          receive=True)
-            image.cache(fetch_func=copy_from_host, size=size,
+            image.cache(fetch_func=copy_from_host, context=context, size=size,
                         filename=filename)
 
         # NOTE(lyarwood): If the instance vm_state is shelved offloaded then we
