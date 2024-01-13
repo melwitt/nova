@@ -946,42 +946,44 @@ class LibvirtConfigGuestDiskTest(LibvirtConfigBaseTest):
         s.type = "passphrase"
         s.uuid = uuids.secret
         e.secret = s
-        d.encryption = e
+        d.ephemeral_encryption = e
 
         xml = d.to_xml()
         expected_xml = """
             <disk type="file" device="disk">
               <driver name="qemu" type="qcow2" cache="none" io="native"/>
-              <source file="/tmp/hello.qcow2"/>
+              <source file="/tmp/hello.qcow2">
+                <encryption format='luks'>
+                  <secret type='passphrase' uuid='%s'/>
+                </encryption>
+              </source>
               <target bus="ide" dev="/dev/hda"/>
               <serial>%s</serial>
               <boot order="1"/>
-              <encryption format='luks'>
-                <secret type='passphrase' uuid='%s'/>
-              </encryption>
-            </disk>""" % (uuids.serial, uuids.secret)
+            </disk>""" % (uuids.secret, uuids.serial)
         self.assertXmlEqual(expected_xml, xml)
 
     def test_config_disk_encryption_parse(self):
         xml = """
 <disk type="file" device="disk">
   <driver name="qemu" type="qcow2" cache="none" io="native"/>
-  <source file="/tmp/hello.qcow2"/>
+  <source file="/tmp/hello.qcow2">
+    <encryption format='luks'>
+      <secret type='passphrase' uuid='%s'/>
+    </encryption>
+  </source>
   <target bus="ide" dev="/dev/hda"/>
   <serial>%s</serial>
   <boot order="1"/>
-  <encryption format='luks'>
-    <secret type='passphrase' uuid='%s'/>
-  </encryption>
-</disk>""" % (uuids.serial, uuids.secret)
+</disk>""" % (uuids.secret, uuids.serial)
 
         xmldoc = etree.fromstring(xml)
         d = config.LibvirtConfigGuestDisk()
         d.parse_dom(xmldoc)
 
-        self.assertEqual(d.encryption.format, "luks")
-        self.assertEqual(d.encryption.secret.type, "passphrase")
-        self.assertEqual(d.encryption.secret.uuid, uuids.secret)
+        self.assertEqual(d.ephemeral_encryption.format, "luks")
+        self.assertEqual(d.ephemeral_encryption.secret.type, "passphrase")
+        self.assertEqual(d.ephemeral_encryption.secret.uuid, uuids.secret)
 
     def test_config_boot_order_parse(self):
         xml = """
