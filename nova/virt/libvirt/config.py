@@ -1222,12 +1222,13 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
             alias.set("name", self.alias)
             dev.append(alias)
 
+        source = None
         if self.source_type == "file":
-            dev.append(etree.Element("source", file=self.source_path))
+            source = etree.Element("source", file=self.source_path)
         elif self.source_type == "block":
-            dev.append(etree.Element("source", dev=self.source_path))
+            source = etree.Element("source", dev=self.source_path)
         elif self.source_type == "mount":
-            dev.append(etree.Element("source", dir=self.source_path))
+            source = etree.Element("source", dir=self.source_path)
         elif self.source_type == "network" and self.source_protocol:
             source = etree.Element("source", protocol=self.source_protocol)
             if self.source_name is not None:
@@ -1238,7 +1239,11 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
                 if port is not None:
                     host.set('port', port)
                 source.append(host)
-            dev.append(source)
+        if self.encryption:
+            # NOTE(melwitt): <encryption> should be a subelement of <source>.
+            # See: https://bugzilla.redhat.com/show_bug.cgi?id=1371022#c13
+            source.append(self.encryption.format_dom())
+        dev.append(source)
 
         if self.auth_secret_type is not None:
             auth = etree.Element("auth")
@@ -1281,9 +1286,6 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
 
         if self.device_addr:
             dev.append(self.device_addr.format_dom())
-
-        if self.encryption:
-            dev.append(self.encryption.format_dom())
 
         return dev
 
