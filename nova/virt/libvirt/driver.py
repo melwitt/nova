@@ -4182,7 +4182,8 @@ class LibvirtDriver(driver.ComputeDriver):
             backing_disk_info = self._get_instance_disk_info_from_config(
                 config, block_device_info)
             self._create_images_and_backing(context, instance, instance_dir,
-                                            backing_disk_info)
+                                            backing_disk_info,
+                                            block_device_info)
 
         # Initialize all the necessary networking, block devices and
         # start the instance.
@@ -10834,6 +10835,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 serial_ports = list(self._get_serial_ports_from_guest(guest))
 
             LOG.debug("About to invoke the migrate API", instance=instance)
+            print(f'new_xml_str = {new_xml_str}')
+            print(f'device_names = {device_names}')
             guest.migrate(self._live_migration_uri(dest),
                           migrate_uri=migrate_uri,
                           flags=migration_flags,
@@ -11419,7 +11422,7 @@ class LibvirtDriver(driver.ComputeDriver):
                           'present before live migration.', instance=instance)
                 self._create_images_and_backing(
                     context, instance, instance_dir, disk_info,
-                    fallback_from_host=instance.host)
+                    block_device_info, fallback_from_host=instance.host)
                 if (configdrive.required_by(instance) and
                         CONF.config_drive_format == 'iso9660'):
                     # NOTE(pkoniszewski): Due to a bug in libvirt iso config
@@ -11595,7 +11598,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 pass
 
     def _create_images_and_backing(self, context, instance, instance_dir,
-                                   disk_info, fallback_from_host=None):
+                                   disk_info, block_device_info,
+                                   fallback_from_host=None):
         """:param context: security context
            :param instance:
                nova.db.main.models.Instance object
@@ -11606,6 +11610,8 @@ class LibvirtDriver(driver.ComputeDriver):
            :param disk_info:
                disk info specified in _get_instance_disk_info_from_config
                (list of dicts)
+           :param block_device_info:
+               result of _get_instance_block_device_info
            :param fallback_from_host:
                host where we can retrieve images if the glance images are
                not available.
@@ -11625,14 +11631,25 @@ class LibvirtDriver(driver.ComputeDriver):
             # Get image type and create empty disk image, and
             # create backing file in case of qcow2.
             instance_disk = os.path.join(instance_dir, base)
+
+            disk_info_mapping = blockinfo.get_disk_info(
+                CONF.libvirt.virt_type, instance, instance.image_meta,
+                    block_device_info)['mapping'][base]
+            disk = self.image_backend.by_name(
+                instance, instance_disk, disk_info_mapping=disk_info_mapping)
+
             if not info['backing_file'] and not os.path.exists(instance_disk):
+                encryption = disk.get_encryption(context)
+                disk_format = info['type']
+                if encryption:
+                    disk_format = encryption.get('format')
                 libvirt_utils.create_image(
-                    instance_disk, info['type'], info['virt_disk_size'])
+                    instance_disk, disk_format, info['virt_disk_size'],
+                    encryption=encryption)
             elif info['backing_file']:
                 # Creating backing file follows same way as spawning instances.
                 cache_name = os.path.basename(info['backing_file'])
 
-                disk = self.image_backend.by_name(instance, instance_disk)
                 if cache_name.startswith('ephemeral'):
                     # The argument 'size' is used by image.cache to
                     # validate disk size retrieved from cache against
@@ -11642,6 +11659,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     # cached.
                     disk.cache(
                         fetch_func=self._create_ephemeral,
+                        context=context,
                         fs_label=cache_name,
                         os_type=instance.os_type,
                         filename=cache_name,
@@ -11651,6 +11669,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     flavor = instance.get_flavor()
                     swap_mb = flavor.swap
                     disk.cache(fetch_func=self._create_swap,
+                                context=context,
                                 filename="swap_%s" % swap_mb,
                                 size=swap_mb * units.Mi,
                                 swap_mb=swap_mb)
@@ -11851,8 +11870,11 @@ class LibvirtDriver(driver.ComputeDriver):
                 over_commit_size = max(0, int(virt_size) - dk_size)
 
             elif disk_type == 'file':
-                dk_size = os.stat(path).st_blocks * 512
-                virt_size = os.path.getsize(path)
+                #dk_size = os.stat(path).st_blocks * 512
+                #virt_size = os.path.getsize(path)
+                qemu_img_info = disk_api.get_disk_info(path)
+                dk_size = qemu_img_info.disk_size
+                virt_size = qemu_img_info.virtual_size
                 backing_file = ""
                 over_commit_size = int(virt_size) - dk_size
 
