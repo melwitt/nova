@@ -26636,7 +26636,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
 
         if system_metadata is None:
             system_metadata = {
-                'rescue_disk_ephemeral_encryption_secret_uuid': uuids.secret}
+                'rescue_disk_ephemeral_encryption_secret_uuid': uuids.secret,
+                'rescue_disk_secret_usage': 'fake_secret_usage'}
 
         instance = objects.Instance(
             uuid=uuids.instance, id=1, system_metadata=system_metadata)
@@ -26645,11 +26646,10 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         mock_delete_secret.assert_called_once_with(
             self.context, instance, uuids.secret)
         # We should have deleted the rescue disk libvirt secret.
-        libvirt_secret = f'{instance.uuid}_rescue_disk'
         mock_find_libvirt_secret.assert_called_once_with(
-            'volume', libvirt_secret)
+            'volume', 'fake_secret_usage')
         mock_delete_libvirt_secret.assert_called_once_with(
-            'volume', libvirt_secret)
+            'volume', 'fake_secret_usage')
         # We should have deleted the rescue disk secret UUID (and the rescue
         # image secret UUID, if applicable) from the instance system metadata.
         self.assertEqual({}, instance.system_metadata)
@@ -26661,6 +26661,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         system_metadata = {
             disk_key: uuids.secret,
             image_key: uuids.img_secret,
+            'rescue_disk_secret_usage': 'fake_secret_usage',
         }
         self.test_unrescue_with_ephemeral_encryption(
             system_metadata=system_metadata)
