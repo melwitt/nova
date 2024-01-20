@@ -11663,7 +11663,10 @@ class LibvirtDriver(driver.ComputeDriver):
             # Pass the disk_info_mapping which will be needed if ephemeral
             # encryption has been specified.
             disk_info_mapping = None
-            if block_device_info is not None:
+            if (block_device_info is not None and
+                    # The basename of the path for lvm does not follow the
+                    # disk_info_mapping format ('<uuid>_disk' vs 'disk').
+                    CONF.libvirt.images_type != 'lvm'):
                 disk_info_mapping = blockinfo.get_disk_info(
                     CONF.libvirt.virt_type, instance, instance.image_meta,
                         block_device_info)['mapping'][base]
