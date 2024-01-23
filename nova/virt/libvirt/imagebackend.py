@@ -647,21 +647,27 @@ class Flat(Image):
         # bdm_encryption contains the encryption attributes for the destination
         # image, if encryption was specified.
         bdm_encryption = self.get_encryption(context)
+        # image_encryption contains the encryption attributes for the source
+        # image, if it is encrypted.
+        image_encryption = kwargs.pop('encryption', None)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
-            if not bdm_encryption:
+            if not (bdm_encryption or image_encryption):
                 libvirt_utils.copy_image(base, target)
             else:
-                # Copy from the unencrypted base image and then encrypt the
-                # target image if encryption has been specified.
+                # If the source image is encrypted, copy the image for the
+                # instance and use a new secret for it.
+                src_fmt = 'raw'
+                if image_encryption:
+                    src_fmt = image_encryption.get('format')
+                dest_fmt = 'raw'
+                if bdm_encryption:
+                    dest_fmt = bdm_encryption.get('format')
                 images.convert_image(
-                    base,
-                    target,
-                    self.driver_format,
-                    bdm_encryption.get('format'),
-                    dest_encryption=bdm_encryption,
-                )
+                    base, target, src_fmt, dest_fmt,
+                    encryption=image_encryption,
+                    dest_encryption=bdm_encryption)
             if size:
                 self.resize_image(size, encryption=bdm_encryption)
 
@@ -682,16 +688,7 @@ class Flat(Image):
                     self.resize_image(size, encryption=bdm_encryption)
         else:
             if not os.path.exists(base):
-                # Create unencrypted base image, decrypting the source image if
-                # needed.
-                #
-                # image_encryption contains the encryption attributes for the
-                # source image, if it is encrypted. We need it to create the
-                # base image which is never encrypted. If the source image is
-                # not encrypted, we pass None.
-                image_encryption = kwargs.pop('encryption', None)
-                prepare_template(
-                    target=base, encryption=image_encryption, *args, **kwargs)
+                prepare_template(target=base, *args, **kwargs)
 
             # NOTE(mikal): Update the mtime of the base file so the image
             # cache manager knows it is in use.
@@ -709,14 +706,15 @@ class Flat(Image):
 
     def snapshot_extract(self, target, out_format, encryption=None,
                          dest_encryption=None):
+        src_fmt = self.driver_format
+        if encryption:
+            src_fmt = encryption.get('format')
+        dest_fmt = out_format
+        if dest_encryption:
+            dest_fmt = dest_encryption.get('format')
         images.convert_image(
-            self.path,
-            target,
-            encryption.get('format') or self.driver_format,
-            dest_encryption.get('format') or out_format,
-            encryption=encryption,
-            dest_encryption=dest_encryption,
-        )
+            self.path, target, src_fmt, dest_fmt,
+            encryption=encryption, dest_encryption=dest_encryption)
 
     @staticmethod
     def is_file_in_instance_path():
