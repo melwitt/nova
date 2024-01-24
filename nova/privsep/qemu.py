@@ -134,14 +134,16 @@ def unprivileged_convert_image(
             # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
             prefix = 'encrypt.' if in_format == 'qcow2' else ''
             # A couple of extra options are needed in the case of rbd.
-            rbd_opts = ''
             if source.startswith('rbd:'):
-                rbd_opts = 'driver=luks,file.driver=rbd,'
+                file_driver = 'rbd'
+            else:
+                file_driver = 'file'
             # We put the key-secret option last because logging replaces
             # everything after it with *** (file.filename would not be seen).
             # It could help to see the value of file.filename when debugging.
             encryption_opts += (
-                f"{rbd_opts}file.filename={source},{prefix}key-secret=sec",
+                f"driver={in_format},file.driver={file_driver},"
+                f"file.filename={source},{prefix}key-secret=sec",
             )
 
         if dest_encryption:
