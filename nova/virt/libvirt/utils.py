@@ -464,7 +464,8 @@ def fetch_image(
     target: str,
     image_id: str,
     trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
-    encryption: ty.Optional[EncryptionOptions] = None
+    encryption: ty.Optional[EncryptionOptions] = None,
+    dest_encryption: ty.Optional[EncryptionOptions] = None,
 ) -> None:
     """Grab image.
 
@@ -473,10 +474,14 @@ def fetch_image(
     :param image_id: id of the image to fetch
     :param trusted_certs: optional objects.TrustedCerts for image validation
     :param encryption: (Optional) Dict detailing various encryption attributes
-                       such as the format and passphrase.
+                       of the source image, such as the format and passphrase.
+    :param dest_encryption: (Optional) Dict detailing various encryption
+                            attributes of the target image, such as the format
+                            and passphrase.
     """
     images.fetch_to_raw(
-        context, image_id, target, trusted_certs, encryption=encryption)
+        context, image_id, target, trusted_certs, encryption=encryption,
+        dest_encryption=dest_encryption)
 
 
 def fetch_raw_image(
@@ -484,7 +489,8 @@ def fetch_raw_image(
     target: str,
     image_id: str,
     trusted_certs: ty.Optional['objects.TrustedCerts'] = None,
-    encryption: ty.Optional[ty.Dict[str, ty.Any]] = None,
+    encryption: ty.Optional[EncryptionOptions] = None,
+    dest_encryption: ty.Optional[EncryptionOptions] = None,
 ) -> None:
     """Grab initrd or kernel image.
 
@@ -496,7 +502,10 @@ def fetch_raw_image(
     :param image_id: id of the image to fetch
     :param trusted_certs: optional objects.TrustedCerts for image validation
     :param encryption: (Optional) Dict detailing various encryption attributes
-                       such as the format and passphrase.
+                       of the source image, such as the format and passphrase.
+    :param dest_encryption: (Optional) Dict detailing various encryption
+                            attributes of the target image, such as the format
+                            and passphrase.
 
     This function is used as a fetch_func, so its signature needs to support
     the 'encryption' keyword argument even though it doesn't use it.

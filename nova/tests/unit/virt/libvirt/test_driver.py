@@ -14478,7 +14478,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(context=self.context,
                           target=backfile_path,
                           image_id=self.test_instance['image_ref'],
-                          trusted_certs=trusted_certs, encryption=None),
+                          trusted_certs=trusted_certs, encryption=None,
+                          dest_encryption=None),
                 mock.call(self.context, kernel_path, instance.kernel_id,
                           trusted_certs),
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
@@ -14549,7 +14550,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                 mock.call(context=self.context,
                           target=backfile_path,
                           image_id=self.test_instance['image_ref'],
-                          trusted_certs=None, encryption=None),
+                          trusted_certs=None),
                 mock.call(self.context, kernel_path, instance.kernel_id,
                           None),
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
@@ -14624,12 +14625,12 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
                 os_type='linux', target=ephemeral_backing, encryption=None,
-                context=self.context)
+                dest_encryption=None, context=self.context)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
                 target=root_backing, trusted_certs=instance.trusted_certs,
-                encryption=None)
+                encryption=None, dest_encryption=None)
 
             verify_base_size_mock.assert_has_calls([
                 mock.call(root_backing, instance.flavor.root_gb * units.Gi),
@@ -16686,7 +16687,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         drvr._create_ephemeral(
-            '/dev/something', 20, 'myVol', 'linux', encryption=encryption)
+            '/dev/something', 20, 'myVol', 'linux', dest_encryption=encryption)
 
         mock_create_image.assert_called_once_with(
             '/dev/something', 'raw', '20G')
@@ -16718,7 +16719,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         encryption = {'format': 'luks', 'secret': mock.sentinel.secret}
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
-        drvr._create_swap('/dev/something', 20, encryption=encryption)
+        drvr._create_swap('/dev/something', 20, dest_encryption=encryption)
 
         mock_create_image.assert_called_once_with(
             '/dev/something', 'raw', '20M')
@@ -24457,11 +24458,15 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         # We should have retrieved the secret from the key manager service.
         mock_get_secret.assert_called_once_with(self.context, uuids.secret)
         # We should have passed the encryption secret to Image.cache().
+        expected_encryption = {
+            'secret': mock_get_secret.return_value,
+            'format': 'luks',
+        }
         mock_imagebackend.cache.assert_called_once_with(
             fetch_func=mock.sentinel.fetch, context=self.context,
             filename=mock.sentinel.filename, image_id=uuids.image_id,
             size=mock.sentinel.size, trusted_certs=instance.trusted_certs,
-            encryption={'secret': mock_get_secret.return_value})
+            encryption=expected_encryption)
 
     @mock.patch('nova.crypto.get_encryption_secret', return_value=None)
     def test_ephemeral_encryption_fetch_image_cache_not_found(

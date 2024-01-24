@@ -5113,7 +5113,7 @@ class LibvirtDriver(driver.ComputeDriver):
     def _create_ephemeral(target, ephemeral_size,
                           fs_label, os_type, is_block_dev=False,
                           context=None, specified_fs=None,
-                          vm_mode=None, encryption=None):
+                          vm_mode=None, encryption=None, dest_encryption=None):
         if not is_block_dev:
             if (CONF.libvirt.virt_type == "parallels" and
                     vm_mode == fields.VMMode.EXE):
@@ -5128,19 +5128,20 @@ class LibvirtDriver(driver.ComputeDriver):
         disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
                       specified_fs=specified_fs)
 
-        if encryption:
+        if dest_encryption:
             LibvirtDriver._convert_from_raw_for_ephemeral_encryption(
-                target, encryption)
+                target, dest_encryption)
 
     @staticmethod
-    def _create_swap(target, swap_mb, context=None, encryption=None):
+    def _create_swap(target, swap_mb, context=None, encryption=None,
+                     dest_encryption=None):
         """Create a swap file of specified size."""
         libvirt_utils.create_image(target, 'raw', f'{swap_mb}M')
         nova.privsep.fs.unprivileged_mkfs('swap', target)
 
-        if encryption:
+        if dest_encryption:
             LibvirtDriver._convert_from_raw_for_ephemeral_encryption(
-                target, encryption)
+                target, dest_encryption)
 
     @staticmethod
     def _get_console_log_path(instance):
@@ -11586,12 +11587,13 @@ class LibvirtDriver(driver.ComputeDriver):
                       {'image_id': image_id, 'host': fallback_from_host},
                       instance=instance)
 
-            def copy_from_host(target, context=None, encryption=None):
-                """The encryption keyword argument is not needed to copy an
+            def copy_from_host(target, context=None, encryption=None,
+                               dest_encryption=None):
+                """The encryption arguments are not needed to copy an
                 image but as a fetch_func, we need the signature to accept it.
 
                 Other fetch_func such as fetch_image will need encryption info
-                to convert the image if it is encrypted.
+                to convert encrypted images.
                 """
                 libvirt_utils.copy_image(src=target,
                                          dest=target,
