@@ -658,12 +658,10 @@ class Flat(Image):
             else:
                 # If the source image is encrypted, copy the image for the
                 # instance and use a new secret for it.
-                src_fmt = 'raw'
-                if image_encryption:
-                    src_fmt = image_encryption.get('format')
-                dest_fmt = 'raw'
-                if bdm_encryption:
-                    dest_fmt = bdm_encryption.get('format')
+                src_fmt = ('raw' if not image_encryption else
+                               image_encryption.get('format'))
+                dest_fmt = ('raw' if not bdm_encryption else
+                                bdm_encryption.get('format'))
                 images.convert_image(
                     base, target, src_fmt, dest_fmt,
                     encryption=image_encryption,
@@ -706,12 +704,10 @@ class Flat(Image):
 
     def snapshot_extract(self, target, out_format, encryption=None,
                          dest_encryption=None):
-        src_fmt = self.driver_format
-        if encryption:
-            src_fmt = encryption.get('format')
-        dest_fmt = out_format
-        if dest_encryption:
-            dest_fmt = dest_encryption.get('format')
+        src_fmt = (self.driver_format if not encryption else
+                        encryption.get('format'))
+        dest_fmt = (out_format if not dest_encryption else
+                        dest_encryption.get('format'))
         images.convert_image(
             self.path, target, src_fmt, dest_fmt,
             encryption=encryption, dest_encryption=dest_encryption)
@@ -1092,18 +1088,10 @@ class Rbd(Image):
                             "%(error)s", {'path': base, 'error': e})
 
     def create_image(self, prepare_template, base, size, *args, **kwargs):
+
         if not self.exists():
             self._remove_non_raw_cache_image(base)
-            # Create unencrypted base image, decrypting the source image if
-            # needed.
-            #
-            # image_encryption contains the encryption attributes for the
-            # source image, if it is encrypted. We need it to create the base
-            # image which is never encrypted. If the source image is not
-            # encrypted, we pass None.
-            image_encryption = kwargs.pop('encryption', None)
-            prepare_template(
-                target=base, encryption=image_encryption, *args, **kwargs)
+            prepare_template(target=base, *args, **kwargs)
 
         # FIXME(lyarwood): Context is provided as a kwarg here thanks to
         # the legacy ephemeral encryption implementation. It should likely
@@ -1112,18 +1100,27 @@ class Rbd(Image):
         # bdm_encryption contains the encryption attributes for the destination
         # image, if encryption was specified.
         bdm_encryption = self.get_encryption(context)
+        # image_encryption contains the encryption attributes for the source
+        # image, if it is encrypted.
+        image_encryption = kwargs.pop('encryption', None)
 
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def convert_and_import_rbd_image(in_path, out_path):
+            # If the source image is encrypted, copy the image for the
+            # instance and use a new secret for it.
+            src_fmt = 'raw'
+            if image_encryption:
+                src_fmt = image_encryption.get('format')
+            dest_fmt = 'raw'
+            if bdm_encryption:
+                dest_fmt = bdm_encryption.get('format')
+
             images.convert_image(
-                in_path,
-                out_path,
-                'raw',
-                bdm_encryption.get('format'),
-                dest_encryption=bdm_encryption,
-            )
+                in_path, out_path, src_fmt, dest_fmt,
+                encryption=image_encryption,
+                dest_encryption=bdm_encryption)
             self.driver.import_image(out_path, self.rbd_name)
 
         # prepare_template() may have cloned the image into a new rbd
@@ -1139,21 +1136,7 @@ class Rbd(Image):
             else:
                 self.driver.import_image(base, self.rbd_name)
 
-        # The unencrypted base image has a larger virtual size than the
-        # encrypted image because the encrypted image has encryption metadata
-        # like the encryption header, which consumes some of the requested
-        # size, resulting is a smaller virtual size than the base image.
-        # Skip the base image verification in this case.
-        #
-        # "Some of the encryption metadata may be stored as part of the image
-        # data, typically an encryption header will be written to the beginning
-        # of the raw image data. This means that the effective image size of
-        # the encrypted image may be lower than the raw image size."
-        #
-        # See:
-        # https://docs.ceph.com/en/quincy/rbd/rbd-encryption/#encryption-format
-        if not bdm_encryption:
-            self.verify_base_size(base, size)
+        self.verify_base_size(base, size)
 
         if size and size > self.get_disk_size(self.rbd_name):
             self.driver.resize(self.rbd_name, size)
@@ -1163,11 +1146,12 @@ class Rbd(Image):
 
     def snapshot_extract(self, target, out_format, encryption=None,
                          dest_encryption=None):
+        src_fmt = ('raw' if not encryption else
+                        encryption.get('format'))
+        dest_fmt = (out_format if not dest_encryption else
+                        dest_encryption.get('format'))
         images.convert_image(
-            self.path,
-            target,
-            encryption.get('format') if encryption else 'raw',
-            dest_encryption.get('format') if dest_encryption else out_format,
+            self.path, target, src_fmt, dest_fmt,
             encryption=encryption,
             dest_encryption=dest_encryption)
 
