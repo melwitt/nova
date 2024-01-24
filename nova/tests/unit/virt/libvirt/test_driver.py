@@ -30236,7 +30236,7 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
     @mock.patch.object(host.Host, 'get_guest')
     @mock.patch.object(rbd_utils, 'RBDDriver')
     @mock.patch.object(rbd_utils, 'rbd')
-    def test_raw_with_rbd_clone_failure_does_cold_snapshot(
+    def _test_raw_with_rbd_clone_failure_does_cold_snapshot(
             self, mock_rbd, mock_driver, mock_get_guest, mock_version,
             mock_resolve, mock_find_disk, mock_encryption, encryption=None):
         self.flags(images_type='rbd', group='libvirt')
@@ -30261,11 +30261,14 @@ class LibvirtSnapshotTests(_BaseSnapshotTests):
                             recv_meta['id'], self.mock_update_task_state)
             self.assertTrue(mock_suspend.called)
 
+    def test_raw_with_rbd_clone_failure_does_cold_snapshot(self):
+        self._test_raw_with_rbd_clone_failure_does_cold_snapshot()
+
     @mock.patch('nova.crypto.create_encryption_secret')
     def test_raw_with_rbd_clone_with_encryption_does_cold_snapshot(
             self, mock_create_secret):
         mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
-        self.test_raw_with_rbd_clone_failure_does_cold_snapshot(
+        self._test_raw_with_rbd_clone_failure_does_cold_snapshot(
             encryption={'format': 'luks', 'secret': mock.sentinel.secret})
         mock_create_secret.assert_called()
 
