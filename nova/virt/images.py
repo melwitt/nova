@@ -196,7 +196,7 @@ def fetch_to_raw(
                 os.unlink(path_tmp)
 
                 data = qemu_img_info(staged)
-                if data.file_format != "raw":
+                if data.file_format not in ("raw", "luks"):
                     raise exception.ImageUnacceptable(image_id=image_href,
                         reason=_("Converted to %s, but format is now %s") %
                         (dest_fmt, data.file_format))
