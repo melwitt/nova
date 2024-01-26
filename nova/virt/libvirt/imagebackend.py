@@ -761,16 +761,11 @@ class Qcow2(Image):
 
         # Download the unmodified base image unless we already have a copy.
         if not os.path.exists(base):
-            # If we are fetching the base image, it is possible we will need to
-            # convert it to raw if it is not already in raw format. If we do
-            # and if the image is encrypted, we will need the encryption secret
-            # from the image in order to convert it.
-            # image_encryption is used to access the encrypted source image and
-            # bdm_encryption is used to create the new disk.
-            image_encryption = kwargs.pop('encryption', None)
-            prepare_template(
-                target=base, encryption=image_encryption,
-                dest_encryption=bdm_encryption, *args, **kwargs)
+            # NOTE(melwitt): Encrypted base images are not yet supported.
+            # Supporting encrypted base images will require the tracking of two
+            # passphrases per BDM: one for the backing file and one for the
+            # delta. Currently, we are tracking only one passphrase per BDM.
+            prepare_template(target=base, *args, **kwargs)
 
         # NOTE(ankit): Update the mtime of the base file so the image
         # cache manager knows it is in use.
