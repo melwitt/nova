@@ -674,8 +674,8 @@ class Flat(Image):
             if not self.exists():
                 # Generating image in place (examples: ephemeral, swap)
                 prepare_template(
-                    target=self.path, encryption=bdm_encryption,
-                    *args, **kwargs)
+                    target=self.path, encryption=image_encryption,
+                    dest_encryption=bdm_encryption, *args, **kwargs)
 
             # NOTE(plibeau): extend the disk in the case of image is not
             # accessible anymore by the customer and the base image is
