@@ -3174,10 +3174,6 @@ class _ComputeAPIUnitTestMixIn(object):
         }
         image_type = is_snapshot and 'snapshot' or 'backup'
         sent_meta = {
-            # The @reject_ephemeral_encryption_instances decorator makes
-            # setting 'id' here necessary because instance.image_meta will set
-            # the 'id' attribute via ImageMeta.from_instance().
-            'id': instance.image_ref,
             'visibility': 'private',
             'name': 'fake-name',
             'disk_format': 'fake',
@@ -3266,7 +3262,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         mock_create.assert_called_once_with(self.context, sent_meta)
         call = mock.call(instance.system_metadata)
-        self.assertEqual([call, call], mock_get_image.mock_calls)
+        self.assertEqual([call], mock_get_image.mock_calls)
 
         if not is_snapshot:
             mock_is_volume.assert_called_once_with(self.context, instance)
