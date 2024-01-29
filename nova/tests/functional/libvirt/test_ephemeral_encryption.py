@@ -19,7 +19,6 @@ from oslo_utils.fixture import uuidsentinel as uuids
 import nova.conf
 from nova import context as nova_context
 from nova import crypto
-from nova import exception
 from nova import objects
 from nova.tests.functional.api import client as api_client
 from nova.tests.functional.libvirt import base
@@ -960,19 +959,21 @@ class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
         image_id = self._create_image(image_properties)['id']
         self.test_rescue_server(rescue_image_id=image_id)
 
-    def test_rescue_server_with_encrypted_image_missing_secret(self):
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_rescue_server_with_encrypted_image_missing_secret(
+            self, mock_get_secret):
         # Simulate an encrypted image with secret ID in the image properties.
         image_properties = {
             'hw_ephemeral_encryption_secret_uuid': uuids.secret,
         }
+        # Simulate a failure to find the secret for the rescue image in the key
+        # manager. Because the secret is missing, it will fail to be found as
+        # the backing file secret while populating encryption attributes in the
+        # rescue BDM.
+        mock_get_secret.return_value = None
+
         image_id = self._create_image(image_properties)['id']
         server = self._create_server_with_ephemeral_encryption_flavor()
-
-        # Simulate a failure to find the secret for the rescue image in the key
-        # manager.
-        self.driver._create_image.side_effect = (
-            exception.EphemeralEncryptionSecretNotFound(
-            'Failed to find encryption secret in the key manager for image'))
 
         # Rescue the server.
         self._rescue_server(
@@ -995,7 +996,8 @@ class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
         events = objects.InstanceActionEventList.get_by_action(
             self.context, rescue_action.id)
         self.assertIn(
-            'Failed to find encryption secret in the key manager for image',
+            f'Failed to find encryption secret {uuids.secret} in the key '
+            f'manager for image {image_id}',
             events[0].details)
         self.assertEqual('Error', events[0].result)
 
@@ -1003,3 +1005,153 @@ class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
         # ERROR.
         server = self._show_server(server)
         self.assertEqual('ACTIVE', server['status'])
+
+
+class EphemeralEncryptionTestSnapshot(EphemeralEncryptionTestBase):
+
+    def setUp(self):
+        super().setUp()
+        self.useFixture(
+            fixtures.MockPatch('nova.virt.libvirt.utils.get_disk_size'))
+        self.useFixture(fixtures.MockPatch(
+            'nova.virt.libvirt.utils.get_disk_backing_file'))
+        self.useFixture(fixtures.MockPatch('nova.virt.images.qemu_img_info'))
+        self.useFixture(
+            fixtures.MockPatch('nova.virt.libvirt.utils.create_image'))
+        self.useFixture(fixtures.MockPatch('nova.privsep.path.chown'))
+        self.useFixture(
+            fixtures.MockPatch('nova.virt.images.convert_image'))
+
+    def _test_snapshot_server(self, cold_snapshot=False):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server1 = self._create_server_with_ephemeral_encryption_flavor()
+
+        if cold_snapshot:
+            self._stop_server(server1)
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms1 = self.assertSecretsMatch(server1, 3, self.driver)
+
+        # Snapshot the server.
+        with utils.temporary_mutation(self.api, microversion='2.45'):
+            image_id = self._snapshot_server(
+                server1, 'cool_snapshot')['image_id']
+        self._wait_for_instance_action_event(
+            server1, 'createImage', 'compute_snapshot_instance', 'Success')
+
+        # We should have an additional secret created for the snapshot image.
+        self.assertEqual(4, len(self._get_key_mgr_secrets(self.context)))
+
+        # We should still have the same libvirt secrets for the disks.
+        self.assertLibvirtSecretsMatch(server1, 3, self.driver, bdms=bdms1)
+
+        # Create a new server from the snapshot we created.
+        server2 = self._create_server_with_ephemeral_encryption_flavor(
+            image_uuid=image_id)
+
+        # There should be 8 secrets in the key manager now: three for server1
+        # BDMs, one for the snapshot image, three for server2 BDMs and one for
+        # the server2 root disk BDM backing image secret.
+        self.assertEqual(8, len(self._get_key_mgr_secrets(self.context)))
+
+        # There should be three secrets in libvirt for server2, one for the
+        # root disk, one for the ephemeral disk, and one for the swap disk.
+        bdms2 = self.assertLibvirtSecretsMatch(server2, 3, self.driver)
+
+        # Delete the first server.
+        self._delete_server(server1)
+
+        # Libvirt secrets for server1 should have been deleted.
+        self.assertLibvirtSecretsDeleted(bdms1, self.driver)
+
+        # There should be four secrets in the key manager left for server2
+        # (three BDMs and one backing file secret for the root disk BDM) and
+        # one secret for the snapshot image.
+        self.assertEqual(5, len(self._get_key_mgr_secrets(self.context)))
+
+        # Libvirt secrets for server2 should still be there.
+        self.assertLibvirtSecretsMatch(server2, 3, self.driver, bdms=bdms2)
+
+        # Delete the second server.
+        self._delete_server(server2)
+
+        # Libvirt secrets for server2 should have been deleted.
+        self.assertLibvirtSecretsDeleted(bdms2, self.driver)
+
+        # There should be one secret left in the key manager for the snapshot
+        # image. This secret will not be deleted by Nova because it's a secret
+        # for an image in Glance. Deletion of the Glance image and secret must
+        # be done manually if/when deletion of the Glance image is desired.
+        self.assertEqual(1, len(self._get_key_mgr_secrets(self.context)))
+
+    def test_live_snapshot_server(self):
+        self._test_snapshot_server()
+
+    def test_cold_snapshot_server(self):
+        self._test_snapshot_server(cold_snapshot=True)
+
+    def test_shelve_server(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Shelve offload the server.
+        self._shelve_server(server)
+
+        # We should not have created an additional secret for the shelved
+        # snapshot image because secrets are reused for the shelve action.
+        self.assertEqual(3, len(self._get_key_mgr_secrets(self.context)))
+
+        # The libvirt secrets should have been deleted when the server was
+        # shelve offloaded.
+        self.assertLibvirtSecretsDeleted(bdms, self.driver)
+
+        # Unshelve the server.
+        self._unshelve_server(server)
+
+        # The libvirt secrets should have been created upon unshelving.
+        self.assertSecretsMatch(server, 3, self.driver)
+
+        # Delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
+
+    def test_shelve_and_delete_server(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Shelve offload the server.
+        self._shelve_server(server)
+
+        # We should not have created an additional secret for the shelved
+        # snapshot image because secrets are reused for the shelve action.
+        self.assertEqual(3, len(self._get_key_mgr_secrets(self.context)))
+
+        # The libvirt secrets should have been deleted when the server was
+        # shelve offloaded.
+        self.assertLibvirtSecretsDeleted(bdms, self.driver)
+
+        # Delete the server.
+        self._delete_server(server)
+
+        # Verify that key manager secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms, self.driver)
