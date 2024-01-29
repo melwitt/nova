@@ -19,7 +19,6 @@ from oslo_utils.fixture import uuidsentinel as uuids
 import nova.conf
 from nova import context as nova_context
 from nova import crypto
-from nova import exception
 from nova import objects
 from nova.tests.functional.api import client as api_client
 from nova.tests.functional.libvirt import base
@@ -861,19 +860,21 @@ class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
         image_id = self._create_image(image_properties)['id']
         self.test_rescue_server(rescue_image_id=image_id)
 
-    def test_rescue_server_with_encrypted_image_missing_secret(self):
+    @mock.patch('nova.crypto.get_encryption_secret')
+    def test_rescue_server_with_encrypted_image_missing_secret(
+            self, mock_get_secret):
         # Simulate an encrypted image with secret ID in the image properties.
         image_properties = {
             'hw_ephemeral_encryption_secret_uuid': uuids.secret,
         }
+        # Simulate a failure to find the secret for the rescue image in the key
+        # manager. Because the secret is missing, it will fail to be found as
+        # the backing file secret while populating encryption attributes in the
+        # rescue BDM.
+        mock_get_secret.return_value = None
+
         image_id = self._create_image(image_properties)['id']
         server = self._create_server_with_ephemeral_encryption_flavor()
-
-        # Simulate a failure to find the secret for the rescue image in the key
-        # manager.
-        self.driver._create_image.side_effect = (
-            exception.EphemeralEncryptionSecretNotFound(
-            'Failed to find encryption secret in the key manager for image'))
 
         # Rescue the server.
         self._rescue_server(
@@ -896,7 +897,8 @@ class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
         events = objects.InstanceActionEventList.get_by_action(
             self.context, rescue_action.id)
         self.assertIn(
-            'Failed to find encryption secret in the key manager for image',
+            f'Failed to find encryption secret {uuids.secret} in the key '
+            f'manager for image {image_id}',
             events[0].details)
         self.assertEqual('Error', events[0].result)
 
@@ -904,3 +906,29 @@ class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
         # ERROR.
         server = self._show_server(server)
         self.assertEqual('ACTIVE', server['status'])
+
+
+class EphemeralEncryptionTestSnapshot(EphemeralEncryptionTestBase):
+
+    def test_snapshot_server(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        # bdms = self.assertSecretsMatch(server, 3, self.driver)
+
+        # Snapshot the server.
+        self._snapshot_server(server, 'cool_snapshot')
+
+        # FIXME(melwitt): Need to debug this.
+        # We should have an additional secret created for the snapshot image.
+        # keymgr_secrets_after_snapshot = self._get_key_mgr_secrets(
+        #   self.context)
+        # self.assertEqual(4, len(keymgr_secrets_after_snapshot))
+
+        # We should still have the same libvirt secrets for the disks.
+        # self.assertLibvirtSecretsMatch(server, 3, self.driver, bdms=bdms)
