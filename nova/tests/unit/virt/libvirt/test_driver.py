@@ -14755,10 +14755,10 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                           host='fake_host', receive=True)
             ])
             fetch_image_mock.assert_has_calls([
-                mock.call(context=self.context,
-                          target=backfile_path,
+                mock.call(target=backfile_path, src_encryption=None,
+                          dest_encryption=None, context=self.context,
                           image_id=self.test_instance['image_ref'],
-                          trusted_certs=trusted_certs, src_encryption=None),
+                          trusted_certs=trusted_certs),
                 mock.call(self.context, kernel_path, instance.kernel_id,
                           trusted_certs),
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
@@ -14903,13 +14903,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
+                src_encryption=None, dest_encryption=None,
                 os_type='linux', target=ephemeral_backing,
                 context=self.context)
 
             fetch_image_mock.assert_called_once_with(
+                target=root_backing, src_encryption=None, dest_encryption=None,
                 context=self.context, image_id=instance.image_ref,
-                target=root_backing, trusted_certs=instance.trusted_certs,
-                src_encryption=None)
+                trusted_certs=instance.trusted_certs)
 
             verify_base_size_mock.assert_has_calls([
                 mock.call(root_backing, instance.flavor.root_gb * units.Gi),
@@ -24347,6 +24348,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             expected_backing_file = os.path.join(
                     imagecache.ImageCacheManager().cache_dir,
                     base_image_root_fname)
+            mock_fetch.return_value = None
         else:
             # None means rebase will merge backing file into disk(flatten).
             expected_backing_file = None
@@ -25895,8 +25897,11 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             disk_encrypted=False):
         # A secret will be retrieved to read the encrypted source image.
         mock_get_secret.return_value = mock.sentinel.img_secret
-        # A secret will be created to write the rescue disk.
-        mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
+        # Secrets will be created to write the rescue disk and backing file.
+        mock_create_secret.side_effect = [
+            (uuids.secret1, mock.sentinel.secret1),
+            (uuids.secret2, mock.sentinel.secret2),
+        ]
         instance = self._create_instance({'config_drive': None})
         # Simulate an encrypted rescue image.
         image_meta_dict = {
@@ -25919,16 +25924,28 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
         self.assertEqual(uuids.img_secret, instance.system_metadata[key])
         # Verify we retrieved the secret for the encrypted source rescue image.
-        mock_get_secret.assert_called_once_with(self.context, uuids.img_secret)
+        # If the disk is also encrypted, we will also retrieve the secret to
+        # store as the backing file secret (when image backend is qcow2) when
+        # we add encryption attributes to the rescue disk BDM.
+        call = mock.call(self.context, uuids.img_secret)
+        expected_calls = [call] if not disk_encrypted else [call, call]
+        self.assertEqual(expected_calls, mock_get_secret.mock_calls)
 
         save_calls = 1
         if disk_encrypted:
             # Verify that the encryption secret for the encrypted rescue disk
             # has been stashed in the instance system metadata.
-            key = 'rescue_disk_ephemeral_encryption_secret_uuid'
-            self.assertEqual(uuids.secret, instance.system_metadata[key])
-            # Verify we created a secret for the encrypted rescue disk.
-            mock_create_secret.assert_called_once()
+            prefix = 'rescue_disk_ephemeral_'
+            self.assertEqual(
+                uuids.secret1,
+                instance.system_metadata[prefix + 'encryption_secret_uuid'])
+            self.assertEqual(
+                uuids.secret2,
+                instance.system_metadata[
+                    prefix + 'backing_encryption_secret_uuid'])
+            # Verify we created a secret for the encrypted rescue disk and its
+            # encrypted backing file.
+            self.assertEqual(2, mock_create_secret.call_count)
             # We should have saved sysmeta changes to the instance twice, for
             # the rescue image encryption secret UUID and the rescue disk
             # encryption secret UUID.
@@ -26306,8 +26323,11 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             disk_encrypted=False):
         # A secret will be retrieved to read the encrypted source image.
         mock_get_secret.return_value = mock.sentinel.img_secret
-        # A secret will be created to write the rescue disk.
-        mock_create_secret.return_value = uuids.secret, mock.sentinel.secret
+        # Secrets will be created to write the rescue disk and backing file.
+        mock_create_secret.side_effect = [
+            (uuids.secret1, mock.sentinel.secret1),
+            (uuids.secret2, mock.sentinel.secret2),
+        ]
         instance = self._create_instance({'config_drive': str(True)})
         # Simulate an encrypted rescue image.
         image_meta_dict = {
@@ -26333,16 +26353,28 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
         self.assertEqual(uuids.img_secret, instance.system_metadata[key])
         # Verify we retrieved the secret for the encrypted source rescue image.
-        mock_get_secret.assert_called_once_with(self.context, uuids.img_secret)
+        # If the disk is also encrypted, we will also retrieve the secret to
+        # store as the backing file secret (when image backend is qcow2) when
+        # we add encryption attributes to the rescue disk BDM.
+        call = mock.call(self.context, uuids.img_secret)
+        expected_calls = [call] if not disk_encrypted else [call, call]
+        self.assertEqual(expected_calls, mock_get_secret.mock_calls)
 
         save_calls = 1
         if disk_encrypted:
             # Verify that the encryption secret for the encrypted rescue disk
             # has been stashed in the instance system metadata.
-            key = 'rescue_disk_ephemeral_encryption_secret_uuid'
-            self.assertEqual(uuids.secret, instance.system_metadata[key])
-            # Verify we created a secret for the encrypted rescue disk.
-            mock_create_secret.assert_called_once()
+            prefix = 'rescue_disk_ephemeral_'
+            self.assertEqual(
+                uuids.secret1,
+                instance.system_metadata[prefix + 'encryption_secret_uuid'])
+            self.assertEqual(
+                uuids.secret2,
+                instance.system_metadata[
+                    prefix + 'backing_encryption_secret_uuid'])
+            # Verify we created a secret for the encrypted rescue disk and its
+            # encrypted backing file.
+            self.assertEqual(2, mock_create_secret.call_count)
             # We should have saved sysmeta changes to the instance twice, for
             # the rescue image encryption secret UUID and the rescue disk
             # encryption secret UUID.
@@ -28521,13 +28553,13 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_file_obj.write.assert_called_once_with(mock.sentinel.secret)
             mock_file_obj.flush.assert_called_once_with()
             extra_args = [
-                '--object', 'secret,id=sec,file=fakefile', '--image-opts',
-                'encrypt.key-secret=sec,file.filename=disk']
+                '--object', 'secret,id=sec0,file=fakefile', '--image-opts',
+                'file.filename=disk,encrypt.key-secret=sec0']
 
         mock_qemu_img_info.assert_called_once_with("backing_file")
-        mock_execute.assert_called_once_with('qemu-img', 'rebase',
-                                             '-b', 'backing_file', '-F',
-                                             'fake_fmt', *extra_args)
+        mock_execute.assert_called_once_with(
+            'qemu-img', 'rebase', '-b', 'backing_file', '-F', 'fake_fmt',
+            *extra_args)
 
         # Flatten disk image when no backing file is given.
         mock_qemu_img_info.reset_mock()
@@ -30847,7 +30879,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
 
         block_device_info = driver.get_block_device_info(
             self.instance, [self.img_bdm, self.eph_bdm, self.swap_bdm])
-        image_meta = objects.ImageMeta.from_dict({})
+        image_meta = objects.ImageMeta.from_dict({'id': uuids.image})
 
         self.drvr.spawn(
             self.context, self.instance, image_meta, [], None, {},
@@ -30933,7 +30965,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
 
         block_device_info = driver.get_block_device_info(
             self.instance, [self.img_bdm, self.eph_bdm, self.swap_bdm])
-        image_meta = objects.ImageMeta.from_dict({})
+        image_meta = objects.ImageMeta.from_dict({'id': uuids.image})
 
         self.assertRaises(
             exception.EphemeralEncryptionSecretNotFound, self.drvr.spawn,
@@ -31004,7 +31036,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
 
         block_device_info = driver.get_block_device_info(
             self.instance, [self.img_bdm, self.eph_bdm, self.swap_bdm])
-        image_meta = objects.ImageMeta.from_dict({})
+        image_meta = objects.ImageMeta.from_dict({'id': uuids.image})
 
         self.assertRaises(
             test.TestingException, self.drvr.spawn, self.context,
@@ -31090,7 +31122,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
 
         block_device_info = driver.get_block_device_info(
             self.instance, [self.img_bdm, self.eph_bdm, self.swap_bdm])
-        image_meta = objects.ImageMeta.from_dict({})
+        image_meta = objects.ImageMeta.from_dict({'id': uuids.image})
 
         self.assertRaises(
             test.TestingException, self.drvr.spawn, self.context,
@@ -31137,7 +31169,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
     @mock.patch('nova.objects.instance.Instance.save', new=mock.Mock())
     def _test_cleanup_with_ephemeral_encryption(
         self, has_key_mgr_secret=True, has_libvirt_secret=True,
-        destroy_disks=True
+        destroy_disks=True, has_backing_secret=False
     ):
         mock_domain = mock.Mock(fakelibvirt.virDomain)
         mock_domain.ID.return_value = 123
@@ -31151,16 +31183,20 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
 
         # Create a DriverBlockDevice list from a BlockDeviceMapping object.
         encryption_secret_uuid = uuids.secret if has_key_mgr_secret else None
+        backing_encryption_secret_uuid = (
+            uuids.bsecret if has_backing_secret else None)
         bdm = block_device_obj.BlockDeviceMapping(
-            id=1, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
-            no_device=False, device_name='/dev/vdb', volume_size=1,
-            source_type='blank', destination_type='local', guest_format=None,
+            id=1, uuid=uuids.image, device_type='disk', disk_bus='virtio',
+            no_device=False, device_name='/dev/vda', volume_size=1,
+            source_type='image', destination_type='local', guest_format=None,
+            image_id = uuids.source_image,
             encrypted=True, encryption_format='plain',
             encryption_options=None,
             encryption_secret_uuid=encryption_secret_uuid,
+            backing_encryption_secret_uuid=backing_encryption_secret_uuid,
         )
-        ephemerals = [driver_block_device.DriverEphemeralBlockDevice(bdm)]
-        block_device_info = {'ephemerals': ephemerals}
+        image = [driver_block_device.DriverImageBlockDevice(bdm)]
+        block_device_info = {'image': image}
         self.instance.cleaned = True
 
         # Call cleanup() with encrypted ephemeral block device.
@@ -31173,14 +31209,21 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
 
         # Assert that we deleted the libvirt secret.
         if has_libvirt_secret and destroy_disks:
-            secret_usage = f'{self.instance.uuid}_{uuids.ephemeral}'
-            self.drvr._host.delete_secret.assert_called_once_with(
-                'volume', secret_usage)
+            secret_usage = f'{self.instance.uuid}_{uuids.image}'
+            expected_calls = [mock.call('volume', secret_usage)]
+            if has_backing_secret:
+                secret_usage += '_backing'
+                expected_calls.append(mock.call('volume', secret_usage))
+            self.assertEqual(
+                expected_calls, self.drvr._host.delete_secret.mock_calls)
         else:
             self.drvr._host.delete_secret.assert_not_called()
 
     def test_cleanup_with_ephemeral_encryption(self):
         self._test_cleanup_with_ephemeral_encryption()
+
+    def test_cleanup_with_ephemeral_encryption_has_backing_secret(self):
+        self._test_cleanup_with_ephemeral_encryption(has_backing_secret=True)
 
     def test_cleanup_with_ephemeral_encryption_no_key_mgr_secret(self):
         self._test_cleanup_with_ephemeral_encryption(has_key_mgr_secret=False)
@@ -31396,7 +31439,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             destination_type='local', guest_format=None, encrypted=True,
             encryption_format='luks', encryption_options=None,
             encryption_secret_uuid=uuids.src_secret, boot_index=0,
-            backing_encryption_secret_uuid=None)
+            backing_encryption_secret_uuid=uuids.src_bsecret)
         eph_bdm = block_device_obj.BlockDeviceMapping(
             id=2, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdb', volume_size=1,

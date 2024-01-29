@@ -202,6 +202,34 @@ class Image(metaclass=abc.ABCMeta):
             encryption.format = self.disk_info_mapping.get('encryption_format')
             info.ephemeral_encryption = encryption
 
+            # Config for encrypted backing file, if applicable.
+            backing_secret_uuid = (
+                self.disk_info_mapping.get('backing_encryption_secret_uuid'))
+            if backing_secret_uuid is not None:
+                bstore = vconfig.LibvirtConfigGuestDiskBackingStore()
+                bstore.source_type = 'file'
+                # Backing file will be JSON if it's encrypted (the encryption
+                # secret has to be provided in JSON form).
+                backing_file = libvirt_utils.get_disk_backing_file(
+                    self.path, basename=False)
+                if backing_file.startswith('json:'):
+                    json_str = backing_file[5:]
+                    bstore.source_file = jsonutils.loads(
+                        json_str)['file']['filename']
+                else:
+                    bstore.source_file = backing_file
+                bstore.driver_format = 'raw'
+                backing_encryption = vconfig.LibvirtConfigGuestDiskEncryption()
+                backing_secret = (
+                    vconfig.LibvirtConfigGuestDiskEncryptionSecret())
+                backing_secret.type = 'passphrase'
+                backing_secret.uuid = backing_secret_uuid
+                backing_encryption.secret = backing_secret
+                backing_encryption.format = self.disk_info_mapping.get(
+                    'encryption_format')
+                bstore.ephemeral_encryption = backing_encryption
+                info.backing_store = bstore
+
         if disk_bus == 'scsi':
             self.disk_scsi(info, disk_unit)
 
@@ -708,6 +736,30 @@ class Qcow2(Image):
         self.disk_info_path = os.path.join(os.path.dirname(path), 'disk.info')
         self.resolve_driver_format()
 
+    def get_encryption(
+        self,
+        context: 'nova.context.RequestContext',
+    ) -> ty.Optional[ty.Dict[str, ty.Any]]:
+        """Get encryption attributes from the disk_info_mapping.
+
+        Checks for encryption attributes in the disk_info_mapping and returns
+        them if present. If the disk_info_mapping is not present, if the image
+        is not encrypted, or if the image backend does not support encryption,
+        this method will return None.
+
+        :returns: A dict detailing the various encryption attributes such as
+            the format and passphrase or None
+        """
+        encryption = super().get_encryption(context)
+        if encryption:
+            backing_secret_uuid = self.disk_info_mapping.get(
+                'backing_encryption_secret_uuid')
+            if backing_secret_uuid:
+                backing_secret = crypto.get_encryption_secret(
+                    context, backing_secret_uuid)
+                encryption['backing_secret'] = backing_secret
+            return encryption
+
     def create_image(self, prepare_template, base, size, *args, **kwargs):
         filename = self._get_lock_name(base)
 
@@ -724,7 +776,15 @@ class Qcow2(Image):
 
         # Download the unmodified base image unless we already have a copy.
         if not os.path.exists(base):
-            prepare_template(target=base, *args, **kwargs)
+            # If the source image is encrypted (i.e. snapshot) then encryption
+            # attributes are needed to convert/copy it as a base image.
+            # Have the downloaded base image use the same passphrase as the
+            # encrypted source image, so that instances can track and decrypt
+            # their backing file.
+            image_encryption = kwargs.pop('src_encryption', None)
+            prepare_template(
+                target=base, src_encryption=image_encryption,
+                dest_encryption=image_encryption, *args, **kwargs)
 
         # NOTE(ankit): Update the mtime of the base file so the image
         # cache manager knows it is in use.
