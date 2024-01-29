@@ -4890,11 +4890,18 @@ class LibvirtDriver(driver.ComputeDriver):
 
                 # Stash the UUID of the backing file secret if needed
                 image_secret_uuid = None
-                if CONF.libvirt.images_type not in ('raw', 'rbd'):
+
+                # Swap and ephemeral disks will not have encrypted backing
+                # files.
+                if ('image_id' in driver_bdm and
+                        CONF.libvirt.images_type not in ('raw', 'rbd')):
                     image_meta = objects.ImageMeta.from_instance(instance)
                     image_secret_uuid = image_meta.properties.get(
                         'hw_ephemeral_encryption_secret_uuid')
                     if image_secret_uuid:
+                        # NOTE(melwitt): Alternatively, we could add a new
+                        # 'backing_encryption_secret_uuid' column to the
+                        # block_device_mapping database table.
                         encryption_opts = (
                             driver_bdm.get('encryption_options') or {})
                         if encryption_opts:
