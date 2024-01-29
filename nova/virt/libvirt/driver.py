@@ -3819,28 +3819,57 @@ class LibvirtDriver(driver.ComputeDriver):
             qemu_img_extra_arg = ['-F', b_file_fmt]
 
         if encryption:
-            with tempfile.NamedTemporaryFile(
-                    mode='tr+', encoding='utf-8') as f:
+            cmd = ['qemu-img', 'rebase', '-b']
+            with contextlib.ExitStack() as stack:
+                secret_file = stack.enter_context(
+                    tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
                 # Write out the passphrase secret to a temp file
-                f.write(encryption.get('secret'))
+                secret_file.write(encryption.get('secret'))
 
                 # Ensure the secret is written to disk, we can't .close() here
                 # as that removes the file when using NamedTemporaryFile
-                f.flush()
+                secret_file.flush()
 
                 # Need the secret for the resize. When --image-opts is used,
                 # the source filename must be passed as part of the option
                 # string instead of as a positional arg.
-                encryption_opts = (
-                    '--object', f"secret,id=sec,file={f.name}",
+                encryption_opts = [
+                    '--object', f"secret,id=sec,file={secret_file.name}",
                     '--image-opts',
                     f"encrypt.key-secret=sec,file.filename={source_path}",
-                )
+                ]
+
+                if 'backing_secret' in encryption:
+                    backing_secret_file = stack.enter_context(
+                        tempfile.NamedTemporaryFile(
+                            mode='tr+', encoding='utf-8'))
+                    # Write out the passphrase secret to a temp file
+                    backing_secret_file.write(encryption.get('backing_secret'))
+
+                    # Ensure the secret is written to disk, we can't .close()
+                    # here as that removes the file when using
+                    # NamedTemporaryFile
+                    backing_secret_file.flush()
+
+                    backing_opts = {
+                        'encrypt.key-secret': 'bsec',
+                        'driver': 'qcow2',
+                        'file': {
+                            'driver': 'file',
+                            'filename': backing_file,
+                        }
+                    }
+
+                    backing_opts = ['json:' + jsonutils.dumps(backing_opts)]
+                else:
+                    backing_opts = [backing_file]
+
+                cmd += backing_opts
+
                 # execute operation with disk concurrency semaphore
                 with compute_utils.disk_ops_semaphore:
-                    processutils.execute("qemu-img", "rebase",
-                                         "-b", backing_file,
-                                         *qemu_img_extra_arg, *encryption_opts)
+                    processutils.execute(
+                        *cmd, *qemu_img_extra_arg, *encryption_opts)
         else:
             qemu_img_extra_arg.append(source_path)
             # execute operation with disk concurrency semaphore
@@ -4828,6 +4857,10 @@ class LibvirtDriver(driver.ComputeDriver):
                     driver_bdm['encryption_format'] = (
                         CONF.ephemeral_storage_encryption.default_format)
 
+                secret = None
+                backing_secret = None
+                image_secret_uuid = None
+
                 secret_uuid = driver_bdm.get('encryption_secret_uuid')
                 if secret_uuid is None:
                     # Create a passphrase and stash it in the key manager
@@ -4861,6 +4894,34 @@ class LibvirtDriver(driver.ComputeDriver):
                             f"{driver_bdm['uuid']}")
                         raise exception.InvalidBDM(msg)
 
+                # Stash the UUID of the backing file secret if needed
+                image_secret_uuid = None
+                if CONF.libvirt.images_type not in ('raw', 'rbd'):
+                    image_meta = objects.ImageMeta.from_instance(instance)
+                    image_secret_uuid = image_meta.properties.get(
+                        'hw_ephemeral_encryption_secret_uuid')
+                    if image_secret_uuid:
+                        encryption_opts = (
+                            driver_bdm.get('encryption_options') or {})
+                        if encryption_opts:
+                            encryption_opts = jsonutils.loads(encryption_opts)
+                        key = 'backing_encryption_secret_uuid'
+                        if key not in encryption_opts:
+                            # If the source image is encrypted, its secret
+                            # should already exist. If it doesn't, something is
+                            # wrong.
+                            backing_secret = crypto.get_encryption_secret(
+                                context, image_secret_uuid)
+                            if backing_secret is None:
+                                msg = (
+                                    'Failed to find encryption secret '
+                                    f'{image_secret_uuid} in the key manager '
+                                    'for image {instance.image_ref}')
+                                raise exception.InvalidBDM(msg)
+                            encryption_opts[key] = image_secret_uuid
+                            driver_bdm['encryption_options'] = (
+                                jsonutils.dumps(encryption_opts))
+
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
                 if persist:
@@ -4874,6 +4935,14 @@ class LibvirtDriver(driver.ComputeDriver):
                         'volume', secret_usage, password=secret,
                         uuid=secret_uuid)
                     created_libvirt_secrets.append(secret_usage)
+                # Do the same for the backing file secret if there is one.
+                if backing_secret is not None:
+                    secret_usage = f"image_{instance.image_ref}"
+                    if self._host.find_secret('volume', secret_usage) is None:
+                        self._host.create_secret(
+                            'volume', secret_usage, password=backing_secret,
+                            uuid=image_secret_uuid)
+                        created_libvirt_secrets.append(secret_usage)
         except Exception:
             for secret_uuid in created_keymgr_secrets:
                 try:
@@ -4887,7 +4956,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
             for i, orig_driver_bdm in enumerate(orig_encrypted_bdms):
                 driver_bdm = encrypted_bdms[i]
-                for key in ('encryption_format', 'encryption_secret_uuid'):
+                for key in ('encryption_format', 'encryption_secret_uuid',
+                        'encryption_options'):
                     driver_bdm[key] = orig_driver_bdm[key]
                 driver_bdm.save()
 
