@@ -620,7 +620,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
              self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH,
              encryption=None)
         fn.assert_called_once_with(
-            target=self.TEMPLATE_PATH, context=self.CONTEXT)
+            target=self.TEMPLATE_PATH, context=self.CONTEXT,
+            src_encryption=None, dest_encryption=None)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
         mock_utime.assert_called()
@@ -689,9 +690,9 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         image.create_image(fn, self.TEMPLATE_PATH, self.SIZE, **kwargs)
 
         mock_get_secret.assert_called_once_with(self.CONTEXT, uuids.secret)
-        # encryption=None here because fn is the fetch_func and the source
-        # image is not encrypted.
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH, **kwargs)
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, src_encryption=None,
+            dest_encryption=None, **kwargs)
         # encryption attributes are passed to create the (destination) image.
         mock_create.assert_called_once_with(
             self.PATH, 'qcow2', self.SIZE,
@@ -743,7 +744,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                                     encryption=encryption)
         mock_exist.assert_has_calls(exist_calls)
         fn.assert_called_once_with(
-            target=self.TEMPLATE_PATH, context=self.CONTEXT)
+            target=self.TEMPLATE_PATH, src_encryption=None,
+            dest_encryption=None, context=self.CONTEXT)
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_create.called)
         mock_utime.assert_called()
@@ -792,7 +794,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
         mock_get.assert_called_once_with(self.PATH)
         fn.assert_called_once_with(
-            target=self.TEMPLATE_PATH, context=self.CONTEXT)
+            target=self.TEMPLATE_PATH, context=self.CONTEXT,
+            src_encryption=None, dest_encryption=None)
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
