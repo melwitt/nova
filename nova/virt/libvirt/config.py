@@ -1250,6 +1250,9 @@ class LibvirtConfigGuestDisk(LibvirtConfigGuestDevice):
         if source is not None:
             dev.append(source)
 
+        if self.backing_store is not None:
+            dev.append(self.backing_store.format_dom())
+
         if self.auth_secret_type is not None:
             auth = etree.Element("auth")
             auth.set("username", self.auth_username)
@@ -1380,6 +1383,28 @@ class LibvirtConfigGuestDiskBackingStore(LibvirtConfigObject):
         self.driver_name = None
         self.driver_format = None
         self.backing_store = None
+        self.ephemeral_encryption = None
+
+    def format_dom(self):
+        bstore = super(LibvirtConfigGuestDiskBackingStore, self).format_dom()
+        bstore.set('type', self.source_type)
+
+        if self.index is not None:
+            bstore.set('index', self.index)
+
+        if self.driver_format is not None:
+            bstore.append(etree.Element('format', type=self.driver_format))
+
+        if self.source_type == 'file':
+            source = etree.Element('source', file=self.source_file)
+            if self.ephemeral_encryption is not None:
+                source.append(self.ephemeral_encryption.format_dom())
+            bstore.append(source)
+
+        if self.backing_store is not None:
+            bstore.append(self.backing_store.format_dom())
+
+        return bstore
 
     def parse_dom(self, xmldoc):
         super(LibvirtConfigGuestDiskBackingStore, self).parse_dom(xmldoc)
@@ -1399,6 +1424,10 @@ class LibvirtConfigGuestDiskBackingStore(LibvirtConfigObject):
                     if d.tag == 'host':
                         self.source_hosts.append(d.get('name'))
                         self.source_ports.append(d.get('port'))
+                    elif d.tag == 'encryption':
+                        e = LibvirtConfigGuestDiskEncryption()
+                        e.parse_dom(d)
+                        self.ephemeral_encryption = e
             elif c.tag == 'backingStore':
                 if len(c):
                     self.backing_store = LibvirtConfigGuestDiskBackingStore()
