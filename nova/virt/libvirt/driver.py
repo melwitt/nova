@@ -11626,8 +11626,9 @@ class LibvirtDriver(driver.ComputeDriver):
         # metadata. The image properties from the image are stashed in the
         # instance system metadata in _populate_instance_for_create() in
         # nova.compute.API.
-        secret_uuid = instance.system_metadata.get(
-            utils.SM_IMAGE_PROP_PREFIX + 'hw_ephemeral_encryption_secret_uuid')
+        image_meta = objects.ImageMeta.from_instance(instance)
+        secret_uuid = image_meta.properties.get(
+            'hw_ephemeral_encryption_secret_uuid')
         rescue_image_secret_uuid = instance.system_metadata.get(
             'rescue_' + utils.SM_IMAGE_PROP_PREFIX +
             'hw_ephemeral_encryption_secret_uuid')
@@ -11646,8 +11647,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     f'Failed to find encryption secret {secret_uuid} in the '
                     f'key manager for image {image_id}')
                 raise exception.InvalidBDMImage(msg)
-            encryption_format = instance.system_metadata.get(
-                utils.SM_IMAGE_PROP_PREFIX + 'hw_ephemeral_encryption_format')
+            encryption_format = image_meta.properties.get(
+                'hw_ephemeral_encryption_format')
             image_encryption = {
                 'secret': secret,
                 'format': encryption_format or
