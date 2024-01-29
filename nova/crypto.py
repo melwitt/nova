@@ -284,10 +284,12 @@ def create_ephemeral_encryption_secret(
     instance: 'objects.Instance',
     driver_bdm: 'driver_block_device.DriverBlockDevice',
     for_detail: ty.Optional[str] = None,
+    secret: ty.Optional[str] = None,
 ):
     # Use oslo.serialization to encode some random data as passphrase
-    secret = oslo_base64.encode_as_text(
-        os.urandom(_EPHEMERAL_ENCRYPTION_SECRET_BYTE_LENGTH))
+    if secret is None:
+        secret = oslo_base64.encode_as_text(
+            os.urandom(_EPHEMERAL_ENCRYPTION_SECRET_BYTE_LENGTH))
     if for_detail is None:
         for_detail = f"instance {instance.uuid} BDM {driver_bdm['uuid']}"
     secret_name = f'Ephemeral encryption secret for {for_detail}'
