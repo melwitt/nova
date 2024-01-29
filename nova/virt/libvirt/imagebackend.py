@@ -238,17 +238,16 @@ class Image(metaclass=abc.ABCMeta):
             encryption.secret = secret
             encryption.format = self.disk_info_mapping.get('encryption_format')
             info.ephemeral_encryption = encryption
+
+            # Config for encrypted backing file, if applicable.
             encryption_opts = (
                 self.disk_info_mapping.get('encryption_options') or {})
             key = 'backing_encryption_secret_uuid'
             if key in encryption_opts:
                 bstore = vconfig.LibvirtConfigGuestDiskBackingStore()
                 bstore.source_type = 'file'
-                # FIXME: add a backing file path
                 bstore.source_file = libvirt_utils.get_disk_backing_file(
                     self.path, basename=False)
-
-                #bstore.source_file = self.backing_path
                 bstore.driver_format = 'raw'
                 backing_encryption = vconfig.LibvirtConfigGuestDiskEncryption()
                 backing_secret = (
