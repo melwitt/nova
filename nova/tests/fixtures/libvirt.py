@@ -2140,6 +2140,9 @@ class Connection(object):
             if secret._usage_id == usage_id:
                 return secret
 
+    def secretLookupByUUIDString(self, uuid_str):
+        return self._secrets.get(uuid_str)
+
     def secretDefineXML(self, xml):
         secret = Secret(self, xml)
         self._add_secret(secret)

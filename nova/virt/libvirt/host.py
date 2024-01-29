@@ -1077,6 +1077,14 @@ class Host(object):
             self._node_uuid = nova.virt.node.get_local_node_uuid()
         return self._node_uuid
 
+    def find_secret_by_uuid(self, uuid_str):
+        try:
+            conn = self.get_connection()
+            return conn.secretLookupByUUIDString(uuid_str)
+        except libvirt.libvirtError as e:
+            if e.get_error_code() == libvirt.VIR_ERR_NO_SECRET:
+                return None
+
     def find_secret(self, usage_type, usage_id):
         """Find a secret.
 
