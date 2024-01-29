@@ -1609,7 +1609,7 @@ def delete_arqs_if_needed(context, instance, arq_uuids=None):
 def delete_bdms_encryption_secrets(context, instance_uuid, bdms):
     # TODO(melwitt): This will also include the backing file secret UUID when
     # support for encrypted backing files is added.
-    keys = ['encryption_secret_uuid']
+    keys = ['encryption_secret_uuid', 'backing_encryption_secret_uuid']
     # Only consider local BDMs for ephemeral encryption at this time.
     local_bdms = [bdm for bdm in bdms if bdm.is_local]
     for local_bdm in local_bdms:
