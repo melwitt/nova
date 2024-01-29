@@ -41,6 +41,7 @@ class EncryptionInfo(ty.TypedDict):
     secret: str
     format: str
     options: 'encrypt_options.EncryptOptions'
+    backing_secret: str
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint
@@ -153,9 +154,32 @@ def unprivileged_convert_image(
             encryption_opts = [
                 '--object', f"secret,id=sec0,file={src_secret_file.name}",
                 '--image-opts',
-                f"{driver_str}file.driver=file,file.filename={source},"
-                f"{prefix}key-secret=sec0",
             ]
+            csv_opts = [
+                f'{driver_str}file.driver=file',
+                f'file.filename={source}',
+                f'{prefix}key-secret=sec0',
+            ]
+
+            if 'backing_secret' in src_encryption:
+                backing_secret_file = stack.enter_context(
+                    tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
+                # Write out the passphrase secret to a temp file
+                backing_secret_file.write(src_encryption['backing_secret'])
+
+                # Ensure the secret is written to disk, we can't .close()
+                # here as that removes the file when using
+                # NamedTemporaryFile
+                backing_secret_file.flush()
+
+                csv_opts += ['backing.key-secret=sec2']
+                encryption_opts += [
+                    ','.join(csv_opts),
+                    '--object',
+                    f'secret,id=sec2,file={backing_secret_file.name}',
+                ]
+            else:
+                encryption_opts += [','.join(csv_opts)]
 
         if dest_encryption:
             dest_secret_file = stack.enter_context(

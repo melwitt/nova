@@ -228,7 +228,9 @@ class _ImageTestCase(object):
     def test_libvirt_info_scsi_with_unit(self, disk_unit):
         self._test_libvirt_info_scsi_with_unit(disk_unit)
 
-    def test_libvirt_info_with_encryption(self):
+    @mock.patch('nova.virt.libvirt.utils.get_disk_backing_file',
+                return_value='fake_backing_file')
+    def test_libvirt_info_with_encryption(self, mock_get_bfile):
         disk_info = {
             'bus': 'virtio',
             'dev': '/dev/vda',
@@ -236,6 +238,7 @@ class _ImageTestCase(object):
             'encrypted': True,
             'encryption_format': 'luks',
             'encryption_secret_uuid': uuids.secret,
+            'backing_encryption_secret_uuid': uuids.bsecret,
         }
         image = self.image_class(
             self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
@@ -264,6 +267,15 @@ class _ImageTestCase(object):
         self.assertEqual("passphrase", disk.ephemeral_encryption.secret.type)
         self.assertEqual(uuids.secret, disk.ephemeral_encryption.secret.uuid)
         self.assertEqual("luks", disk.ephemeral_encryption.format)
+
+        self.assertEqual("fake_backing_file", disk.backing_store.source_file)
+        self.assertEqual(disk.driver_format, disk.backing_store.format)
+        self.assertEqual(
+            "passphrase", disk.backing_store.ephemeral_encryption.secret.type)
+        self.assertEqual(
+            uuids.bsecret, disk.backing_store.ephemeral_encryption.secret.uuid)
+        self.assertEqual(
+            "luks", disk.backing_store.ephemeral_encryption.format)
 
     @mock.patch('nova.crypto.get_encryption_secret',
                 return_value=mock.sentinel.secret)
@@ -620,7 +632,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
              self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH,
              encryption=None)
         fn.assert_called_once_with(
-            target=self.TEMPLATE_PATH, context=self.CONTEXT)
+            target=self.TEMPLATE_PATH, context=self.CONTEXT,
+            src_encryption=None, dest_encryption=None)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
         mock_utime.assert_called()
@@ -689,9 +702,9 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         image.create_image(fn, self.TEMPLATE_PATH, self.SIZE, **kwargs)
 
         mock_get_secret.assert_called_once_with(self.CONTEXT, uuids.secret)
-        # encryption=None here because fn is the fetch_func and the source
-        # image is not encrypted.
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH, **kwargs)
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, src_encryption=None,
+            dest_encryption=None, **kwargs)
         # encryption attributes are passed to create the (destination) image.
         mock_create.assert_called_once_with(
             self.PATH, 'qcow2', self.SIZE,
@@ -743,7 +756,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                                     encryption=encryption)
         mock_exist.assert_has_calls(exist_calls)
         fn.assert_called_once_with(
-            target=self.TEMPLATE_PATH, context=self.CONTEXT)
+            target=self.TEMPLATE_PATH, src_encryption=None,
+            dest_encryption=None, context=self.CONTEXT)
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_create.called)
         mock_utime.assert_called()
@@ -792,7 +806,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
 
         mock_get.assert_called_once_with(self.PATH)
         fn.assert_called_once_with(
-            target=self.TEMPLATE_PATH, context=self.CONTEXT)
+            target=self.TEMPLATE_PATH, context=self.CONTEXT,
+            src_encryption=None, dest_encryption=None)
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
