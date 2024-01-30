@@ -370,6 +370,8 @@ def get_encryption_info_from_bdm(bdm):
         if encryption_options:
             bdm_info['encryption_options'] = jsonutils.loads(
                 encryption_options)
+        bdm_info['backing_encryption_secret_uuid'] = bdm.get(
+            'backing_encryption_secret_uuid')
 
     return bdm_info
 
