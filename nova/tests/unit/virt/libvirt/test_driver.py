@@ -9458,13 +9458,15 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             device_name='/dev/vda', volume_size=1, source_type='image',
             destination_type='local', guest_format=None, encrypted=True,
             encryption_format='luks', encryption_options=None,
-            encryption_secret_uuid=uuids.src_secret, boot_index=0)
+            encryption_secret_uuid=uuids.src_secret,
+            backing_encryption_secret_uuid=None, boot_index=0)
         eph_bdm = block_device_obj.BlockDeviceMapping(
             id=2, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdb', volume_size=1,
             source_type='blank', destination_type='local', guest_format=None,
             encrypted=True, encryption_format='luks', encryption_options=None,
-            encryption_secret_uuid=uuids.eph_secret, boot_index=1)
+            encryption_secret_uuid=uuids.eph_secret,
+            backing_encryption_secret_uuid=None, boot_index=1)
         block_device_info = driver.get_block_device_info(
             instance, [img_bdm, eph_bdm])
         encrypted_bdms = driver.block_device_info_get_encrypted_disks(
@@ -30484,19 +30486,19 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             device_name='/dev/vda', volume_size=1, source_type='image',
             destination_type='local', guest_format=None, encrypted=True,
             encryption_format=None, encryption_options=None,
-            encryption_secret_uuid=None)
+            encryption_secret_uuid=None, backing_encryption_secret_uuid=None)
         self.eph_bdm = block_device_obj.BlockDeviceMapping(
             id=2, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdb', volume_size=1,
             source_type='blank', destination_type='local', guest_format=None,
             encrypted=True, encryption_format=None, encryption_options=None,
-            encryption_secret_uuid=None)
+            encryption_secret_uuid=None, backing_encryption_secret_uuid=None)
         self.swap_bdm = block_device_obj.BlockDeviceMapping(
             id=3, uuid=uuids.swap, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdc', volume_size=1,
             source_type='blank', destination_type='local', guest_format='swap',
             encrypted=True, encryption_format=None, encryption_options=None,
-            encryption_secret_uuid=None)
+            encryption_secret_uuid=None, backing_encryption_secret_uuid=None)
 
         # Mock things we need to assert.
         self.mock_save = self.useFixture(fixtures.MockPatch(
