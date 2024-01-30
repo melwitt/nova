@@ -752,6 +752,7 @@ class BlockDeviceMapping(BASE, NovaBase, models.SoftDeleteMixin):
     encryption_secret_uuid = sa.Column(sa.String(36))
     encryption_format = sa.Column(sa.String(128))
     encryption_options = sa.Column(sa.String(4096))
+    backing_encryption_secret_uuid = sa.Column(sa.String(36))
 
 
 class ShareMapping(BASE, NovaBase):

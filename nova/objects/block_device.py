@@ -69,7 +69,8 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
     # Version 1.20: Added volume_type
     # Version 1.21: Added encrypted, encryption_secret_uuid, encryption_format
     #               and encryption_options
-    VERSION = '1.21'
+    # Version 1.22: Added backing_encryption_secret_uuid
+    VERSION = '1.22'
 
     fields = {
         'id': fields.IntegerField(),
@@ -100,10 +101,13 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         'encryption_format': fields.BlockDeviceEncryptionFormatTypeField(
             nullable=True),
         'encryption_options': fields.StringField(nullable=True),
+        'backing_encryption_secret_uuid': fields.UUIDField(nullable=True),
     }
 
     def obj_make_compatible(self, primitive, target_version):
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (1, 22):
+            primitive.pop('backing_encryption_secret_uuid', None)
         if target_version < (1, 21):
             primitive.pop('encrypted', None)
             primitive.pop('encryption_secret_uuid', None)
