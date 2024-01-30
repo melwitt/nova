@@ -265,6 +265,7 @@ class DriverImageBlockDevice(DriverBlockDevice):
         'encryption_secret_uuid',
         'encryption_format',
         'encryption_options'
+        'backing_encryption_secret_uuid',
     ])
     _fields = set([
         'device_name',
@@ -282,6 +283,7 @@ class DriverImageBlockDevice(DriverBlockDevice):
         'encryption_secret_uuid': None,
         'encryption_format': None,
         'encryption_options': None,
+        'backing_encryption_secret_uuid': None,
     }
 
     def _transform(self):
@@ -299,7 +301,9 @@ class DriverImageBlockDevice(DriverBlockDevice):
             'encrypted': self._bdm_obj.encrypted,
             'encryption_secret_uuid': self._bdm_obj.encryption_secret_uuid,
             'encryption_format': self._bdm_obj.encryption_format,
-            'encryption_options': self._bdm_obj.encryption_options
+            'encryption_options': self._bdm_obj.encryption_options,
+            'backing_encryption_secret_uuid':
+                self._bdm_obj.backing_encryption_secret_uuid,
         })
 
 
