@@ -3214,7 +3214,8 @@ class LibvirtDriver(driver.ComputeDriver):
                         os.chmod(tmpdir, 0o701)
                         self._live_snapshot(context, instance, guest,
                                             disk_path, out_path, source_format,
-                                            image_format, instance.image_meta)
+                                            image_format, instance.image_meta,
+                                            encryption=dest_encryption)
                     else:
                         root_disk.snapshot_extract(
                             out_path, image_format, encryption=encryption,
@@ -3460,7 +3461,8 @@ class LibvirtDriver(driver.ComputeDriver):
         self._set_quiesced(context, instance, image_meta, False)
 
     def _live_snapshot(self, context, instance, guest, disk_path, out_path,
-                       source_format, image_format, image_meta):
+                       source_format, image_format, image_meta,
+                       encryption=None):
         """Snapshot an instance without downtime."""
         dev = guest.get_block_device(disk_path)
 
@@ -3485,7 +3487,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                         basename=False)
         disk_delta = out_path + '.delta'
         libvirt_utils.create_image(
-            disk_delta, 'qcow2', src_disk_size, backing_file=src_back_path)
+            disk_delta, 'qcow2', src_disk_size, backing_file=src_back_path,
+            encryption=encryption)
 
         try:
             self._can_quiesce(instance, image_meta)
