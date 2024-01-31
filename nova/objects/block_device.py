@@ -15,7 +15,6 @@
 from oslo_db import api as oslo_db_api
 from oslo_db.sqlalchemy import update_match
 from oslo_log import log as logging
-from oslo_utils import jsonutils
 from oslo_utils import uuidutils
 from oslo_utils import versionutils
 
