@@ -3149,7 +3149,12 @@ class LibvirtDriver(driver.ComputeDriver):
             not CONF.workarounds.disable_libvirt_livesnapshot and
             # NOTE(stephenfin): Live snapshotting doesn't make sense for
             # shutdown instances
-            original_power_state != power_state.SHUTDOWN
+            original_power_state != power_state.SHUTDOWN and
+            # NOTE(melwitt): Live snapshot doesn't work with ephemeral
+            # encryption with encrypted backing files because there doesn't
+            # seem to be a way to provide the backing file secret to libvirt
+            # blockRebase(), which is used by _live_snapshot.
+            not encryption.get('backing_secret')
         ):
             live_snapshot = True
         else:
@@ -3851,6 +3856,10 @@ class LibvirtDriver(driver.ComputeDriver):
                     # NamedTemporaryFile
                     backing_secret_file.flush()
 
+                    encryption_opts += [
+                        '--object',
+                        f'secret,id=bsec,file={backing_secret_file.name}',
+                    ]
                     backing_opts = {
                         'encrypt.key-secret': 'bsec',
                         'driver': 'qcow2',
@@ -4905,29 +4914,19 @@ class LibvirtDriver(driver.ComputeDriver):
                     image_secret_uuid = image_meta.properties.get(
                         'hw_ephemeral_encryption_secret_uuid')
                     if image_secret_uuid:
-                        # NOTE(melwitt): Alternatively, we could add a new
-                        # 'backing_encryption_secret_uuid' column to the
-                        # block_device_mapping database table.
-                        encryption_opts = (
-                            driver_bdm.get('encryption_options') or {})
-                        if encryption_opts:
-                            encryption_opts = jsonutils.loads(encryption_opts)
-                        key = 'backing_encryption_secret_uuid'
-                        if key not in encryption_opts:
-                            # If the source image is encrypted, its secret
-                            # should already exist. If it doesn't, something is
-                            # wrong.
-                            backing_secret = crypto.get_encryption_secret(
-                                context, image_secret_uuid)
-                            if backing_secret is None:
-                                msg = (
-                                    'Failed to find encryption secret '
-                                    f'{image_secret_uuid} in the key manager '
-                                    'for image {instance.image_ref}')
-                                raise exception.InvalidBDM(msg)
-                            encryption_opts[key] = image_secret_uuid
-                            driver_bdm['encryption_options'] = (
-                                jsonutils.dumps(encryption_opts))
+                        # If the source image is encrypted, its secret
+                        # should already exist. If it doesn't, something is
+                        # wrong.
+                        backing_secret = crypto.get_encryption_secret(
+                            context, image_secret_uuid)
+                        if backing_secret is None:
+                            msg = (
+                                'Failed to find encryption secret '
+                                f'{image_secret_uuid} in the key manager '
+                                'for image {instance.image_ref}')
+                            raise exception.InvalidBDM(msg)
+                        driver_bdm['backing_encryption_secret_uuid'] = (
+                            image_secret_uuid)
 
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
@@ -4964,7 +4963,7 @@ class LibvirtDriver(driver.ComputeDriver):
             for i, orig_driver_bdm in enumerate(orig_encrypted_bdms):
                 driver_bdm = encrypted_bdms[i]
                 for key in ('encryption_format', 'encryption_secret_uuid',
-                        'encryption_options'):
+                        'backing_encryption_secret_uuid'):
                     driver_bdm[key] = orig_driver_bdm[key]
                 driver_bdm.save()
 
