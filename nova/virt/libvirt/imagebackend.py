@@ -240,10 +240,9 @@ class Image(metaclass=abc.ABCMeta):
             info.ephemeral_encryption = encryption
 
             # Config for encrypted backing file, if applicable.
-            encryption_opts = (
-                self.disk_info_mapping.get('encryption_options') or {})
-            key = 'backing_encryption_secret_uuid'
-            if key in encryption_opts:
+            backing_secret_uuid = (
+                self.disk_info_mapping.get('backing_encryption_secret_uuid'))
+            if backing_secret_uuid is not None:
                 bstore = vconfig.LibvirtConfigGuestDiskBackingStore()
                 bstore.source_type = 'file'
                 bstore.source_file = libvirt_utils.get_disk_backing_file(
@@ -253,7 +252,7 @@ class Image(metaclass=abc.ABCMeta):
                 backing_secret = (
                     vconfig.LibvirtConfigGuestDiskEncryptionSecret())
                 backing_secret.type = 'passphrase'
-                backing_secret.uuid = encryption_opts.get(key)
+                backing_secret.uuid = backing_secret_uuid
                 backing_encryption.secret = backing_secret
                 backing_encryption.format = self.disk_info_mapping.get(
                     'encryption_format')
@@ -779,8 +778,8 @@ class Qcow2(Image):
         """
         encryption = super().get_encryption(context)
         if encryption:
-            backing_secret_uuid = (
-                self.disk_info_mapping.get('backing_encryption_secret_uuid'))
+            backing_secret_uuid = self.disk_info_mapping.get(
+                'backing_encryption_secret_uuid')
             if backing_secret_uuid:
                 backing_secret = crypto.get_encryption_secret(
                     context, backing_secret_uuid)
