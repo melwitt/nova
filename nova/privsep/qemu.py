@@ -23,11 +23,13 @@ import typing as ty
 
 from oslo_concurrency import processutils
 from oslo_log import log as logging
+from oslo_serialization import jsonutils
 from oslo_utils import units
 
 from nova import exception
 from nova.i18n import _
 import nova.privsep.utils
+from nova.virt.libvirt import utils as libvirt_utils
 
 LOG = logging.getLogger(__name__)
 
@@ -143,9 +145,47 @@ def unprivileged_convert_image(
             encryption_opts = [
                 '--object', f"secret,id=sec,file={src_secret_file.name}",
                 '--image-opts',
-                f"{driver_str}file.driver={file_driver},"
-                f"file.filename={source},{prefix}key-secret=sec",
+                #f"{driver_str}file.driver={file_driver},"
+                #f"file.filename={source},{prefix}key-secret=sec",
             ]
+            csv_opts = [
+                f'{driver_str}file.driver={file_driver}',
+                f'file.filename={source}',
+                f'{prefix}key-secret=sec',
+            ]
+
+            if 'backing_secret' in encryption:
+                backing_secret_file = stack.enter_context(
+                    tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
+                # Write out the passphrase secret to a temp file
+                backing_secret_file.write(encryption.get('backing_secret'))
+
+                # Ensure the secret is written to disk, we can't .close()
+                # here as that removes the file when using
+                # NamedTemporaryFile
+                backing_secret_file.flush()
+
+                csv_opts += ['backing.key-secret=bsec']
+                encryption_opts += [
+                    ','.join(csv_opts),
+                    '--object',
+                    f'secret,id=bsec,file={backing_secret_file.name}',
+                ]
+            else:
+                encryption_opts += [','.join(csv_opts)]
+                #backing_file = libvirt_utils.get_disk_backing_file(
+                #    source, format=in_format, basename=False)
+                #backing_opts = {
+                #    'key-secret': 'bsec',
+                #    'driver': 'luks',
+                #    'file': {
+                #        'driver': 'file',
+                #        'filename': backing_file,
+                #    }
+                #}
+
+                #encryption_opts += [
+                #    '-B', 'json:' + jsonutils.dumps(backing_opts)]
 
         if dest_encryption:
             dest_secret_file = stack.enter_context(
