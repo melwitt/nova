@@ -14308,6 +14308,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
              '/fake/instance/dir/foo',
              disk_info['type'],
              disk_info['virt_disk_size'],
+             encryption=None,
         )
         mock_exists.assert_called_once_with('/fake/instance/dir/foo')
 
@@ -14555,7 +14556,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
-                os_type='linux', target=ephemeral_backing)
+                os_type='linux', target=ephemeral_backing,
+                context=self.context)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
