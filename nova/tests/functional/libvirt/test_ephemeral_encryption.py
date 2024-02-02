@@ -43,6 +43,17 @@ class EphemeralEncryptionServersTest(base.ServersTestBase):
 
         return server
 
+    def _get_key_mgr_secrets(self, ctx):
+        # Return a dict of {uuid: secret}
+        return {obj.id: obj.value for obj in self.key_mgr.list(ctx)}
+
+    def assertSecretsMatch(self, driver, bdms, keymgr_secrets):
+        for bdm in bdms:
+            self.assertIn(bdm.encryption_secret_uuid, keymgr_secrets.keys())
+            usage_id = f'{bdm.instance_uuid}_{bdm.uuid}'
+            s = driver._host.find_secret('volume', usage_id)
+            self.assertIn(s.value(), keymgr_secrets.values())
+
     def test_create_server(self):
         compute = self.start_compute()
         driver = self.computes[compute].driver
@@ -64,7 +75,8 @@ class EphemeralEncryptionServersTest(base.ServersTestBase):
 
         # There should be two secrets in the key manager, one for the root disk
         # and one for the ephemeral disk from the default flavor.
-        self.assertEqual(2, len(self.key_mgr.list(ctx)))
+        keymgr_secrets = self._get_key_mgr_secrets(ctx)
+        self.assertEqual(2, len(keymgr_secrets))
 
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
             ctx, server['id'])
@@ -72,12 +84,20 @@ class EphemeralEncryptionServersTest(base.ServersTestBase):
         # root disk and the ephemeral disk.
         self.assertEqual(2, len(bdms))
         # Verify that libvirt secrets were created for each disk.
+        self.assertSecretsMatch(driver, bdms, keymgr_secrets)
+
+        # Now delete the server.
+        self._delete_server(server)
+
+        # Verify that libvirt secrets were deleted for each disk.
         for bdm in bdms:
             usage_id = f'{bdm.instance_uuid}_{bdm.uuid}'
             s = driver._host.find_secret('volume', usage_id)
-            self.assertIsNotNone(s)
+            self.assertIsNone(s)
 
-        # Now delete the server.
+        # Verify that key manager secrets were deleted for each disk.
+        self.assertEqual(0, len(self.key_mgr.list(ctx)))
+
     def test_resize_server(self):
         self.flags(allow_resize_to_same_host=True)
         self.useFixture(fixtures.MockPatch(
