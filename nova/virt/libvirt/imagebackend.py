@@ -245,8 +245,16 @@ class Image(metaclass=abc.ABCMeta):
             if backing_secret_uuid is not None:
                 bstore = vconfig.LibvirtConfigGuestDiskBackingStore()
                 bstore.source_type = 'file'
-                bstore.source_file = libvirt_utils.get_disk_backing_file(
+                # Backing file will be JSON if it's encrypted (the encryption
+                # secret has to be provided in JSON form).
+                backing_file = libvirt_utils.get_disk_backing_file(
                     self.path, basename=False)
+                if backing_file.startswith('json:'):
+                    json_str = backing_file[5:]
+                    bstore.source_file = jsonutils.loads(
+                        json_str)['file']['filename']
+                else:
+                    bstore.source_file = backing_file
                 bstore.driver_format = 'raw'
                 backing_encryption = vconfig.LibvirtConfigGuestDiskEncryption()
                 backing_secret = (
