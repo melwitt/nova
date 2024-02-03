@@ -14478,10 +14478,10 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                           host='fake_host', receive=True)
             ])
             fetch_image_mock.assert_has_calls([
-                mock.call(context=self.context,
-                          target=backfile_path,
+                mock.call(target=backfile_path, encryption=None,
+                          dest_encryption=None, context=self.context,
                           image_id=self.test_instance['image_ref'],
-                          trusted_certs=trusted_certs, encryption=None),
+                          trusted_certs=trusted_certs),
                 mock.call(self.context, kernel_path, instance.kernel_id,
                           trusted_certs),
                 mock.call(self.context, ramdisk_path, instance.ramdisk_id,
@@ -14626,13 +14626,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
+                encryption=None, dest_encryption=None,
                 os_type='linux', target=ephemeral_backing,
                 context=self.context)
 
             fetch_image_mock.assert_called_once_with(
+                target=root_backing, encryption=None, dest_encryption=None,
                 context=self.context, image_id=instance.image_ref,
-                target=root_backing, trusted_certs=instance.trusted_certs,
-                encryption=None)
+                trusted_certs=instance.trusted_certs)
 
             verify_base_size_mock.assert_has_calls([
                 mock.call(root_backing, instance.flavor.root_gb * units.Gi),
@@ -28267,13 +28268,13 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             mock_file_obj.write.assert_called_once_with(mock.sentinel.secret)
             mock_file_obj.flush.assert_called_once_with()
             extra_args = [
-                '--object', 'secret,id=sec,file=fakefile', '--image-opts',
-                'encrypt.key-secret=sec,file.filename=disk']
+                '--object', 'secret,id=sec0,file=fakefile', '--image-opts',
+                'file.filename=disk,encrypt.key-secret=sec0']
 
         mock_qemu_img_info.assert_called_once_with("backing_file")
-        mock_execute.assert_called_once_with('qemu-img', 'rebase',
-                                             '-b', 'backing_file', '-F',
-                                             'fake_fmt', *extra_args)
+        mock_execute.assert_called_once_with(
+            'qemu-img', 'rebase', '-b', 'backing_file', '-F', 'fake_fmt',
+            *extra_args)
 
         # Flatten disk image when no backing file is given.
         mock_qemu_img_info.reset_mock()
