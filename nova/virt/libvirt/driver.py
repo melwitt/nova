@@ -5296,18 +5296,59 @@ class LibvirtDriver(driver.ComputeDriver):
                                                  '%dG' % ephemeral_size,
                                                  specified_fs)
                 return
-            libvirt_utils.create_image(target, 'raw', f'{ephemeral_size}G')
 
-        # Run as root only for block devices.
-        disk_api.mkfs(os_type, fs_label, target, run_as_root=is_block_dev,
-                      specified_fs=specified_fs)
+            disk_format = 'raw'
+            if dest_encryption:
+                disk_format = dest_encryption.get('format')
+            libvirt_utils.create_image(
+                target, disk_format, f'{ephemeral_size}G',
+                encryption=dest_encryption)
+
+        if dest_encryption:
+            inst_dirname = os.path.dirname(target).rsplit('/')[-1]
+            diskname = os.path.basename(target)
+            mapped_dev_name = inst_dirname + '.' + diskname
+            # TODO(melwitt): Should we dmsetup remove and retry if this fails?
+            # Or pass assuming it's already open? Or leave as-is and fail?
+            nova.privsep.libvirt.dmcrypt_open_volume(
+                mapped_dev_name, target, dest_encryption.get('secret'))
+            target = f'/dev/mapper/{mapped_dev_name}'
+
+        #  Run as root only for block devices or encrypted devices.
+        disk_api.mkfs(
+            os_type, fs_label, target,
+            run_as_root=is_block_dev or dest_encryption,
+            specified_fs=specified_fs)
+
+        if dest_encryption:
+            nova.privsep.libvirt.dmcrypt_close_volume(mapped_dev_name)
 
     @staticmethod
     def _create_swap(target, swap_mb, context=None, encryption=None,
                      dest_encryption=None):
         """Create a swap file of specified size."""
-        libvirt_utils.create_image(target, 'raw', f'{swap_mb}M')
-        nova.privsep.fs.unprivileged_mkfs('swap', target)
+        disk_format = 'raw'
+        if dest_encryption:
+            disk_format = dest_encryption.get('format')
+
+        libvirt_utils.create_image(
+            target, disk_format, f'{swap_mb}M', encryption=dest_encryption)
+
+        mkfs = nova.privsep.fs.unprivileged_mkfs
+
+        if dest_encryption:
+            inst_dirname = os.path.dirname(target).rsplit('/')[-1]
+            diskname = os.path.basename(target)
+            mapped_dev_name = inst_dirname + '.' + diskname
+            nova.privsep.libvirt.dmcrypt_open_volume(
+                mapped_dev_name, target, dest_encryption.get('secret'))
+            target = f'/dev/mapper/{mapped_dev_name}'
+            mkfs = nova.privsep.fs.mkfs
+
+        mkfs('swap', target)
+
+        if dest_encryption:
+            nova.privsep.libvirt.dmcrypt_close_volume(mapped_dev_name)
 
     @staticmethod
     def _get_console_log_path(instance):
