@@ -4704,7 +4704,8 @@ class LibvirtDriver(driver.ComputeDriver):
             # Don't use a real guest_format for the rescue disk, just in case.
             rescue_bdi['image'][0]['guest_format'] = 'rescue'
             rescue_bdi = self._add_ephemeral_encryption_driver_bdm_attrs(
-                context, instance, rescue_bdi, persist=False)
+                context, instance, rescue_bdi,
+                rescue_image_meta or image_meta, persist=False)
 
             # Extract the driver BDM for the rescue disk which now contains
             # default encryption attribute values where required.
@@ -4853,6 +4854,7 @@ class LibvirtDriver(driver.ComputeDriver):
         context: nova_context.RequestContext,
         instance: 'objects.Instance',
         block_device_info: ty.Dict[str, ty.Any],
+        image_meta: 'objects.ImageMeta',
         persist: bool = True,
     ) -> ty.Optional[ty.Dict[str, ty.Any]]:
         """Add ephemeral encryption attributes to driver BDMs before use."""
@@ -4932,12 +4934,11 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Swap and ephemeral disks will not have encrypted backing
                 # files (and will not have image_id set).
                 if ('image_id' in driver_bdm and
-                        CONF.libvirt.images_type not in ('raw', 'rbd')):
+                        CONF.libvirt.images_type in ('qcow2', 'default')):
 
                     backing_secret_uuid = driver_bdm.get(
                         'backing_encryption_secret_uuid')
                     if backing_secret_uuid is None:
-                        image_meta = objects.ImageMeta.from_instance(instance)
                         # NOTE(melwitt): backing_encryption_secret_uuid is
                         # meant to store the original (base_image_ref) backing
                         # file secret (if there was one). We don't want to set
@@ -5089,7 +5090,7 @@ class LibvirtDriver(driver.ComputeDriver):
         # into the imagebackend later when creating or building the config for
         # the disks.
         block_device_info = self._add_ephemeral_encryption_driver_bdm_attrs(
-            context, instance, block_device_info)
+            context, instance, block_device_info, image_meta)
 
         disk_info = blockinfo.get_disk_info(CONF.libvirt.virt_type,
                                             instance,
@@ -5758,9 +5759,9 @@ class LibvirtDriver(driver.ComputeDriver):
         base_backing_fname = os.path.join(base_dir, root_fname)
 
         try:
-            self._try_fetch_image_cache(backend, libvirt_utils.fetch_image,
-                                        context, root_fname, base_image_ref,
-                                        instance, None)
+            image_meta = self._try_fetch_image_cache(
+                backend, libvirt_utils.fetch_image, context, root_fname,
+                base_image_ref, instance, None)
         except exception.ImageNotFound:
             # We must flatten here in order to remove dependency with an orphan
             # backing file (as snapshot image will be dropped once
@@ -5775,12 +5776,17 @@ class LibvirtDriver(driver.ComputeDriver):
         LOG.info('Rebasing disk image.', instance=instance)
 
         encryption = backend.get_encryption(context)
-        image_secret_uuid = instance.system_metadata.get(
-            'image_hw_ephemeral_encryption_secret_uuid')
-        if image_secret_uuid:
-            image_secret = crypto.get_encryption_secret(
-                context, image_secret_uuid)
-            encryption['image_secret'] = image_secret
+        if image_meta is not None:
+            # NOTE(melwitt): image_meta is the metadata for the snapshot we are
+            # using to respawn the instance during an unshelve. Check to see if
+            # the snapshot has an encryption secret because we will need it for
+            # the rebase if so.
+            image_secret_uuid = image_meta.properties.get(
+                'hw_ephemeral_encryption_secret_uuid')
+            if image_secret_uuid:
+                image_secret = crypto.get_encryption_secret(
+                    context, image_secret_uuid)
+                encryption['image_secret'] = image_secret
 
         self._rebase_with_qemu_img(
             backend.path, base_backing_fname, encryption=encryption)
@@ -11848,6 +11854,11 @@ class LibvirtDriver(driver.ComputeDriver):
                 # implemented for most of the backends it may do more harm than
                 # good, concerning operators etc so for now just pass.
                 pass
+
+        # NOTE(melwitt): Return the image metadata we retrieved from Glance
+        # since we have it. We need it for unshelve if we have to do a rebase
+        # to the original base image and the snapshot image is encrypted.
+        return image_meta
 
     def _create_images_and_backing(self, context, instance, instance_dir,
                                    disk_info, block_device_info=None,
