@@ -11763,11 +11763,17 @@ class LibvirtDriver(driver.ComputeDriver):
                                image_id, instance, size,
                                fallback_from_host=None):
         # If the image properties contained an ephemeral encryption secret UUID
-        # for the encrypted image, we can retrieve it from the instance system
-        # metadata. The image properties from the image are stashed in the
-        # instance system metadata in _populate_instance_for_create() in
-        # nova.compute.API.
-        image_meta = objects.ImageMeta.from_instance(instance)
+        # for the encrypted image, we retrieve it from the image. We don't use
+        # the image metadata from the instance system metadata because that
+        # refers to the original image from which the instance was created,
+        # which is not necessarily the image we are creating from now (example:
+        # unshelve).
+        # NOTE(melwitt): We have to pull from instance.image_ref because if
+        # this is an unshelve, instance.image_ref has temporarily been set to
+        # the snapshot's image ID. During an unshelve, image_id here could
+        # refer to the base_image_ref during a rebase.
+        image_meta = objects.ImageMeta.from_image_ref(
+            context, self._image_api, instance.image_ref)
         secret_uuid = image_meta.properties.get(
             'hw_ephemeral_encryption_secret_uuid')
         rescue_image_secret_uuid = instance.system_metadata.get(
