@@ -4975,16 +4975,19 @@ class LibvirtDriver(driver.ComputeDriver):
                     created_libvirt_secrets.append(secret_usage)
                 # Do the same for the backing file secret if there is one.
                 if backing_secret is not None:
-                    # NOTE(melwitt): We need to lookup the secret by UUID here
-                    # because if this is an unshelve, the secret UUID of the
-                    # BDM will be the same as the secret UUID of the source
+                    # NOTE(melwitt): We need to also lookup the secret by UUID
+                    # here because if this is an unshelve, the secret UUID of
+                    # the BDM will be the same as the secret UUID of the source
                     # image because secrets are reused in the cases of shelve
-                    # and rebuild. If we were to try to look this up by usage,
-                    # it wouldn't find it (because it's already defined by the
-                    # BDM) and it would try to define a new secret with the
-                    # same UUID, which is an error from libvirt.
-                    if not self._host.find_secret_by_uuid(image_secret_uuid):
-                        secret_usage = f"image_{instance.image_ref}"
+                    # and rebuild. If we were to try to look this up only by
+                    # usage, it wouldn't be found (because it's already defined
+                    # by the BDM) and we would try to define a new secret with
+                    # the same UUID, which is an error from libvirt.
+                    secret_usage = f"image_{instance.image_ref}"
+                    secret_exists = (
+                        self._host.find_secret_by_uuid(image_secret_uuid) or
+                        self._host.find_secret('volume', secret_usage))
+                    if not secret_exists:
                         self._host.create_secret(
                             'volume', secret_usage, password=backing_secret,
                             uuid=image_secret_uuid)
@@ -5001,12 +5004,13 @@ class LibvirtDriver(driver.ComputeDriver):
                         f"{driver_bdm['uuid']}", instance=instance)
 
             for i, orig_driver_bdm in enumerate(orig_encrypted_bdms):
-                driver_bdm = encrypted_bdms[i]
-                for key in ('encryption_format', 'encryption_secret_uuid',
-                        'backing_encryption_secret_uuid'):
-                    if key in driver_bdm:
-                        driver_bdm[key] = orig_driver_bdm[key]
-                driver_bdm.save()
+                if persist:
+                    driver_bdm = encrypted_bdms[i]
+                    for key in ('encryption_format', 'encryption_secret_uuid',
+                            'backing_encryption_secret_uuid'):
+                        if key in driver_bdm:
+                            driver_bdm[key] = orig_driver_bdm[key]
+                    driver_bdm.save()
 
             for secret_usage in created_libvirt_secrets:
                 try:
