@@ -11476,7 +11476,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 msg = (
                     f'Failed to find encryption secret {secret_uuid} in the '
                     f'key manager for image {image_id}')
-                raise exception.InvalidBDMImage(msg)
+                raise exception.EphemeralEncryptionSecretNotFound(msg)
             encryption_format = image_meta.properties.get(
                 'hw_ephemeral_encryption_format')
             image_encryption = {

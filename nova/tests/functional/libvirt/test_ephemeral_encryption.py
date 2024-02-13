@@ -30,6 +30,8 @@ LOG = logging.getLogger(__name__)
 
 class EphemeralEncryptionTestBase(base.ServersTestBase):
 
+    CAST_AS_CALL = False
+
     def setUp(self):
         # Use a fake key manager service.
         self.flags(
