@@ -373,7 +373,7 @@ class EncryptionSecretTest(test.NoDBTestCase):
     @mock.patch.object(crypto, '_get_key_manager')
     def test_delete_encryption_secret(self, mock_get_manager):
         instance = objects.Instance()
-        crypto.delete_encryption_secret(self.ctxt, instance, uuids.secret)
+        crypto.delete_encryption_secret(self.ctxt, instance.uuid, uuids.secret)
         mock_get_manager.return_value.delete.assert_called_once_with(
             self.ctxt, uuids.secret)
 
@@ -382,6 +382,6 @@ class EncryptionSecretTest(test.NoDBTestCase):
         mock_get_manager.return_value.delete.side_effect = (
             castellan_exception.ManagedObjectNotFoundError())
         instance = objects.Instance()
-        crypto.delete_encryption_secret(self.ctxt, instance, uuids.secret)
+        crypto.delete_encryption_secret(self.ctxt, instance.uuid, uuids.secret)
         mock_get_manager.return_value.delete.assert_called_once_with(
             self.ctxt, uuids.secret)

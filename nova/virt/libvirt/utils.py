@@ -18,6 +18,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
 import grp
 import os
 import pwd
@@ -173,13 +174,15 @@ def create_image(
     disk_size_arg = [str(disk_size)] if disk_size is not None else []
 
     if encryption:
-        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+        with contextlib.ExitStack() as stack:
+            secret_file = stack.enter_context(
+                tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
             # Write out the passphrase secret to a temp file
-            f.write(encryption['secret'])
+            secret_file.write(encryption['secret'])
 
             # Ensure the secret is written to disk, we can't .close() here as
             # that removes the file when using NamedTemporaryFile
-            f.flush()
+            secret_file.flush()
 
             # The basic options include the secret and encryption format
             # Option names depend on the QEMU disk image file format:
@@ -188,9 +191,19 @@ def create_image(
             # For 'qcow2' it is 'encrypt.key-secret' and 'encrypt.format'
             prefix = 'encrypt.' if disk_format == 'qcow2' else ''
             encryption_opts = [
-                '--object', f"secret,id=sec,file={f.name}",
-                '-o', f'{prefix}key-secret=sec',
+                '--object', f"secret,id=sec0,file={secret_file.name}",
+                '-o', f'{prefix}key-secret=sec0',
             ]
+            # if 'backing_secret' in encryption:
+            #     backing_secret_file = stack.enter_context(
+            #         tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
+            #     backing_secret_file.write(encryption.get('backing_secret'))
+            #     backing_secret_file.flush()
+            #     encryption_opts += [
+            #         '--object',
+            #         f'secret,id=sec2,file={backing_secret_file.name}',
+            #         '-o', f'backing.{prefix}key-secret=sec2',
+            #     ]
             if prefix:
                 # The encryption format is only relevant for the 'qcow2' disk
                 # format. Otherwise, the disk format is 'luks' and the

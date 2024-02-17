@@ -935,17 +935,8 @@ class ComputeManager(manager.Manager):
 
         self._clean_instance_console_tokens(context, instance)
         self._delete_scheduler_instance_info(context, instance.uuid)
-        for bdm in bdms:
-            if bdm.encryption_secret_uuid is not None:
-                try:
-                    crypto.delete_encryption_secret(
-                        context, instance, bdm.encryption_secret_uuid)
-                except Exception:
-                    # NOTE(melwitt): Ignore all errors here so as not to
-                    # prevent a successful instance delete from the end user's
-                    # perspective. If we fail to delete a secret here, the
-                    # _reclaim_queued_deletes periodic task will try again.
-                    pass
+        compute_utils.delete_ephemeral_encryption_secrets(
+            context, instance, bdms)
 
     def _validate_pinning_configuration(self, instances):
         if not self.driver.capabilities.get('supports_pcpus', False):

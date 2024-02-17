@@ -1758,15 +1758,17 @@ class LibvirtDriver(driver.ComputeDriver):
             # secret in the key manager service should only be deleted when the
             # instance is deleted.
             secret_usage = f"{instance.uuid}_{driver_bdm['uuid']}"
-            if self._host.find_secret('volume', secret_usage):
-                try:
-                    self._host.delete_secret('volume', secret_usage)
-                except libvirt.libvirtError as e:
-                    msg = (
-                        f'Failed to delete libvirt secret {secret_usage}: ' +
-                        str(e))
-                    LOG.exception(msg, instance=instance)
-                    exception_msgs.append(msg)
+            backing_secret_usage = secret_usage + '_backing'
+            for usage in (secret_usage, backing_secret_usage):
+                if self._host.find_secret('volume', usage):
+                    try:
+                        self._host.delete_secret('volume', usage)
+                    except libvirt.libvirtError as e:
+                        msg = (
+                            f'Failed to delete libvirt secret '
+                            f'{usage}: {str(e)}')
+                        LOG.exception(msg, instance=instance)
+                        exception_msgs.append(msg)
 
         if exception_msgs:
             msg = '\n'.join(exception_msgs)
@@ -3155,12 +3157,11 @@ class LibvirtDriver(driver.ComputeDriver):
             not CONF.workarounds.disable_libvirt_livesnapshot and
             # NOTE(stephenfin): Live snapshotting doesn't make sense for
             # shutdown instances
-            original_power_state != power_state.SHUTDOWN and
+            original_power_state != power_state.SHUTDOWN
             # NOTE(melwitt): Live snapshot doesn't work with ephemeral
             # encryption because there doesn't seem to be a way to provide the
             # backing file secret to the libvirt blockRebase() API, which is
             # used by _live_snapshot.
-            not encryption
         ):
             live_snapshot = True
         else:
@@ -3246,7 +3247,8 @@ class LibvirtDriver(driver.ComputeDriver):
                         os.chmod(tmpdir, 0o701)
                         self._live_snapshot(context, instance, guest,
                                             disk_path, out_path, source_format,
-                                            image_format, instance.image_meta)
+                                            image_format, instance.image_meta,
+                                            encryption=dest_encryption)
                     else:
                         root_disk.snapshot_extract(
                             out_path, image_format, encryption=encryption,
@@ -3492,7 +3494,8 @@ class LibvirtDriver(driver.ComputeDriver):
         self._set_quiesced(context, instance, image_meta, False)
 
     def _live_snapshot(self, context, instance, guest, disk_path, out_path,
-                       source_format, image_format, image_meta):
+                       source_format, image_format, image_meta,
+                       encryption=None):
         """Snapshot an instance without downtime."""
         dev = guest.get_block_device(disk_path)
 
@@ -3517,7 +3520,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                                         basename=False)
         disk_delta = out_path + '.delta'
         libvirt_utils.create_image(
-            disk_delta, 'qcow2', src_disk_size, backing_file=src_back_path)
+            disk_delta, 'qcow2', src_disk_size, backing_file=src_back_path,
+            encryption=encryption)
 
         try:
             self._can_quiesce(instance, image_meta)
@@ -3530,6 +3534,7 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.info('Quiescing instance not available: %(reason)s.',
                      {'reason': err}, instance=instance)
 
+        secret_uuid = None
         try:
             # NOTE (rmk): blockRebase cannot be executed on persistent
             #             domains, so we need to temporarily undefine it.
@@ -3541,9 +3546,25 @@ class LibvirtDriver(driver.ComputeDriver):
                 support_uefi = self._check_uefi_support(hw_firmware_type)
                 guest.delete_configuration(support_uefi)
 
-            # NOTE (rmk): Establish a temporary mirror of our root disk and
-            #             issue an abort once we have a complete copy.
-            dev.rebase(disk_delta, copy=True, reuse_ext=True, shallow=True)
+            if not encryption:
+                # NOTE (rmk): Establish a temporary mirror of our root disk and
+                #             issue an abort once we have a complete copy.
+                dev.rebase(disk_delta, copy=True, reuse_ext=True, shallow=True)
+            else:
+                disk_conf = guest.get_disk(disk_path)
+                disk_conf.source_path = disk_delta
+                disk_conf.ephemeral_encryption.format = (
+                    encryption.get('format'))
+                secret_uuid = uuidutils.generate_uuid()
+                if not self._host.find_secret('volume', secret_uuid):
+                    self._host.create_secret(
+                        'volume', secret_uuid,
+                        password=encryption.get('secret'), uuid=secret_uuid)
+                disk_conf.ephemeral_encryption.secret.uuid = secret_uuid
+                disk_conf.backing_store.driver_format = source_format
+                print(disk_conf.to_xml())
+
+                dev.copy(disk_conf.to_xml(), reuse_ext=True, shallow=True)
 
             while not dev.is_job_complete():
                 time.sleep(0.5)
@@ -3566,11 +3587,14 @@ class LibvirtDriver(driver.ComputeDriver):
             self._host.write_instance_config(xml)
             if quiesced:
                 self.unquiesce(context, instance, image_meta)
+            if secret_uuid:
+                self._host.delete_secret('volume', secret_uuid)
 
         # Convert the delta (CoW) image with a backing file to a flat
         # image with no backing file.
-        libvirt_utils.extract_snapshot(disk_delta, 'qcow2',
-                                       out_path, image_format)
+        libvirt_utils.extract_snapshot(
+            disk_delta, 'qcow2', out_path, image_format, encryption=encryption,
+            dest_encryption=encryption)
 
         # Remove the disk_delta file once the snapshot extracted, so that
         # it doesn't hang around till the snapshot gets uploaded
@@ -3854,7 +3878,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 # NOTE(melwitt): We'll call the passphrase for the current
                 # backing file the 'image_secret' since the 'backing_secret'
                 # refers to the original backing file we're rebasing back onto.
-                if encryption.get('image_secret'):
+                if 'image_secret' in encryption:
                     img_file_fmt = (
                         images.qemu_img_info(source_path).backing_file_format)
                     prefix = 'encrypt.' if img_file_fmt == 'qcow2' else ''
@@ -4697,11 +4721,13 @@ class LibvirtDriver(driver.ComputeDriver):
             rescue_bdi = driver.get_block_device_info(instance, [bdm_obj])
 
             # Delete any potential leftover rescue disk secrets in libvirt.
-            secret_usage = instance.system_metadata.get(
-                'rescue_disk_secret_usage')
-            if (secret_usage and self._host.find_secret(
-                    'volume', secret_usage) is not None):
-                self._host.delete_secret('volume', secret_usage)
+            prefix = 'rescue_disk_ephemeral_'
+            for key in (prefix + 'secret_usage',
+                    prefix + 'backing_secret_usage'):
+                secret_usage = instance.system_metadata.get(key)
+                if (secret_usage and self._host.find_secret(
+                        'volume', secret_usage) is not None):
+                    self._host.delete_secret('volume', secret_usage)
 
             # Don't use a real guest_format for the rescue disk, just in case.
             rescue_bdi['image'][0]['guest_format'] = 'rescue'
@@ -4725,12 +4751,20 @@ class LibvirtDriver(driver.ComputeDriver):
                 disk_info['mapping']['disk.rescue'].update(rescue_encryption)
                 disk_secret_uuid = rescue_bdm.get('encryption_secret_uuid')
                 if disk_secret_uuid:
-                    secret_key = 'rescue_disk_ephemeral_encryption_secret_uuid'
                     instance.system_metadata.update(
-                        {secret_key: disk_secret_uuid})
+                        {prefix + 'encryption_secret_uuid': disk_secret_uuid})
                     secret_usage = f'{instance.uuid}_{rescue_bdm.uuid}'
                     instance.system_metadata.update(
-                        {'rescue_disk_secret_usage': secret_usage})
+                        {prefix + 'secret_usage': secret_usage})
+                    disk_backing_secret_uuid = rescue_bdm.get(
+                        'backing_encryption_secret_uuid')
+                    if disk_backing_secret_uuid:
+                        instance.system_metadata.update(
+                            {prefix + 'backing_encryption_secret_uuid':
+                                disk_backing_secret_uuid})
+                        secret_usage = secret_usage + '_backing'
+                        instance.system_metadata.update(
+                            {prefix + 'backing_secret_usage': secret_usage})
                     instance.save()
 
             # If this is not a stable rescue, we need to add encryption
@@ -4780,29 +4814,32 @@ class LibvirtDriver(driver.ComputeDriver):
     def _cleanup_for_unrescue_with_encryption(self, context, instance):
         # First, cleanup the secret we created for the local rescue disk which
         # we have now destroyed.
-        secret_uuid = instance.system_metadata.get(
-            'rescue_disk_ephemeral_encryption_secret_uuid')
-        if secret_uuid:
-            try:
-                crypto.delete_encryption_secret(context, instance, secret_uuid)
-                del instance.system_metadata[
-                    'rescue_disk_ephemeral_encryption_secret_uuid']
-            except Exception:
-                LOG.warning(
-                    f'Failed to delete secret {secret_uuid} from the '
-                    'key manager', instance=instance)
+        prefix = 'rescue_disk_ephemeral_'
+        keys = ['encryption_secret_uuid', 'backing_encryption_secret_uuid']
+        for key in keys:
+            secret_uuid = instance.system_metadata.get(prefix + key)
+            if secret_uuid:
+                try:
+                    crypto.delete_encryption_secret(
+                        context, instance.uuid, secret_uuid)
+                    del instance.system_metadata[prefix + key]
+                except Exception:
+                    LOG.warning(
+                        f'Failed to delete secret {secret_uuid} from the '
+                        'key manager', instance=instance)
 
-        secret_usage = instance.system_metadata.get('rescue_disk_secret_usage')
-        if secret_usage:
-            try:
-                if self._host.find_secret('volume', secret_usage):
-                    self._host.delete_secret('volume', secret_usage)
-                del instance.system_metadata['rescue_disk_secret_usage']
-            except Exception:
-                LOG.warning(
-                    f'Failed to delete libvirt secret {secret_usage}',
-                    instance=instance)
-
+        keys = ['secret_usage', 'backing_secret_usage']
+        for key in keys:
+            secret_usage = instance.system_metadata.get(prefix + key)
+            if secret_usage:
+                try:
+                    if self._host.find_secret('volume', secret_usage):
+                        self._host.delete_secret('volume', secret_usage)
+                    del instance.system_metadata[prefix + key]
+                except Exception:
+                    LOG.warning(
+                        f'Failed to delete libvirt secret {secret_usage}',
+                        instance=instance)
         # Then, cleanup the stashed rescue image encryption secret UUID if the
         # rescue image was encrypted.
         secret_sysmeta_key = 'rescue_image_hw_ephemeral_encryption_secret_uuid'
@@ -4970,8 +5007,22 @@ class LibvirtDriver(driver.ComputeDriver):
                                 f"for image {driver_bdm['image_id']}")
                             raise exception.EphemeralEncryptionSecretNotFound(
                                 msg)
-                        driver_bdm['backing_encryption_secret_uuid'] = (
-                            image_secret_uuid)
+                        if backing_secret_uuid is None:
+                            # Make a copy of the source image secret to use as
+                            # the backing file secret for this particular BDM.
+                            # This will allow us to clean up secrets when the
+                            # instance is the deleted.
+                            for_detail = (
+                                f"instance {instance.uuid} BDM "
+                                f"{driver_bdm['uuid']} backing file")
+                            backing_secret_uuid, backing_secret = (
+                                crypto.create_encryption_secret(
+                                    context, instance, driver_bdm,
+                                    for_detail=for_detail,
+                                    secret=backing_secret))
+                            created_keymgr_secrets.append(backing_secret_uuid)
+                            driver_bdm['backing_encryption_secret_uuid'] = (
+                                backing_secret_uuid)
 
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
@@ -4988,17 +5039,21 @@ class LibvirtDriver(driver.ComputeDriver):
                     created_libvirt_secrets.append(secret_usage)
                 # Do the same for the backing file secret if there is one.
                 if backing_secret is not None:
-                    secret_usage = f"image_{image_meta.id}"
+                    # NOTE(melwitt): Even though backing files are potentially
+                    # shared amongst multiple instances, let each instance BDM
+                    # keep its own copy of the secret so that cleanup can be
+                    # done.
+                    secret_usage += '_backing'
                     if self._host.find_secret('volume', secret_usage) is None:
                         self._host.create_secret(
                             'volume', secret_usage, password=backing_secret,
-                            uuid=image_secret_uuid)
+                            uuid=backing_secret_uuid)
                         created_libvirt_secrets.append(secret_usage)
         except Exception:
             for secret_uuid in created_keymgr_secrets:
                 try:
                     crypto.delete_encryption_secret(
-                        context, instance, secret_uuid)
+                        context, instance.uuid, secret_uuid)
                 except Exception:
                     LOG.error(
                         f'Failed to delete encryption secret '
@@ -5050,24 +5105,27 @@ class LibvirtDriver(driver.ComputeDriver):
             exception_msgs = []
             last_exception = Exception()
             for driver_bdm in encrypted_bdms:
-                secret_uuid = driver_bdm['encryption_secret_uuid']
-                if secret_uuid:
-                    try:
-                        crypto.delete_encryption_secret(
-                            context, instance, secret_uuid)
-                    except Exception as e:
-                        msg = (
-                            f'Failed to delete encryption secret '
-                            f'{secret_uuid} in the key manager for driver BDM '
-                            f"{driver_bdm['uuid']}: " + str(e))
-                        LOG.exception(msg, instance=instance)
-                        exception_msgs.append(msg)
-                        last_exception = e
+                for key in ('encryption_secret_uuid',
+                        'backing_encryption_secret_uuid'):
+                    secret_uuid = driver_bdm[key]
+                    if secret_uuid:
+                        try:
+                            crypto.delete_encryption_secret(
+                                context, instance.uuid, secret_uuid)
+                        except Exception as e:
+                            msg = (
+                                f'Failed to delete encryption secret '
+                                f'{secret_uuid} in the key manager for driver '
+                                f"BDM {driver_bdm['uuid']}: {str(e)}")
+                            LOG.exception(msg, instance=instance)
+                            exception_msgs.append(msg)
+                            last_exception = e
 
-                driver_bdm['encrypted'] = False
-                driver_bdm['encryption_format'] = None
-                driver_bdm['encryption_secret_uuid'] = None
-                driver_bdm.save()
+                    driver_bdm['encrypted'] = False
+                    driver_bdm['encryption_format'] = None
+                    driver_bdm['encryption_secret_uuid'] = None
+                    driver_bdm['backing_encryption_secret_uuid'] = None
+                    driver_bdm.save()
 
             if exception_msgs:
                 msg = '\n'.join(exception_msgs)

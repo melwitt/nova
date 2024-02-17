@@ -2352,6 +2352,12 @@ class API:
                      "local delete cleanup.",
                      instance_uuid=instance_uuid)
 
+        # Clean up ephemeral encryption secrets if needed.
+        bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+            context, instance_uuid)
+        compute_utils.delete_ephemeral_encryption_secrets(
+            context, instance_uuid, bdms)
+
     def _attempt_delete_of_buildrequest(self, context, instance):
         # If there is a BuildRequest then the instance may not have been
         # written to a cell db yet. Delete the BuildRequest here, which
@@ -2655,6 +2661,11 @@ class API:
             # compute service.
             self.placementclient.delete_allocation_for_instance(
                 context, instance.uuid, force=True)
+
+            # Clean up ephemeral encryption secrets if needed.
+            compute_utils.delete_ephemeral_encryption_secrets(
+                context, instance.uuid, bdms)
+
             cb(context, instance, bdms, local=True)
             instance.destroy()
 
