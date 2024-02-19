@@ -1607,16 +1607,22 @@ def delete_arqs_if_needed(context, instance, arq_uuids=None):
 
 
 def delete_ephemeral_encryption_secrets(context, instance_uuid, bdms):
+    # TODO(melwitt): This will also include the backing file secret UUID when
+    # support for encrypted backing files is added.
     keys = ['encryption_secret_uuid']
     for bdm in bdms:
         for key in keys:
-            if getattr(bdm, key) is not None:
+            secret_uuid = getattr(bdm, key, None)
+            if secret_uuid is not None:
                 try:
                     crypto.delete_encryption_secret(
-                        context, instance_uuid, getattr(bdm, key))
+                        context, instance_uuid, secret_uuid)
                 except Exception:
                     # NOTE(melwitt): Ignore all errors here so as not to
                     # prevent a successful instance delete from the end user's
                     # perspective. If we fail to delete a secret here, the
                     # _reclaim_queued_deletes periodic task will try again.
+                    LOG.exception(
+                        f'Failed to delete encryption secret {secret_uuid} '
+                        'from the key manager.', instance_uuid=instance_uuid)
                     pass

@@ -1441,6 +1441,37 @@ class _ComputeAPIUnitTestMixIn(object):
                                        lambda *args, **kwargs: None)
         mock_del_arqs.assert_called_once_with(self.context, inst)
 
+    @mock.patch('nova.compute.utils.notify_about_instance_delete',
+                new=mock.MagicMock())
+    @mock.patch('nova.network.neutron.API.deallocate_for_instance',
+                new=mock.Mock())
+    @mock.patch('nova.objects.Instance.destroy', new=mock.Mock())
+    @mock.patch('nova.compute.utils.delete_ephemeral_encryption_secrets')
+    def test_local_delete_with_ephemeral_encryption(self, mock_delete_secrets):
+        instance = self._create_instance_obj()
+        bdms = objects.BlockDeviceMappingList()
+        self.compute_api._local_delete(
+            self.context, instance, bdms, 'delete', mock.Mock())
+        mock_delete_secrets.assert_called_once_with(
+            self.context, instance.uuid, bdms)
+
+    @mock.patch('nova.compute.utils.delete_ephemeral_encryption_secrets')
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
+    def test_local_delete_cleanup_with_ephemeral_encryption(
+            self, mock_get_bdms, mock_delete_secrets):
+        # Test first without passing BDMs.
+        instance = self._create_instance_obj()
+        self.compute_api._local_delete_cleanup(self.context, instance.uuid)
+        mock_delete_secrets.assert_called_once_with(
+            self.context, instance.uuid, mock_get_bdms.return_value)
+        # Test with passing BDMs.
+        mock_delete_secrets.reset_mock()
+        bdms = objects.BlockDeviceMappingList()
+        self.compute_api._local_delete_cleanup(
+            self.context, instance.uuid, bdms=bdms)
+        mock_delete_secrets.assert_called_once_with(
+            self.context, instance.uuid, bdms)
+
     @mock.patch.object(objects.BlockDeviceMapping, 'destroy')
     def test_local_cleanup_bdm_volumes_stashed_connector(self, mock_destroy):
         """Tests that we call volume_api.terminate_connection when we found

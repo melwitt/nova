@@ -7944,7 +7944,9 @@ class ComputeTestCase(BaseTestCase,
                                              'fake_network_info',
                                              'fake_bdi', True)
 
-    def test_complete_partial_deletion(self):
+    @mock.patch('nova.compute.manager.ComputeManager._complete_deletion')
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
+    def test_complete_partial_deletion(self, mock_get_bdms, mock_deletion):
         admin_context = context.get_admin_context()
         instance = objects.Instance()
         instance.id = 1
@@ -7962,15 +7964,6 @@ class ComputeTestCase(BaseTestCase,
 
         self.stub_out('nova.objects.instance.Instance.destroy', fake_destroy)
         self.stub_out(
-            'nova.db.main.api.block_device_mapping_get_all_by_instance',
-            lambda *a, **k: None)
-        self.stub_out(
-            'nova.compute.manager.ComputeManager._complete_deletion',
-            lambda *a, **k: None)
-        self.stub_out(
-            'nova.objects.quotas.Quotas.reserve',
-            lambda *a, **k: None)
-        self.stub_out(
             'nova.compute.utils.notify_about_instance_usage',
             lambda *a, **k: None)
         self.stub_out(
@@ -7980,6 +7973,8 @@ class ComputeTestCase(BaseTestCase,
         self.compute._complete_partial_deletion(admin_context, instance)
 
         self.assertNotEqual(0, instance.deleted)
+        mock_deletion.assert_called_once_with(
+            admin_context, instance, mock_get_bdms.return_value)
 
     def test_complete_deletion(self):
         ctxt = context.get_context()
