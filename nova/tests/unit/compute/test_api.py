@@ -1342,6 +1342,7 @@ class _ComputeAPIUnitTestMixIn(object):
                                         tzinfo=iso8601.UTC)
         updates['deleted_at'] = delete_time
         updates['deleted'] = True
+        updates['uuid'] = inst.uuid
         fake_inst = fake_instance.fake_db_instance(**updates)
         mock_inst_destroy.return_value = fake_inst
 
@@ -1657,9 +1658,11 @@ class _ComputeAPIUnitTestMixIn(object):
 
         test()
 
+    @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
     @mock.patch('nova.compute.utils.notify_about_instance_delete')
     @mock.patch('nova.objects.Instance.destroy')
-    def test_delete_instance_from_cell0(self, destroy_mock, notify_mock):
+    def test_delete_instance_from_cell0(
+            self, destroy_mock, notify_mock, mock_get_bdms):
         """Tests the case that the instance does not have a host and was not
         deleted while building, so conductor put it into cell0 so the API has
         to delete the instance from cell0.

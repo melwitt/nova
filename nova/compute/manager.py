@@ -915,14 +915,13 @@ class ComputeManager(manager.Manager):
         instance.destroy()
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance.uuid)
-        self._complete_deletion(context,
-                                instance)
+        self._complete_deletion(context, instance, bdms)
         self._notify_about_instance_usage(context, instance, "delete.end")
         compute_utils.notify_about_instance_action(context, instance,
                 self.host, action=fields.NotificationAction.DELETE,
                 phase=fields.NotificationPhase.END, bdms=bdms)
 
-    def _complete_deletion(self, context, instance):
+    def _complete_deletion(self, context, instance, bdms):
         self._update_resource_tracker(context, instance)
 
         # If we're configured to do deferred deletes, don't force deletion of
@@ -935,6 +934,8 @@ class ComputeManager(manager.Manager):
 
         self._clean_instance_console_tokens(context, instance)
         self._delete_scheduler_instance_info(context, instance.uuid)
+        compute_utils.delete_ephemeral_encryption_secrets(
+            context, instance.uuid, bdms)
 
     def _validate_pinning_configuration(self, instances):
         if not self.driver.capabilities.get('supports_pcpus', False):
@@ -3293,7 +3294,7 @@ class ComputeManager(manager.Manager):
         instance.terminated_at = timeutils.utcnow()
         instance.save()
 
-        self._complete_deletion(context, instance)
+        self._complete_deletion(context, instance, bdms)
         # only destroy the instance in the db if the _complete_deletion
         # doesn't raise and therefore allocation is successfully
         # deleted in placement

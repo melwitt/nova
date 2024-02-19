@@ -2363,7 +2363,7 @@ class API:
             return True
         return False
 
-    def _local_delete_cleanup(self, context, instance_uuid):
+    def _local_delete_cleanup(self, context, instance_uuid, bdms=None):
         # NOTE(aarents) Ensure instance allocation is cleared and instance
         # mapping queued as deleted before _delete() return
         try:
@@ -2379,6 +2379,13 @@ class API:
             LOG.info("Instance Mapping does not exist while attempting "
                      "local delete cleanup.",
                      instance_uuid=instance_uuid)
+
+        # Clean up ephemeral encryption secrets if needed.
+        if bdms is None:
+            bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                context, instance_uuid)
+        compute_utils.delete_ephemeral_encryption_secrets(
+            context, instance_uuid, bdms)
 
     def _attempt_delete_of_buildrequest(self, context, instance):
         # If there is a BuildRequest then the instance may not have been
@@ -2502,7 +2509,8 @@ class API:
                              'field, its vm_state is %(state)s.',
                              {'state': instance.vm_state},
                               instance=instance)
-                    self._local_delete_cleanup(context, instance.uuid)
+                    self._local_delete_cleanup(
+                        context, instance.uuid, bdms=bdms)
                     return
                 except exception.ObjectActionError as ex:
                     # The instance's host likely changed under us as
@@ -2683,6 +2691,11 @@ class API:
             # compute service.
             self.placementclient.delete_allocation_for_instance(
                 context, instance.uuid, force=True)
+
+            # Clean up ephemeral encryption secrets if needed.
+            compute_utils.delete_ephemeral_encryption_secrets(
+                context, instance.uuid, bdms)
+
             cb(context, instance, bdms, local=True)
             instance.destroy()
 
