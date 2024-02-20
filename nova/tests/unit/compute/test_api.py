@@ -8323,7 +8323,6 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
         instance = fake_instance.fake_instance_obj(
             self.context, project_id='fake-project', user_id='fake-user',
             uuid=uuids.instance)
-        instance.system_metadata = {}
         with mock.patch.object(self.context, 'can', return_value=True) as can:
             self.assertFalse(self.compute_api._allow_cross_cell_resize(
                 self.context, instance))
@@ -8345,7 +8344,6 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
         instance = fake_instance.fake_instance_obj(
             self.context, project_id='fake-project', user_id='fake-user',
             uuid=uuids.instance)
-        instance.system_metadata = {}
         with mock.patch.object(self.context, 'can', return_value=True) as can:
             self.assertFalse(self.compute_api._allow_cross_cell_resize(
                 self.context, instance))
@@ -8368,7 +8366,6 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
         instance = fake_instance.fake_instance_obj(
             self.context, project_id='fake-project', user_id='fake-user',
             uuid=uuids.instance)
-        instance.system_metadata = {}
         with mock.patch.object(self.context, 'can', return_value=True) as can:
             self.assertTrue(self.compute_api._allow_cross_cell_resize(
                 self.context, instance))
@@ -8376,23 +8373,6 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
         mock_get_min_ver.assert_called_once_with(
             self.context, ['nova-compute'])
         mock_get_res_req.assert_called_once_with(self.context, uuids.instance)
-
-    def test_allow_cross_cell_resize_with_ephemeral_encryption(self):
-        # Cross cell resize with ephemeral encryption should be blocked until
-        # snapshot is supported.
-        # Verify with ephemeral encryption specified in flavor.
-        extra_specs = {'hw:ephemeral_encryption': 'true'}
-        flavor = self._create_flavor(extra_specs=extra_specs)
-        instance = self._create_instance_obj(flavor=flavor)
-        self.assertFalse(
-            self.compute_api._allow_cross_cell_resize(self.context, instance))
-        # Verify with ephemeral encryption specified in image.
-        instance = self._create_instance_obj()
-        with mock.patch('nova.objects.Instance.image_meta'):
-            instance.image_meta = image_meta_obj.ImageMeta.from_dict(
-                {'properties': {'hw_ephemeral_encryption': 'true'}})
-        self.assertFalse(
-            self.compute_api._allow_cross_cell_resize(self.context, instance))
 
     def _test_block_accelerators(self, instance, args_info,
                                  until_service=None):
