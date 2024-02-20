@@ -17,6 +17,7 @@ from nova import context as nova_context
 from nova import crypto
 from nova import objects
 from nova.tests.functional.libvirt import base
+from nova import utils
 
 CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
@@ -100,4 +101,39 @@ class EphemeralEncryptionTestCreate(EphemeralEncryptionTestBase):
         self._delete_server(server)
 
         # Verify that secrets were deleted for each disk.
+        self.assertSecretsDeleted(bdms)
+
+    def test_create_server_with_local_delete(self):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        bdms = self.assertSecretsMatch(server, 3)
+
+        # Force down nova-compute to cause a local delete.
+        with utils.temporary_mutation(self.admin_api, microversion='2.11'):
+            self.admin_api.force_down_service('compute1', 'nova-compute', True)
+
+        # Delete the server.
+        self._delete_server(server)
+
+        # Verify that secrets were deleted from the key manager during local
+        # delete. Libvirt secrets remain at this point because nova-compute has
+        # not carried out the rest of the deletion yet.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+        for bdm in bdms:
+            usage_id = f'{bdm.instance_uuid}_{bdm.uuid}'
+            s = self.driver._host.find_secret('volume', usage_id)
+            self.assertIsNotNone(s)
+
+        # Run periodic task to complete deletions on nova-compute.
+        self.computes[self.compute].manager._cleanup_running_deleted_instances(
+            self.context)
+
+        # Verify that all secrets including the libvirt secrets were deleted
+        # for each disk.
         self.assertSecretsDeleted(bdms)
