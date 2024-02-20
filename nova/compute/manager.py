@@ -71,6 +71,7 @@ from nova.compute import vm_states
 from nova import conductor
 import nova.conf
 import nova.context
+from nova import crypto
 from nova import exception
 from nova import exception_wrapper
 from nova.i18n import _
@@ -6507,6 +6508,18 @@ class ComputeManager(manager.Manager):
             instance.image_ref = origin_image_ref
             compute_utils.delete_image(
                 ctxt, instance, self.image_api, snapshot_id)
+            # Clean up the ephemeral encryption secret for the image if there
+            # is one.
+            secret_uuid = image_meta.properties.get(
+                'hw_ephemeral_encryption_secret_uuid')
+            if secret_uuid:
+                try:
+                    crypto.delete_encryption_secret(
+                        ctxt, instance.uuid, secret_uuid)
+                except Exception:
+                    LOG.exception(
+                        f'Failed to delete encryption secret {secret_uuid} '
+                        'from the key manager.', instance=instance)
 
         migration.status = 'finished'
         migration.save()
