@@ -1747,6 +1747,15 @@ class LibvirtDriver(driver.ComputeDriver):
     def _cleanup_ephemeral_encryption_secrets(
         self, context, instance, block_device_info
     ):
+        # NOTE(melwitt): We could be called with block_device_info=None in
+        # cases such as confirming a cross cell resize at the source. Retrieve
+        # the BDMs and block_device_info in this case.
+        if block_device_info is None:
+            bdm_list = objects.BlockDeviceMappingList.get_by_instance_uuid(
+                context, instance.uuid)
+            if bdm_list:
+                block_device_info = driver.get_block_device_info(
+                    instance, bdm_list)
         exception_msgs = []
         encrypted_bdms = driver.block_device_info_get_encrypted_disks(
             block_device_info)
