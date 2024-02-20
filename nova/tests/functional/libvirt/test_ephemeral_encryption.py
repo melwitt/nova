@@ -361,6 +361,165 @@ class EphemeralEncryptionTestResize(EphemeralEncryptionTestBase):
         self.test_resize_server_different_host(is_resize=False)
 
 
+class EphemeralEncryptionTestCrossCellMigrate(EphemeralEncryptionTestBase):
+
+    NUMBER_OF_CELLS = 2
+    ADMIN_API = True
+
+    def setUp(self):
+        # Most of this setup is copied from the cross cell resize functional
+        # tests.
+        weight_classes = ['nova.scheduler.weights.cross_cell.CrossCellWeigher']
+        self.flags(weight_classes=weight_classes, group='filter_scheduler')
+        super().setUp()
+        self._enable_cross_cell_resize()
+        # Set up 2 compute services in different cells
+        self.host_to_cell_mappings = {'host1': 'cell1', 'host2': 'cell2'}
+
+        self.cell_to_aggregate = {}
+        for host in sorted(self.host_to_cell_mappings):
+            cell_name = self.host_to_cell_mappings[host]
+            # Start the compute service on the given host in the given cell.
+            self.start_compute(host, cell_name=cell_name)
+            # Create an aggregate where the AZ name is the cell name.
+            agg_id = self._create_aggregate(
+                cell_name, availability_zone=cell_name)
+            # Add the host to the aggregate.
+            body = {'add_host': {'host': host}}
+            self.admin_api.post_aggregate_action(agg_id, body)
+            self.cell_to_aggregate[cell_name] = agg_id
+
+        self.useFixture(fixtures.MockPatch(
+            'nova.virt.libvirt.driver.LibvirtDriver.delete_instance_files'))
+
+    def _enable_cross_cell_resize(self):
+        # Enable cross-cell resize policy since it defaults to not allow
+        # anyone to perform that type of operation. For these tests we'll
+        # just allow admins to perform cross-cell resize.
+        self.policy.set_rules(
+            {servers_policies.CROSS_CELL_RESIZE: base_policies.RULE_ADMIN_API},
+            overwrite=False)
+
+    def test_resize_server(self, is_resize=True):
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+        src_host = self._show_server(
+            server, api=self.admin_api)['OS-EXT-SRV-ATTR:host']
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        src_driver = self.computes[src_host].driver
+        src_cell = self.cell_mappings[self.host_to_cell_mappings[src_host]]
+        nova_context.set_target_cell(self.context, src_cell)
+        bdms = self.assertSecretsMatch(server, 3, src_driver)
+
+        if is_resize:
+            # Make note of the original flavor and create a new flavor.
+            server_details = self._show_server(server)
+            orig_flavor_id = server_details['flavor']['id']
+            extra_specs = {'hw:ephemeral_encryption': 'true'}
+            new_flavor_id = self._create_flavor(extra_spec=extra_specs)
+
+            # Resize the server to the new flavor.
+            self._resize_server(server, new_flavor_id)
+        else:
+            # Cold migrate the server.
+            self._migrate_server(server)
+
+        # Assert that it moved.
+        dest_host = self._show_server(
+            server, api=self.admin_api)['OS-EXT-SRV-ATTR:host']
+        self.assertNotEqual(src_host, dest_host)
+
+        if is_resize:
+            # Assert the server now has the new flavor.
+            server_details = self._show_server(server)
+            self.assertEqual(new_flavor_id, server_details['flavor']['id'])
+
+        # The libvirt secrets should be on the destination now and we should
+        # still have the key manager secrets matching.
+        dest_driver = self.computes[dest_host].driver
+        self.assertSecretsMatch(server, 3, dest_driver, bdms=bdms)
+        # The secrets should still be on the source too, along with the disks.
+        self.assertSecretsMatch(server, 3, src_driver, bdms=bdms)
+
+        # Revert the resize or migration.
+        self._revert_resize(server)
+
+        # Assert that it moved back.
+        self.assertEqual(
+            src_host,
+            self._show_server(
+                server, api=self.admin_api)['OS-EXT-SRV-ATTR:host'])
+
+        if is_resize:
+            # Assert the server is back to the original flavor.
+            server_details = self._show_server(server)
+            self.assertEqual(orig_flavor_id, server_details['flavor']['id'])
+
+        # Assert that the libvirt secrets have been removed from the
+        # destination.
+        self.assertLibvirtSecretsDeleted(bdms, dest_driver)
+
+        # The libvirt secrets should be on the source now and we should
+        # still have the key manager secrets matching.
+        self.assertSecretsMatch(server, 3, src_driver, bdms=bdms)
+
+        # Resize or migrate the server again.
+        if is_resize:
+            self._resize_server(server, new_flavor_id)
+        else:
+            self._migrate_server(server)
+
+        # Assert that it moved.
+        self.assertEqual(
+            dest_host,
+            self._show_server(
+                server, api=self.admin_api)['OS-EXT-SRV-ATTR:host'])
+
+        if is_resize:
+            # Assert the server now has the new flavor.
+            server_details = self._show_server(server)
+            self.assertEqual(new_flavor_id, server_details['flavor']['id'])
+
+        # The libvirt secrets should be on the destination now and we should
+        # still have the key manager secrets matching.
+        self.assertSecretsMatch(server, 3, dest_driver, bdms=bdms)
+        # The secrets should still be on the source too, along with the disks.
+        self.assertSecretsMatch(server, 3, src_driver, bdms=bdms)
+
+        # Reset the fake notifier so we only check confirmation notifications.
+        # self.notifier.reset()
+
+        # Confirm the migration.
+        self._confirm_resize(server, cross_cell=True)
+
+        if is_resize:
+            # Assert the server still has the new flavor.
+            server_details = self._show_server(server)
+            self.assertEqual(new_flavor_id, server_details['flavor']['id'])
+
+        # Assert that the libvirt secrets have been removed from the source.
+        self.assertLibvirtSecretsDeleted(bdms, src_driver)
+
+        # The libvirt secrets should still be on the destination and we should
+        # still have the key manager secrets matching.
+        self.assertSecretsMatch(server, 3, dest_driver, bdms=bdms)
+
+        # Delete the server.
+        self._delete_server(server)
+
+        # Verify that there are no libvirt secrets on either host.
+        self.assertSecretsDeleted(bdms, src_driver)
+        self.assertSecretsDeleted(bdms, dest_driver)
+
+    def test_cold_migrate_server(self):
+        self.test_resize_server(is_resize=False)
+
+
 class EphemeralEncryptionLiveMigrateBase(
     # This has to go before EphemeralEncryptionTestBase so that it patches the
     # LibvirtFixture before useFixture(LibvirtFixture) happens.
@@ -936,184 +1095,3 @@ class EphemeralEncryptionTestSnapshot(EphemeralEncryptionTestBase):
 
         # We should still have the same libvirt secrets for the disks.
         # self.assertLibvirtSecretsMatch(server, 3, self.driver, bdms=bdms)
-
-
-class EphemeralEncryptionTestCrossCellMigrate(EphemeralEncryptionTestBase):
-
-    NUMBER_OF_CELLS = 2
-
-    def setUp(self):
-        weight_classes = [
-            # __name__ + '.HostNameWeigher',
-            'nova.scheduler.weights.cross_cell.CrossCellWeigher'
-        ]
-        self.flags(weight_classes=weight_classes,
-                   group='filter_scheduler')
-        super().setUp()
-        self._enable_cross_cell_resize()
-        # Set up 2 compute services in different cells
-        self.host_to_cell_mappings = {
-            'host1': 'cell1', 'host2': 'cell2'}
-
-        self.cell_to_aggregate = {}
-        for host in sorted(self.host_to_cell_mappings):
-            cell_name = self.host_to_cell_mappings[host]
-            # Start the compute service on the given host in the given cell.
-            self.start_compute(host, cell_name=cell_name)
-            # Create an aggregate where the AZ name is the cell name.
-            agg_id = self._create_aggregate(
-                cell_name, availability_zone=cell_name)
-            # Add the host to the aggregate.
-            body = {'add_host': {'host': host}}
-            self.admin_api.post_aggregate_action(agg_id, body)
-            self.cell_to_aggregate[cell_name] = agg_id
-
-        self.useFixture(fixtures.MockPatch(
-            'nova.virt.libvirt.driver.LibvirtDriver.delete_instance_files'))
-        # self.useFixture(fixtures.MockPatch(
-        #    'nova.virt.libvirt.driver.LibvirtDriver.'
-        #    'check_instance_shared_storage_remote', return_value=False))
-        # self._run_periodics()
-
-    def _enable_cross_cell_resize(self):
-        # Enable cross-cell resize policy since it defaults to not allow
-        # anyone to perform that type of operation. For these tests we'll
-        # just allow admins to perform cross-cell resize.
-        self.policy.set_rules({
-            servers_policies.CROSS_CELL_RESIZE:
-                base_policies.RULE_ADMIN_API},
-            overwrite=False)
-
-    def test_resize_server(self, is_resize=True):
-        self.api = self.admin_api
-        # Verify there are no secrets in the key manager.
-        # self.assertEqual(0, len(self.key_mgr.list(self.context)))
-
-        # Create a server with ephemeral encryption.
-        # server = self._create_server_with_ephemeral_encryption_flavor()
-
-        # Verify there are no secrets in the key manager.
-        self.assertEqual(0, len(self.key_mgr.list(self.context)))
-
-        # Create a server with ephemeral encryption.
-        server = self._create_server_with_ephemeral_encryption_flavor()
-        src_host = self._show_server(
-            server, api=self.admin_api)['OS-EXT-SRV-ATTR:host']
-        print(self.computes)
-        print(f'src_host = {src_host}')
-
-        # There should be three secrets in the key manager, one for the root
-        # disk, one for the ephemeral disk, and one for the swap disk.
-        src_driver = self.computes[src_host].driver
-        print(f'src_driver = {src_driver}')
-        src_cell = self.cell_mappings[self.host_to_cell_mappings[src_host]]
-        nova_context.set_target_cell(self.context, src_cell)
-        bdms = self.assertSecretsMatch(server, 3, src_driver)
-
-        if is_resize:
-            # Make note of the original flavor and create a new flavor.
-            server_details = self._show_server(server)
-            orig_flavor_id = server_details['flavor']['id']
-            extra_specs = {'hw:ephemeral_encryption': 'true'}
-            new_flavor_id = self._create_flavor(extra_spec=extra_specs)
-
-            # Resize the server to the new flavor.
-            self._resize_server(server, new_flavor_id)
-        else:
-            # Cold migrate the server.
-            self._migrate_server(server)
-
-        # Assert that it moved.
-        dest_host = self._show_server(
-            server, api=self.admin_api)['OS-EXT-SRV-ATTR:host']
-        self.assertNotEqual(src_host, dest_host)
-
-        if is_resize:
-            # Assert the server now has the new flavor.
-            server_details = self._show_server(server)
-            self.assertEqual(new_flavor_id, server_details['flavor']['id'])
-
-        # The libvirt secrets should be on the destination now and we should
-        # still have the key manager secrets matching.
-        dest_driver = self.computes[dest_host].driver
-        dest_cell = self.cell_mappings[self.host_to_cell_mappings[dest_host]]
-        nova_context.set_target_cell(self.context, dest_cell)
-        self.assertSecretsMatch(server, 3, dest_driver, bdms=bdms)
-        # The secrets should still be on the source too, along with the disks.
-        self.assertSecretsMatch(server, 3, src_driver, bdms=bdms)
-
-        # Revert the resize or migration.
-        self._revert_resize(server)
-
-        # Assert that it moved back.
-        self.assertEqual(
-            src_host,
-            self._show_server(
-                server, api=self.admin_api)['OS-EXT-SRV-ATTR:host'])
-
-        if is_resize:
-            # Assert the server is back to the original flavor.
-            server_details = self._show_server(server)
-            self.assertEqual(orig_flavor_id, server_details['flavor']['id'])
-
-        # Assert that the libvirt secrets have been removed from the
-        # destination.
-        self.assertLibvirtSecretsDeleted(bdms, dest_driver)
-
-        # The libvirt secrets should be on the source now and we should
-        # still have the key manager secrets matching.
-        nova_context.set_target_cell(self.context, src_cell)
-        self.assertSecretsMatch(server, 3, src_driver)
-
-        # Resize or migrate the server again.
-        if is_resize:
-            self._resize_server(server, new_flavor_id)
-        else:
-            self._migrate_server(server)
-
-        # Assert that it moved.
-        self.assertEqual(
-            dest_host,
-            self._show_server(
-                server, api=self.admin_api)['OS-EXT-SRV-ATTR:host'])
-
-        if is_resize:
-            # Assert the server now has the new flavor.
-            server_details = self._show_server(server)
-            self.assertEqual(new_flavor_id, server_details['flavor']['id'])
-
-        # The libvirt secrets should be on the destination now and we should
-        # still have the key manager secrets matching.
-        nova_context.set_target_cell(self.context, dest_cell)
-        self.assertSecretsMatch(server, 3, dest_driver)
-        # The secrets should still be on the source too, along with the disks.
-        nova_context.set_target_cell(self.context, src_cell)
-        self.assertSecretsMatch(server, 3, src_driver, bdms=bdms)
-
-        # Reset the fake notifier so we only check confirmation notifications.
-        # self.notifier.reset()
-
-        # Confirm the migration.
-        self._confirm_resize(server, cross_cell=True)
-
-        if is_resize:
-            # Assert the server still has the new flavor.
-            server_details = self._show_server(server)
-            self.assertEqual(new_flavor_id, server_details['flavor']['id'])
-
-        # Assert that the libvirt secrets have been removed from the source.
-        self.assertLibvirtSecretsDeleted(bdms, src_driver)
-
-        # The libvirt secrets should still be on the destination and we should
-        # still have the key manager secrets matching.
-        nova_context.set_target_cell(self.context, dest_cell)
-        self.assertSecretsMatch(server, 3, dest_driver)
-
-        # Delete the server.
-        self._delete_server(server)
-
-        # Verify that there are no libvirt secrets on either host.
-        nova_context.set_target_cell(self.context, src_cell)
-        self.assertSecretsDeleted(bdms, src_driver)
-        nova_context.set_target_cell(self.context, dest_cell)
-        self.assertSecretsDeleted(bdms, dest_driver)

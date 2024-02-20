@@ -4100,11 +4100,6 @@ class API:
             target={'user_id': instance.user_id,
                     'project_id': instance.project_id},
             fatal=False)
-        # TODO(melwitt): Remove this block when snapshot with ephemeral
-        # encryption is supported.
-        if hardware.get_ephemeral_encryption_constraint(
-                instance.flavor, instance.image_meta):
-            return False
         # If the user is allowed by policy, check to make sure the deployment
         # is upgraded to the point of supporting cross-cell resize on all
         # compute services.
