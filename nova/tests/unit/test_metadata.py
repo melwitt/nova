@@ -192,6 +192,7 @@ def fake_metadata_objects():
         path='/dev/sda',
         tags=['baz'],
     )
+    encrypted_disk_obj = metadata_obj.DiskMetadata(encrypted=True)
     fake_device_obj = metadata_obj.DeviceMetadata()
     device_with_fake_bus_obj = metadata_obj.NetworkInterfaceMetadata(
         bus=metadata_obj.DeviceBus(),
@@ -201,8 +202,8 @@ def fake_metadata_objects():
     mdlist = metadata_obj.InstanceDeviceMetadata(
         instance_uuid='b65cee2f-8c69-4aeb-be2f-f79742548fc2',
         devices=[nic_obj, ide_disk_obj, scsi_disk_obj, usb_disk_obj,
-                 fake_device_obj, device_with_fake_bus_obj, nic_vlans_obj,
-                 nic_vf_trusted_obj])
+                 encrypted_disk_obj, fake_device_obj, device_with_fake_bus_obj,
+                 nic_vlans_obj, nic_vf_trusted_obj])
     return mdlist
 
 
@@ -245,8 +246,15 @@ def fake_metadata_dicts(include_vlan=False, include_vf_trusted=False):
     usb_disk_meta['bus'] = 'usb'
     usb_disk_meta['address'] = '05c8:021e'
 
+    encrypted_disk_meta = {
+        'type': 'disk',
+        'bus': 'none',
+        'address': 'none',
+        'encrypted': True,
+    }
+
     dicts = [nic_meta, ide_disk_meta, scsi_disk_meta, usb_disk_meta,
-             vf_trusted_nic_meta]
+             encrypted_disk_meta, vf_trusted_nic_meta]
     if include_vlan:
         # NOTE(artom) Yeah, the order is important.
         dicts.insert(len(dicts) - 1, vlan_nic_meta)
