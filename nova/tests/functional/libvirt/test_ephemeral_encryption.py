@@ -957,6 +957,60 @@ class EphemeralEncryptionTestRebuild(EphemeralEncryptionTestBase):
         # Verify that libvirt secrets were deleted for each disk.
         self.assertSecretsDeleted(bdms, self.driver)
 
+    def test_evacuate_server(self):
+        self.useFixture(fixtures.MockPatch(
+            'nova.compute.manager.ComputeManager.'
+            '_is_instance_storage_shared', return_value=False))
+
+        self.start_compute(hostname='compute2')
+        self._run_periodics()
+
+        # Verify there are no secrets in the key manager.
+        self.assertEqual(0, len(self.key_mgr.list(self.context)))
+
+        # Create a server with ephemeral encryption.
+        server = self._create_server_with_ephemeral_encryption_flavor()
+        src_host = self._show_server(
+            server, api=self.admin_api)['OS-EXT-SRV-ATTR:host']
+
+        # There should be three secrets in the key manager, one for the root
+        # disk, one for the ephemeral disk, and one for the swap disk.
+        src_driver = self.computes[src_host].driver
+        bdms = self.assertSecretsMatch(server, 3, src_driver)
+
+        # Stop the server, stop and force down the source compute service, and
+        # evacuate the server.
+        self._stop_server(server)
+        self.computes[src_host].stop()
+        with utils.temporary_mutation(self.admin_api, microversion='2.14'):
+            self.admin_api.force_down_service(src_host, 'nova-compute', True)
+            self._evacuate_server(server)
+
+        dest_host = self._show_server(
+            server, api=self.admin_api)['OS-EXT-SRV-ATTR:host']
+
+        # Assert that it moved.
+        self.assertNotEqual(src_host, dest_host)
+
+        # Start the compute service again to cleanup evacuated instance
+        # artifacts.
+        self.computes[src_host].start()
+
+        # Assert that the libvirt secrets have been removed from the source.
+        self.assertLibvirtSecretsDeleted(bdms, src_driver)
+
+        # The libvirt secrets should be on the destination now and we should
+        # still have the key manager secrets matching.
+        dest_driver = self.computes[dest_host].driver
+        self.assertSecretsMatch(server, 3, dest_driver, bdms=bdms)
+
+        # Delete the server.
+        self._delete_server(server)
+
+        # Verify that there are no libvirt secrets on either host.
+        self.assertSecretsDeleted(bdms, src_driver)
+        self.assertSecretsDeleted(bdms, dest_driver)
+
 
 class EphemeralEncryptionTestRescue(EphemeralEncryptionTestBase):
 
