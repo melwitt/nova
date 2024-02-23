@@ -1094,7 +1094,7 @@ object_data = {
     'DeviceMetadata': '1.0-04eb8fd218a49cbc3b1e54b774d179f7',
     'Diagnostics': '1.0-38ad3e9b1a59306253fc03f97936db95',
     'DiskDiagnostics': '1.0-dfd0892b5924af1a585f3fed8c9899ca',
-    'DiskMetadata': '1.0-e7a0f1ccccf10d26a76b28e7492f3788',
+    'DiskMetadata': '1.1-b4a03edba07ac9f250ffaf9584d1153a',
     'EC2Ids': '1.0-474ee1094c7ec16f8ce657595d8c49d9',
     'EC2InstanceMapping': '1.0-a4556eb5c5e94c045fe84f49cf71644f',
     'Flavor': '1.2-4ce99b41327bb230262e5a8f45ff0ce3',
