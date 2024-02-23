@@ -426,6 +426,8 @@ class InstanceMetadata(object):
                         device_metadata['serial'] = device.serial
                     if 'path' in device:
                         device_metadata['path'] = device.path
+                    if 'encrypted' in device:
+                        device_metadata['encrypted'] = device.encrypted
                 else:
                     LOG.debug('Metadata for device of unknown type %s has not '
                               'been included in the '
