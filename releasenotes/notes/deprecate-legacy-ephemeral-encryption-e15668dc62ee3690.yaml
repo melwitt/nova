@@ -1,0 +1,15 @@
+deprecations:
+  - |
+    The legacy ephemeral storage encryption implementation using ``dm-crypt``
+    within the libvirt driver is marked as deprecated for removal in a future
+    release.
+
+    This includes the following configuration options:
+
+    * ``[ephemeral_storage_encryption]/enabled``
+    * ``[ephemeral_storage_encryption]/cipher``
+    * ``[ephemeral_storage_encryption]/key_size``
+
+    Limited support for ``dm-crypt`` will be introduced using the new flavor
+    and image based ephemeral storage encryption framework before the legacy
+    implementation is removed.
