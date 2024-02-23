@@ -24,7 +24,7 @@ fake_net_interface_meta = objects.NetworkInterfaceMetadata(
                             vlan=1000)
 fake_pci_disk_meta = objects.DiskMetadata(
                             bus=objects.PCIDeviceBus(address='0000:00:09.0'),
-                            tags=['nfvfunc3'])
+                            tags=['nfvfunc3'], encrypted=False)
 fake_obj_devices_metadata = objects.InstanceDeviceMetadata(
                          devices=[fake_net_interface_meta, fake_pci_disk_meta])
 
@@ -65,6 +65,7 @@ class _TestInstanceDeviceMetadata(object):
             self.assertIsInstance(obj_meta.bus, objects.PCIDeviceBus)
             self.assertEqual(obj_meta.bus.address, '0000:00:09.0')
             self.assertEqual(obj_meta.tags, ['nfvfunc3'])
+            self.assertFalse(obj_meta.encrypted)
 
     @mock.patch('nova.db.main.api.instance_extra_get_by_instance_uuid')
     def test_get_by_instance_uuid(self, mock_get):
@@ -91,6 +92,13 @@ class _TestInstanceDeviceMetadata(object):
         self.assertIn('vlan', primitive['nova_object.data'])
         vif_obj.obj_make_compatible(primitive['nova_object.data'], '1.0')
         self.assertNotIn('vlan', primitive['nova_object.data'])
+
+    def test_disk_if_compatible_pre_1_1(self):
+        disk_obj = objects.DiskMetadata(encrypted=True)
+        primitive = disk_obj.obj_to_primitive()
+        self.assertIn('encrypted', primitive['nova_object.data'])
+        disk_obj.obj_make_compatible(primitive['nova_object.data'], '1.0')
+        self.assertNotIn('encrypted', primitive['nova_object.data'])
 
 
 class TestInstanceDeviceMetadata(test_objects._LocalTest,
