@@ -103,12 +103,20 @@ class NetworkInterfaceMetadata(DeviceMetadata):
 
 @base.NovaObjectRegistry.register
 class DiskMetadata(DeviceMetadata):
-    VERSION = '1.0'
+    # Version 1.0: Initial version
+    # Version 1.1: Add encrypted field
+    VERSION = '1.1'
 
     fields = {
         'serial': fields.StringField(nullable=True),
         'path': fields.StringField(nullable=True),
+        'encrypted': fields.BooleanField(default=False),
     }
+
+    def obj_make_compatible(self, primitive, target_version):
+        target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (1, 1) and 'encrypted' in primitive:
+            del primitive['encrypted']
 
 
 @base.NovaObjectRegistry.register
