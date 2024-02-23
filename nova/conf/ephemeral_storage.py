@@ -23,17 +23,37 @@ ephemeral_storage_encryption_group = cfg.OptGroup(
 ephemeral_storage_encryption_opts = [
     cfg.BoolOpt('enabled',
         default=False,
+        deprecated_for_removal=True,
+        deprecated_since='29.0.0',
+        deprecated_reason="""
+Support for flavor and image based ephemeral storage encryption was added in
+the 29.0.0 Caracal release and the legacy implementation using ``dm-crypt``
+will be removed in a future release.
+
+Limited support for ``dm-crypt`` will be introduced using the new framework
+before the legacy implementation is removed.
+""",
         help="""
 Enables/disables LVM ephemeral storage encryption.
 """),
     cfg.StrOpt('cipher',
         default='aes-xts-plain64',
+        deprecated_for_removal=True,
+        deprecated_since='29.0.0',
+        deprecated_reason="""
+Support for flavor and image based ephemeral storage encryption was added in
+the 29.0.0 Caracal release and the legacy implementation using ``dm-crypt``
+will be removed in a future release.
+
+Limited support for ``dm-crypt`` will be introduced using the new framework
+before the legacy implementation is removed.
+""",
         help="""
 Cipher-mode string to be used.
 
 The cipher and mode to be used to encrypt ephemeral storage. The set of
 cipher-mode combinations available depends on kernel support. According
-to the dm-crypt documentation, the cipher is expected to be in the format:
+to the ``dm-crypt`` documentation, the cipher is expected to be in the format:
 "<cipher>-<chainmode>-<ivmode>".
 
 Possible values:
@@ -43,6 +63,16 @@ Possible values:
     cfg.IntOpt('key_size',
         default=512,
         min=1,
+        deprecated_for_removal=True,
+        deprecated_since='29.0.0',
+        deprecated_reason="""
+Support for flavor and image based ephemeral storage encryption was added in
+the 29.0.0 Caracal release and the legacy implementation using ``dm-crypt``
+will be removed in a future release.
+
+Limited support for ``dm-crypt`` will be introduced using the new framework
+before the legacy implementation is removed.
+""",
         help="""
 Encryption key length in bits.
 
