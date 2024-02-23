@@ -13645,6 +13645,7 @@ class LibvirtDriver(driver.ComputeDriver):
         device.serial = bdm.volume_id
         if bus:
             device.bus = bus
+        device.encrypted = bdm.encrypted
         return device
 
     def _build_hostdev_metadata(self, dev, vifs_to_expose, vlans_by_mac):
