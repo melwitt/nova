@@ -55,7 +55,7 @@ class VGPUTestBase(base.ServersTestBase):
             'free': 84,
         }
         self.useFixture(fixtures.MockPatch(
-            'nova.privsep.libvirt.create_mdev',
+            'nova.virt.libvirt.driver.LibvirtDriver._create_mdev',
             side_effect=self._create_mdev))
 
         # for the sake of resizing, we need to patch the two methods below
@@ -95,14 +95,13 @@ class VGPUTestBase(base.ServersTestBase):
     def libvirt2pci_address(self, dev_name):
         return "{}:{}:{}.{}".format(*dev_name[4:].split('_'))
 
-    def _create_mdev(self, physical_device, mdev_type, uuid=None):
+    def _create_mdev(self, dev_name, mdev_type, uuid=None):
         # We need to fake the newly created sysfs object by adding a new
         # FakeMdevDevice in the existing persisted Connection object so
         # when asking to get the existing mdevs, we would see it.
         if not uuid:
             uuid = uuidutils.generate_uuid()
         mdev_name = libvirt_utils.mdev_uuid2name(uuid)
-        libvirt_parent = self.pci2libvirt_address(physical_device)
         # Here, we get the right compute thanks by the self.current_host that
         # was modified just before
         connection = self.computes[
@@ -110,7 +109,7 @@ class VGPUTestBase(base.ServersTestBase):
         connection.mdev_info.devices.update(
             {mdev_name: fakelibvirt.FakeMdevDevice(dev_name=mdev_name,
                                                    type_id=mdev_type,
-                                                   parent=libvirt_parent)})
+                                                   parent=dev_name)})
         return uuid
 
     def start_compute_with_vgpu(self, hostname):

@@ -26919,7 +26919,10 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         get_unassigned_mdevs.assert_called_once_with('pci_0000_06_00_0',
                                                      ['nvidia-11'])
 
-    @mock.patch.object(nova.privsep.libvirt, 'create_mdev')
+    @mock.patch('nova.virt.libvirt.host.Host.device_define')
+    @mock.patch('nova.virt.libvirt.host.Host.device_create')
+    @mock.patch('oslo_utils.uuidutils.generate_uuid',
+                new=mock.Mock(return_value=uuids.mdev1))
     @mock.patch.object(libvirt_driver.LibvirtDriver,
                        '_get_mdev_capable_devices')
     @mock.patch.object(libvirt_driver.LibvirtDriver,
@@ -26927,7 +26930,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
     def test_allocate_mdevs_with_no_mdevs_but_capacity(self,
                                                        unallocated_mdevs,
                                                        get_mdev_capable_devs,
-                                                       privsep_create_mdev):
+                                                       host_device_create,
+                                                       host_device_define):
         self.flags(enabled_mdev_types=['nvidia-11', 'nvidia-12'],
                    group='devices')
         # we need to call the below again to ensure the updated
@@ -26956,17 +26960,18 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                                      'deviceAPI': 'vfio-pci'},
                        }
              }]
-        privsep_create_mdev.return_value = uuids.mdev1
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         # Mock the fact update_provider_tree() should have run
         drvr.provider_tree = self._get_fake_provider_tree_with_vgpu()
         self.assertEqual([uuids.mdev1],
                          drvr._allocate_mdevs(allocations=allocations))
-        privsep_create_mdev.assert_called_once_with("0000:06:00.0",
-                                                    'nvidia-11',
-                                                    uuid=None)
+        for call_arg in (host_device_create.call_args.args[0],
+                         host_device_define.call_args.args[0]):
+            self.assertIsInstance(call_arg, vconfig.LibvirtConfigNodeDevice)
+            self.assertEqual('pci_0000_06_00_0', call_arg.parent)
+            self.assertEqual('nvidia-11', call_arg.mdev_information.type)
+            self.assertEqual(uuids.mdev1, call_arg.mdev_information.uuid)
 
-    @mock.patch.object(nova.privsep.libvirt, 'create_mdev')
     @mock.patch.object(libvirt_driver.LibvirtDriver,
                        '_get_mdev_capable_devices')
     @mock.patch.object(libvirt_driver.LibvirtDriver,
@@ -26976,8 +26981,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
     def test_allocate_mdevs_with_no_gpu_capacity(self,
                                                  get_supported_mdev_rcs,
                                                  unallocated_mdevs,
-                                                 get_mdev_capable_devs,
-                                                 privsep_create_mdev):
+                                                 get_mdev_capable_devs):
         self.flags(enabled_mdev_types=['nvidia-11'], group='devices')
         allocations = {
             uuids.rp1: {
@@ -27110,7 +27114,8 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                        new=mock.Mock())
     @mock.patch('nova.compute.utils.get_machine_ips',
                 new=mock.Mock(return_value=[]))
-    @mock.patch.object(nova.privsep.libvirt, 'create_mdev')
+    @mock.patch('nova.virt.libvirt.host.Host.device_define')
+    @mock.patch('nova.virt.libvirt.host.Host.device_create')
     @mock.patch.object(libvirt_driver.LibvirtDriver,
                        '_get_mdev_capable_devices')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
@@ -27120,7 +27125,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                        '_get_all_assigned_mediated_devices')
     def test_recreate_mediated_device_on_init_host(
             self, get_all_assigned_mdevs, exists, mock_get_mdev_info,
-            get_mdev_capable_devs, privsep_create_mdev):
+            get_mdev_capable_devs, host_device_create, host_device_define):
         self.flags(enabled_mdev_types=['nvidia-11', 'nvidia-12'],
                    group='devices')
         # we need to call the below again to ensure the updated
@@ -27161,8 +27166,12 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
         drvr.init_host(host='foo')
         # Only mdev2 will be recreated as mdev1 already exists.
-        privsep_create_mdev.assert_called_once_with(
-            "0000:06:00.0", 'nvidia-11', uuid=uuids.mdev2)
+        for call_arg in (host_device_create.call_args.args[0],
+                         host_device_define.call_args.args[0]):
+            self.assertIsInstance(call_arg, vconfig.LibvirtConfigNodeDevice)
+            self.assertEqual('pci_0000_06_00_0', call_arg.parent)
+            self.assertEqual('nvidia-11', call_arg.mdev_information.type)
+            self.assertEqual(uuids.mdev2, call_arg.mdev_information.uuid)
 
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
                 '_get_mediated_device_information')

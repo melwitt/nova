@@ -1254,6 +1254,36 @@ class Host(object):
         """
         return self.get_connection().nodeDeviceLookupByName(name)
 
+    def device_create(self, conf, validate=False):
+        """Create a node device from specified device XML
+
+        This creates the device as transient.
+
+        :param conf: A LibvirtConfigObject of the device to create
+        :param validate: whether to validate the XML document against schema
+
+        :returns: a virNodeDevice instance if successful, else None
+        """
+        flag = libvirt.VIR_NODE_DEVICE_CREATE_XML_VALIDATE
+        flags = validate and flag or 0
+        device_xml = conf.to_xml()
+        return self.get_connection().nodeDeviceCreateXML(device_xml, flags)
+
+    def device_define(self, conf, validate=False):
+        """Define a node device from specified device XML
+
+        This defines the device to make it persistent.
+
+        :param conf: A LibvirtConfigObject of the device to create
+        :param validate: whether to validate the XML document against schema
+
+        :returns: a virNodeDevice instance if successful, else None
+        """
+        flag = libvirt.VIR_NODE_DEVICE_DEFINE_XML_VALIDATE
+        flags = validate and flag or 0
+        device_xml = conf.to_xml()
+        return self.get_connection().nodeDeviceDefineXML(device_xml, flags)
+
     def _get_pcinet_info(
         self,
         dev: 'libvirt.virNodeDevice',

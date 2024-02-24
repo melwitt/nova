@@ -8479,6 +8479,21 @@ class LibvirtDriver(driver.ComputeDriver):
         LOG.info('Available mdevs at: %s.', available_mdevs)
         return available_mdevs
 
+    def _create_mdev(self, dev_name, mdev_type, uuid=None):
+        if uuid is None:
+            uuid = uuidutils.generate_uuid()
+        conf = vconfig.LibvirtConfigNodeDevice()
+        conf.parent = dev_name
+        conf.mdev_information = (
+            vconfig.LibvirtConfigNodeDeviceMdevInformation())
+        conf.mdev_information.type = mdev_type
+        conf.mdev_information.uuid = uuid
+        # Create the transient device.
+        self._host.device_create(conf)
+        # Define it to make it persistent.
+        self._host.device_define(conf)
+        return uuid
+
     def _create_new_mediated_device(self, parent, uuid=None):
         """Find a physical device that can support a new mediated device and
         create it.
@@ -8508,8 +8523,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 # We need the PCI address, not the libvirt name
                 # The libvirt name is like 'pci_0000_84_00_0'
                 pci_addr = "{}:{}:{}.{}".format(*dev_name[4:].split('_'))
-                chosen_mdev = nova.privsep.libvirt.create_mdev(
-                    pci_addr, dev_supported_type, uuid=uuid)
+                chosen_mdev = self._create_mdev(
+                    dev_name, dev_supported_type, uuid=uuid)
                 LOG.info('Created mdev: %s on pGPU: %s.',
                          chosen_mdev, pci_addr)
                 return chosen_mdev
