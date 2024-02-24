@@ -837,9 +837,10 @@ class LibvirtDriver(driver.ComputeDriver):
         # wrongly modified.
         libvirt_cpu.power_down_all_dedicated_cpus()
 
-        # TODO(sbauza): Remove this code once mediated devices are persisted
-        # across reboots.
-        self._recreate_assigned_mediated_devices()
+        # NOTE(melwitt): We shouldn't need to do this because we're setting
+        # autostart=True on the devices -- but if that fails for whatever
+        # reason and any devices become inactive, we can start them here.
+        self._start_assigned_mediated_devices_if_needed()
 
         self._check_cpu_compatibility()
 
@@ -1088,6 +1089,19 @@ class LibvirtDriver(driver.ComputeDriver):
 
         LOG.debug('Enabling emulated TPM support')
 
+    def _start_assigned_mediated_devices_if_needed(self):
+        # Get a list of inactive mdevs so we can start them and make them
+        # active.
+        flags = (
+            libvirt.VIR_CONNECT_LIST_NODE_DEVICES_CAP_MDEV |
+            libvirt.VIR_CONNECT_LIST_NODE_DEVICES_INACTIVE)
+        inactive_mdevs = self._host.list_all_devices(flags)
+        names = [mdev.name() for mdev in inactive_mdevs]
+        LOG.info(f'Found inactive mdevs: {names}')
+        for mdev in inactive_mdevs:
+            LOG.info(f'Starting inactive mdev: {mdev.name()}')
+            self._host.device_start(mdev)
+
     @staticmethod
     def _is_existing_mdev(uuid):
         # FIXME(sbauza): Some kernel can have a uevent race meaning that the
@@ -1097,35 +1111,6 @@ class LibvirtDriver(driver.ComputeDriver):
         # libvirt API.
         # See https://bugzilla.redhat.com/show_bug.cgi?id=1376907 for ref.
         return os.path.exists('/sys/bus/mdev/devices/{0}'.format(uuid))
-
-    def _recreate_assigned_mediated_devices(self):
-        """Recreate assigned mdevs that could have disappeared if we reboot
-        the host.
-        """
-        # NOTE(sbauza): This method just calls sysfs to recreate mediated
-        # devices by looking up existing guest XMLs and doesn't use
-        # the Placement API so it works with or without a vGPU reshape.
-        mdevs = self._get_all_assigned_mediated_devices()
-        for (mdev_uuid, instance_uuid) in mdevs.items():
-            if not self._is_existing_mdev(mdev_uuid):
-                dev_name = libvirt_utils.mdev_uuid2name(mdev_uuid)
-                dev_info = self._get_mediated_device_information(dev_name)
-                parent = dev_info['parent']
-                parent_type = self._get_vgpu_type_per_pgpu(parent)
-                if dev_info['type'] != parent_type:
-                    # NOTE(sbauza): The mdev was created by using a different
-                    # vGPU type. We can't recreate the mdev until the operator
-                    # modifies the configuration.
-                    parent = "{}:{}:{}.{}".format(*parent[4:].split('_'))
-                    msg = ("The instance UUID %(inst)s uses a mediated device "
-                           "type %(type)s that is no longer supported by the "
-                           "parent PCI device, %(parent)s. Please correct "
-                           "the configuration accordingly." %
-                           {'inst': instance_uuid,
-                            'parent': parent,
-                            'type': dev_info['type']})
-                    raise exception.InvalidLibvirtMdevConfig(reason=msg)
-                self._create_new_mediated_device(parent, uuid=mdev_uuid)
 
     def _check_file_backed_memory_support(self):
         if not CONF.libvirt.file_backed_memory:
@@ -8726,6 +8711,32 @@ class LibvirtDriver(driver.ComputeDriver):
         LOG.info('Available mdevs at: %s.', available_mdevs)
         return available_mdevs
 
+    def _create_mdev(self, dev_name, mdev_type, uuid=None):
+        if uuid is None:
+            uuid = uuidutils.generate_uuid()
+        conf = vconfig.LibvirtConfigNodeDevice()
+        conf.parent = dev_name
+        conf.mdev_information = (
+            vconfig.LibvirtConfigNodeDeviceMdevInformation())
+        conf.mdev_information.type = mdev_type
+        conf.mdev_information.uuid = uuid
+        # Create the transient device.
+        self._host.device_create(conf)
+        # Define it to make it persistent.
+        mdev_dev = self._host.device_define(conf)
+        # Set it to automatically start when the compute host boots or the
+        # parent device becomes available.
+        # NOTE(melwitt): Make this not fatal because we can try to manually
+        # start mdevs in init_host() if they didn't start automatically after a
+        # host reboot.
+        try:
+            self._host.device_set_autostart(mdev_dev, autostart=True)
+        except exception.InternalError as e:
+            LOG.info(
+                f'Failed to set autostart to True for mdev '
+                f'{mdev_dev.name()} with UUID {uuid}: {str(e)}.')
+        return uuid
+
     def _create_new_mediated_device(self, parent, uuid=None):
         """Find a physical device that can support a new mediated device and
         create it.
@@ -8755,8 +8766,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 # We need the PCI address, not the libvirt name
                 # The libvirt name is like 'pci_0000_84_00_0'
                 pci_addr = "{}:{}:{}.{}".format(*dev_name[4:].split('_'))
-                chosen_mdev = nova.privsep.libvirt.create_mdev(
-                    pci_addr, dev_supported_type, uuid=uuid)
+                chosen_mdev = self._create_mdev(
+                    dev_name, dev_supported_type, uuid=uuid)
                 LOG.info('Created mdev: %s on pGPU: %s.',
                          chosen_mdev, pci_addr)
                 return chosen_mdev
