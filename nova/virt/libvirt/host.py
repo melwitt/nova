@@ -1284,6 +1284,48 @@ class Host(object):
         device_xml = conf.to_xml()
         return self.get_connection().nodeDeviceDefineXML(device_xml, flags)
 
+    def device_start(self, dev):
+        """Start a defined node device
+
+        :param dev: The virNodeDevice instance to start
+        """
+        # extra flags; not used yet, so callers should always pass 0
+        #   https://libvirt.org/html/libvirt-libvirt-nodedev.html
+        flags = 0
+        result = dev.create(flags)
+        if result == -1:
+            raise exception.InternalError(
+                _(f'Failed to start node device {dev.name()}'))
+
+    def device_set_autostart(self, dev, autostart=True):
+        """Set a node device to automatically start when the host boots
+
+        This can set whether the node device should automatically start when
+        the host machine boots or when the parent device becomes available.
+
+        :param dev: The virNodeDevice instance to set the autostart value
+        :param autostart: Whether to set the device to automatically start
+        """
+        result = dev.setAutostart(autostart=autostart)
+        if result == -1:
+            raise exception.InternalError(
+                _(f'Failed to set autostart to {autostart} for node device '
+                  f'{dev.name()}'))
+
+    def device_is_active(self, dev):
+        """Check whether a node device is currently active
+
+        :param dev: The virNodeDevice to check whether it's actitve
+
+        :returns: True if active, False if persistent
+        """
+        result = dev.isActive()
+        if result == -1:
+            raise exception.InternalError(
+                _(f'Failed while checking whether node device {dev.name()} is '
+                   'active'))
+        return result == 1
+
     def _get_pcinet_info(
         self,
         dev: 'libvirt.virNodeDevice',

@@ -27173,6 +27173,13 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             self.assertEqual('nvidia-11', call_arg.mdev_information.type)
             self.assertEqual(uuids.mdev2, call_arg.mdev_information.uuid)
 
+    def test_start_assigned_mediated_devices_on_init_host(self):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        device1 = mock.Mock()
+        drvr._host.list_all_devices.return_value = [device1]
+
+        drvr.init_host(host='foo')
+
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
                 '_get_mediated_device_information')
     @mock.patch.object(os.path, 'exists')
