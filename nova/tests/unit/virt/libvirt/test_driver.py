@@ -30450,6 +30450,39 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             f'{self.instance.uuid}_{self.eph_bdm.uuid}: error')
         self.assertEqual(expected_msg, str(exp))
 
+    def test__cleanup_unused_secrets_delete_secret_fails(self):
+        # Test exception handling when libvirt secret deletion fails during
+        # cleanup.
+        error = fakelibvirt.make_libvirtError(
+            fakelibvirt.libvirtError, msg='error',
+            error_code=fakelibvirt.VIR_ERR_INTERNAL_ERROR)
+
+        guest = mock.Mock()
+        guest.get_all_disks.return_value = [mock.Mock()]
+        self.drvr._host.list_guests.return_value = [guest]
+
+        secret1 = mock.Mock()
+        secret1.usageID.return_value = 'fake1'
+        secret2 = mock.Mock()
+        secret2.usageID.return_value = 'fake2'
+        secret3 = mock.Mock()
+        secret3.usageID.return_value = 'fake3'
+        self.drvr._host.list_all_secrets.return_value = [
+            secret1, secret2, secret3]
+
+        # Delete for secret1 and secret2 fail and secret3 succeeds.
+        self.drvr._host.delete_secret.side_effect = [error, error, None]
+
+        exp = self.assertRaises(
+            exception.EphemeralEncryptionCleanupFailed,
+            self.drvr._cleanup_unused_ephemeral_encryption_secrets)
+
+        expected_msg = (
+            'Failed to clean up ephemeral encryption secrets: '
+            'Failed to delete libvirt secret fake1: error\n'
+            'Failed to delete libvirt secret fake2: error')
+        self.assertEqual(expected_msg, str(exp))
+
     @mock.patch.object(
         libvirt_driver.LibvirtDriver, '_cleanup_lvm', new=mock.Mock())
     @mock.patch.object(
