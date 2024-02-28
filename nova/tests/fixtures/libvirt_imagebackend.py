@@ -193,7 +193,11 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
                 disk.exists.return_value = True
 
             # Default to no ephemeral encryption
-            disk.get_encryption.return_value = None
+            if disk.disk_info_mapping is None:
+                disk.get_encryption.return_value = None
+            else:
+                disk.get_encryption.side_effect = functools.partial(
+                    imagebackend.Image.get_encryption, disk)
 
             return disk
 
@@ -246,6 +250,8 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
     ):
         # For tests in test_virt_drivers which expect libvirt_info to be
         # functional
+        # This is where the guest disk XML is first generated and is what tests
+        # will see when LibvirtFixture Domain XML are read and written.
         info = config.LibvirtConfigGuestDisk()
         info.source_type = 'file'
         info.source_device = mock_disk.disk_info_mapping['type']
@@ -256,4 +262,15 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
         info.source_path = mock_disk.path
         if boot_order:
             info.boot_order = boot_order
+        if mock_disk.disk_info_mapping.get('encrypted'):
+            info.ephemeral_encryption = (
+                config.LibvirtConfigGuestDiskEncryption())
+            info.ephemeral_encryption.secret = (
+                config.LibvirtConfigGuestDiskEncryptionSecret())
+            info.ephemeral_encryption.secret.type = 'passphrase'
+            info.ephemeral_encryption.secret.uuid = (
+                mock_disk.disk_info_mapping['encryption_secret_uuid'])
+            info.ephemeral_encryption.format = (
+                mock_disk.disk_info_mapping['encryption_format'])
+
         return info

@@ -890,6 +890,13 @@ def _parse_disk_info(element):
         if not disk_info['source']:
             disk_info['source'] = source.get('path')
 
+        encryption = element.find('./source/encryption')
+        if encryption is not None:
+            disk_info['encryption_format'] = encryption.get('format')
+            secret = encryption.find('./secret')
+            if secret is not None:
+                disk_info['encryption_secret'] = secret.get('uuid')
+
     target = element.find('./target')
     if target is not None:
         disk_info['target_dev'] = target.get('dev')
@@ -1416,12 +1423,23 @@ class Domain(object):
             else:
                 source_attr = 'dev'
 
-            disks += '''<disk type='%(type)s' device='%(device)s'>
+            strformat = """
+    <disk type='%(type)s' device='%(device)s'>
       <driver name='%(driver_name)s' type='%(driver_type)s'/>
-      <source %(source_attr)s='%(source)s'/>
+      <source %(source_attr)s='%(source)s'"""
+            if 'encryption_format' not in disk:
+                strformat += '/>'
+            else:
+                strformat += '''>
+        <encryption format='%(encryption_format)s'>
+          <secret type='passphrase' uuid='%(encryption_secret)s'/>
+        </encryption>
+      </source>'''
+            strformat += '''
       <target dev='%(target_dev)s' bus='%(target_bus)s'/>
       <address type='drive' controller='0' bus='0' unit='0'/>
-    </disk>''' % dict(source_attr=source_attr, **disk)
+    </disk>'''
+            disks += strformat % dict(source_attr=source_attr, **disk)
         nics = ''
         for func, nic in enumerate(self._def['devices']['nics']):
             if func > 7:
