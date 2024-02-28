@@ -1731,6 +1731,14 @@ class Secret(object):
     def undefine(self):
         self._connection._remove_secret(self)
 
+    def UUIDString(self):
+        if self._uuid is not None:
+            return self._uuid
+
+    def usageID(self):
+        if self._usage_id is not None:
+            self._usage_id
+
 
 class Connection(object):
     def __init__(
@@ -2132,6 +2140,9 @@ class Connection(object):
                     <feature name='vme'/>
                     <feature policy='require' name='aes'/>
                   </cpu>"""
+
+    def listAllSecrets(self, flags):
+        return [secret for secret in self._secrets.values()]
 
     def secretLookupByUsage(self, usage_type_obj, usage_id):
         for secret in self._secrets.values():

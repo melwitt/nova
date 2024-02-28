@@ -840,6 +840,8 @@ class LibvirtDriver(driver.ComputeDriver):
         # to default values for properties that have not already been set.
         self._register_all_undefined_instance_details()
 
+        self._cleanup_unused_ephemeral_encryption_secrets()
+
     def _update_host_specific_capabilities(self) -> None:
         """Update driver capabilities based on capabilities of the host."""
         # TODO(stephenfin): We should also be reporting e.g. SEV functionality
@@ -1762,6 +1764,28 @@ class LibvirtDriver(driver.ComputeDriver):
         if exception_msgs:
             msg = '\n'.join(exception_msgs)
             raise exception.EphemeralEncryptionCleanupFailed(error=msg)
+
+    def _cleanup_unused_ephemeral_encryption_secrets(self):
+        # First make a list of the guest secrets that are in use on this host.
+        guests = self._host.list_guests(only_running=False)
+        secret_uuids_in_use = set()
+        for guest in guests:
+            disk_confs = guest.get_all_disks()
+            for disk_conf in disk_confs:
+                if disk_conf.ephemeral_encryption:
+                    secret_uuids_in_use.add(
+                       disk_conf.ephemeral_encryption.secret.uuid)
+        # Then get a list of all secrets on the host and delete any that are
+        # not in use by guests on this host.
+        secrets = self._host.list_all_secrets()
+        for secret in secrets:
+            secret_uuid = secret.UUIDString()
+            if secret_uuid not in secret_uuids_in_use:
+                secret_usage = secret.usageID()
+                LOG.info(
+                    'Cleaning up unused libvirt secret with UUID: '
+                    f'{secret_uuid} and usage_id: {secret_usage}')
+                self._host.delete_secret('volume', secret_usage)
 
     def cleanup_lingering_instance_resources(self, instance):
         # zero the data on backend pmem device, if fails
