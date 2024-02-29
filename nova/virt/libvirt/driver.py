@@ -12127,8 +12127,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 'hw_ephemeral_encryption_format')
             image_encryption = {
                 'secret': secret,
-                'format': encryption_format or
-                          CONF.ephemeral_storage_encryption.default_format}
+                'format': encryption_format,
+            }
         try:
             image.cache(fetch_func=fetch_func,
                         context=context,

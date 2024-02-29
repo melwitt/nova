@@ -112,6 +112,20 @@ class QemuTestCase(test.NoDBTestCase):
                                images.fetch_to_flat,
                                None, 'href123', '/no/path')
 
+    @mock.patch('os.unlink', new=mock.Mock())
+    @mock.patch.object(images, 'convert_image', new=mock.Mock())
+    @mock.patch.object(images, 'qemu_img_info')
+    @mock.patch.object(images, 'fetch', new=mock.Mock())
+    def test_fetch_to_flat_error_after_convert(self, mock_qemu_img_info):
+        mock_qemu_img_info.side_effect = [
+            mock.Mock(file_format='qcow2', backing_file=None),
+            mock.Mock(file_format='qcow2'),
+        ]
+        self.assertRaisesRegex(
+            exception.ImageUnacceptable,
+            'Converted to raw, but format is now qcow2', images.fetch_to_flat,
+            None, 'href123', '/some/path')
+
     @mock.patch.object(compute_utils, 'disk_ops_semaphore')
     @mock.patch('nova.privsep.utils.supports_direct_io', return_value=True)
     @mock.patch('oslo_concurrency.processutils.execute')
@@ -189,17 +203,15 @@ class QemuTestCase(test.NoDBTestCase):
     @mock.patch('nova.privsep.qemu.unprivileged_qemu_img_info')
     def test_fetch_ephemeral_unencrypted_source_qcow2(
             self, mock_info, mock_fetch, mock_convert):
-        dest_encryption = {'format': 'luks', 'secret': mock.sentinel.secret}
         info_before = {'format': 'qcow2'}
-        info_after = {'format': 'luks'}
+        info_after = {'format': 'raw'}
         mock_info.side_effect = [
             jsonutils.dumps(info_before), jsonutils.dumps(info_after)]
         with mock.patch('os.path.exists', return_value=True):
-            images.fetch_to_flat(
-                None, 'foo', 'anypath', dest_encryption=dest_encryption)
+            images.fetch_to_flat(None, 'foo', 'anypath')
         mock_convert.assert_called_once_with(
-            'anypath.part', 'anypath.converted', 'qcow2', 'luks',
-            src_encryption=None, dest_encryption=dest_encryption)
+            'anypath.part', 'anypath.converted', 'qcow2', 'raw',
+            src_encryption=None, dest_encryption=None)
 
     @mock.patch('os.rename', new=mock.Mock())
     @mock.patch('os.unlink', new=mock.Mock())
