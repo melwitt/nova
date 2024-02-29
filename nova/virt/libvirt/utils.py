@@ -460,7 +460,7 @@ def fetch_image(
     :param dest_encryption: (Optional) Dict detailing various encryption
         attributes of the target image, such as the format and passphrase.
     """
-    images.fetch_to_raw(
+    images.fetch_to_flat(
         context, image_id, target, trusted_certs,
         src_encryption=src_encryption, dest_encryption=dest_encryption)
 

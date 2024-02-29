@@ -148,7 +148,7 @@ def check_vmdk_image(image_id, data):
         raise exception.ImageUnacceptable(image_id=image_id, reason=msg)
 
 
-def fetch_to_raw(
+def fetch_to_flat(
     context: 'nova.context.RequestContext',
     image_href: str,
     path: str,
@@ -156,6 +156,23 @@ def fetch_to_raw(
     src_encryption: ty.Optional[EncryptionOptions] = None,
     dest_encryption: ty.Optional[EncryptionOptions] = None
 ) -> None:
+    """Fetch an image and convert it to a flat format if needed.
+
+    This function is usually used to fetch backing/base images and the disk
+    file format of the target image depends on whether or not dest_encryption
+    has been specified.
+
+    If dest_encryption has not been specified and the source image is 'qcow2',
+    the target image format should be 'raw'. If dest_encryption has been
+    specified and the source image is 'qcow2', the target image format should
+    be 'luks' (the QEMU disk file format name for raw encrypted) [1].
+
+    If dest_encryption has not been specified and the source image is 'raw',
+    this function is a no-op. If dest_encryption has been specified and the
+    source image is 'luks', this function is a no-op.
+
+    [1] https://www.qemu.org/docs/master/system/qemu-block-drivers.html
+    """
     path_tmp = "%s.part" % path
     fetch(context, image_href, path_tmp, trusted_certs)
 
@@ -179,7 +196,7 @@ def fetch_to_raw(
 
         if fmt not in ("raw", "luks") and CONF.force_raw_images:
             staged = "%s.converted" % path
-            dest_fmt = 'raw' if not src_encryption else 'luks'
+            dest_fmt = 'raw' if not dest_encryption else 'luks'
             LOG.debug("%s was %s, converting to %s", image_href, fmt, dest_fmt)
             with fileutils.remove_path_on_error(staged):
                 try:

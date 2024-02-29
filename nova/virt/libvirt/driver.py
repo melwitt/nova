@@ -11940,10 +11940,10 @@ class LibvirtDriver(driver.ComputeDriver):
             # creating at the time, but relies on the
             # compute_utils.disk_ops_semaphore for cache fetch mutual
             # exclusion, which is grabbed in images.fetch() (which is called
-            # by images.fetch_to_raw() below). So, by calling fetch_to_raw(),
+            # by images.fetch_to_flat() below). So, by calling fetch_to_flat(),
             # we are sharing the same locking for the cache fetch as the
             # rest of the code currently called only from spawn().
-            images.fetch_to_raw(context, image_id, path)
+            images.fetch_to_flat(context, image_id, path)
             return True
 
     def _get_disk_size_reserved_for_image_cache(self):

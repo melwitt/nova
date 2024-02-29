@@ -103,13 +103,13 @@ class QemuTestCase(test.NoDBTestCase):
                        side_effect=exception.ImageUnacceptable)
     @mock.patch.object(images, 'qemu_img_info')
     @mock.patch.object(images, 'fetch')
-    def test_fetch_to_raw_errors(self, convert_image, qemu_img_info, fetch):
+    def test_fetch_to_flat_errors(self, convert_image, qemu_img_info, fetch):
         qemu_img_info.backing_file = None
         qemu_img_info.file_format = 'qcow2'
         qemu_img_info.virtual_size = 20
         self.assertRaisesRegex(exception.ImageUnacceptable,
                                'Image href123 is unacceptable.*',
-                               images.fetch_to_raw,
+                               images.fetch_to_flat,
                                None, 'href123', '/no/path')
 
     @mock.patch.object(compute_utils, 'disk_ops_semaphore')
@@ -179,7 +179,7 @@ class QemuTestCase(test.NoDBTestCase):
         mock_info.return_value = jsonutils.dumps(info)
         with mock.patch('os.path.exists', return_value=True):
             e = self.assertRaises(exception.ImageUnacceptable,
-                                  images.fetch_to_raw, None, 'foo', 'anypath')
+                                  images.fetch_to_flat, None, 'foo', 'anypath')
             self.assertIn('Invalid VMDK create-type specified', str(e))
 
     @mock.patch('os.rename', new=mock.Mock())
@@ -191,14 +191,14 @@ class QemuTestCase(test.NoDBTestCase):
             self, mock_info, mock_fetch, mock_convert):
         dest_encryption = {'format': 'luks', 'secret': mock.sentinel.secret}
         info_before = {'format': 'qcow2'}
-        info_after = {'format': 'raw'}
+        info_after = {'format': 'luks'}
         mock_info.side_effect = [
             jsonutils.dumps(info_before), jsonutils.dumps(info_after)]
         with mock.patch('os.path.exists', return_value=True):
-            images.fetch_to_raw(
+            images.fetch_to_flat(
                 None, 'foo', 'anypath', dest_encryption=dest_encryption)
         mock_convert.assert_called_once_with(
-            'anypath.part', 'anypath.converted', 'qcow2', 'raw',
+            'anypath.part', 'anypath.converted', 'qcow2', 'luks',
             src_encryption=None, dest_encryption=dest_encryption)
 
     @mock.patch('os.rename', new=mock.Mock())
@@ -218,7 +218,7 @@ class QemuTestCase(test.NoDBTestCase):
         mock_info.side_effect = [
             jsonutils.dumps(info_before), jsonutils.dumps(info_after)]
         with mock.patch('os.path.exists', return_value=True):
-            images.fetch_to_raw(
+            images.fetch_to_flat(
                 None, 'foo', 'anypath', src_encryption=src_encryption,
                 dest_encryption=dest_encryption)
         mock_convert.assert_called_once_with(

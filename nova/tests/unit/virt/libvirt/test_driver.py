@@ -28183,7 +28183,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
     @mock.patch('os.path.isdir')
     @mock.patch('os.path.exists')
     @mock.patch('os.utime')
-    @mock.patch('nova.virt.images.fetch_to_raw')
+    @mock.patch('nova.virt.images.fetch_to_flat')
     def test_cache_image_uncached(self, mock_fetch, mock_utime, mock_exists,
                                   mock_isdir, mock_et, first_time=False):
         # NOTE(artom): This is not actually a path on the system, since we
@@ -28217,7 +28217,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
     @mock.patch('os.path.isdir')
     @mock.patch('os.path.exists')
     @mock.patch('nova.privsep.path.utime')
-    @mock.patch('nova.virt.images.fetch_to_raw')
+    @mock.patch('nova.virt.images.fetch_to_flat')
     def test_cache_image_existing(self, mock_fetch, mock_utime, mock_exists,
                                   mock_isdir, mock_et):
         # NOTE(artom): This is not actually a path on the system, since we
