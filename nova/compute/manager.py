@@ -934,7 +934,7 @@ class ComputeManager(manager.Manager):
 
         self._clean_instance_console_tokens(context, instance)
         self._delete_scheduler_instance_info(context, instance.uuid)
-        compute_utils.delete_ephemeral_encryption_secrets(
+        compute_utils.delete_bdms_encryption_secrets(
             context, instance.uuid, bdms)
 
     def _validate_pinning_configuration(self, instances):

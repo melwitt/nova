@@ -565,6 +565,18 @@ class Image(metaclass=abc.ABCMeta):
             }
             return encryption
 
+    @staticmethod
+    def _extract_context_from_kwargs(kwargs):
+        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
+        # the legacy ephemeral encryption implementation. It should likely
+        # be an arg but the required refactor isn't trivial.
+        try:
+            return kwargs['context']
+        except KeyError:
+            msg = f'Failed to extract RequestContext from kwargs: {kwargs}'
+            LOG.error(msg)
+            raise ValueError(_(msg))
+
 
 class Flat(Image):
     """The Flat backend uses either raw or qcow2 storage. It never uses
@@ -699,10 +711,7 @@ class Qcow2(Image):
                 target, 'qcow2', size, backing_file=base,
                 encryption=encryption)
 
-        # FIXME(lyarwood): Context is provided as a kwarg here thanks to
-        # the legacy ephemeral encryption implementation. It should likely
-        # be an arg but the required refactor isn't trivial.
-        context = kwargs.get('context')
+        context = Image._extract_context_from_kwargs(kwargs)
         # bdm_encryption contains the encryption attributes for the destination
         # image, if encryption was specified.
         bdm_encryption = self.get_encryption(context)

@@ -189,12 +189,9 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
             else:
                 disk.exists.return_value = True
 
-            # Default to no ephemeral encryption
-            if disk.disk_info_mapping is None:
-                disk.get_encryption.return_value = None
-            else:
-                disk.get_encryption.side_effect = functools.partial(
-                    imagebackend.Image.get_encryption, disk)
+            # Call through to Image.get_encryption()
+            disk.get_encryption.side_effect = functools.partial(
+                imagebackend.Image.get_encryption, disk)
 
             return disk
 

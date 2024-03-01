@@ -1446,7 +1446,7 @@ class _ComputeAPIUnitTestMixIn(object):
     @mock.patch('nova.network.neutron.API.deallocate_for_instance',
                 new=mock.Mock())
     @mock.patch('nova.objects.Instance.destroy', new=mock.Mock())
-    @mock.patch('nova.compute.utils.delete_ephemeral_encryption_secrets')
+    @mock.patch('nova.compute.utils.delete_bdms_encryption_secrets')
     def test_local_delete_with_ephemeral_encryption(self, mock_delete_secrets):
         instance = self._create_instance_obj()
         bdms = objects.BlockDeviceMappingList()
@@ -1455,7 +1455,7 @@ class _ComputeAPIUnitTestMixIn(object):
         mock_delete_secrets.assert_called_once_with(
             self.context, instance.uuid, bdms)
 
-    @mock.patch('nova.compute.utils.delete_ephemeral_encryption_secrets')
+    @mock.patch('nova.compute.utils.delete_bdms_encryption_secrets')
     @mock.patch('nova.objects.BlockDeviceMappingList.get_by_instance_uuid')
     def test_local_delete_cleanup_with_ephemeral_encryption(
             self, mock_get_bdms, mock_delete_secrets):
@@ -8670,7 +8670,7 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
         (True, False, True))
     @ddt.unpack
     def test_validate_image_ephemeral_encryption(
-            self, encryption,encryption_format, encryption_secret_uuid):
+            self, encryption, encryption_format, encryption_secret_uuid):
         image_properties = {}
         if encryption:
             image_properties['hw_ephemeral_encryption'] = True

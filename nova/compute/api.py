@@ -2425,7 +2425,7 @@ class API:
         if bdms is None:
             bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
                 context, instance_uuid)
-        compute_utils.delete_ephemeral_encryption_secrets(
+        compute_utils.delete_bdms_encryption_secrets(
             context, instance_uuid, bdms)
 
     def _attempt_delete_of_buildrequest(self, context, instance):
@@ -2734,7 +2734,7 @@ class API:
                 context, instance.uuid, force=True)
 
             # Clean up ephemeral encryption secrets if needed.
-            compute_utils.delete_ephemeral_encryption_secrets(
+            compute_utils.delete_bdms_encryption_secrets(
                 context, instance.uuid, bdms)
 
             cb(context, instance, bdms, local=True)

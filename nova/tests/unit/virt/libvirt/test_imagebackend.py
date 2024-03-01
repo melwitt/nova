@@ -580,13 +580,15 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                        mock.call(self.PATH)]
         image = self.image_class(self.INSTANCE, self.NAME)
 
-        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
+        image.create_image(
+            fn, self.TEMPLATE_PATH, self.SIZE, context=self.CONTEXT)
 
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_create.assert_called_once_with(
              self.PATH, 'qcow2', self.SIZE, backing_file=self.TEMPLATE_PATH,
              encryption=None)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, context=self.CONTEXT)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
         mock_utime.assert_called()
@@ -609,7 +611,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         image = self.image_class(self.INSTANCE, self.NAME)
 
         self.assertRaises(exception.FlavorDiskSmallerThanImage,
-                          image.create_image, fn, self.TEMPLATE_PATH, 1)
+                          image.create_image, fn, self.TEMPLATE_PATH, 1,
+                          context=self.CONTEXT)
         mock_get.assert_called_once_with(self.TEMPLATE_PATH)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)
@@ -683,7 +686,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                        mock.call(self.PATH)]
         image = self.image_class(self.INSTANCE, self.NAME)
 
-        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
+        image.create_image(
+            fn, self.TEMPLATE_PATH, self.SIZE, context=self.CONTEXT)
 
         mock_get.assert_called_once_with(self.PATH)
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
@@ -693,7 +697,8 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
             imgmodel.LocalFileImage(self.QCOW2_BASE,
                                     imgmodel.FORMAT_QCOW2), self.SIZE)
         mock_exist.assert_has_calls(exist_calls)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, context=self.CONTEXT)
         self.assertTrue(mock_sync.called)
         self.assertFalse(mock_create.called)
         mock_utime.assert_called()
@@ -720,10 +725,12 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
                        mock.call(self.PATH)]
         image = self.image_class(self.INSTANCE, self.NAME)
 
-        image.create_image(fn, self.TEMPLATE_PATH, self.SIZE)
+        image.create_image(
+            fn, self.TEMPLATE_PATH, self.SIZE, context=self.CONTEXT)
 
         mock_get.assert_called_once_with(self.PATH)
-        fn.assert_called_once_with(target=self.TEMPLATE_PATH)
+        fn.assert_called_once_with(
+            target=self.TEMPLATE_PATH, context=self.CONTEXT)
         mock_verify.assert_called_once_with(self.TEMPLATE_PATH, self.SIZE)
         mock_exist.assert_has_calls(exist_calls)
         self.assertTrue(mock_sync.called)

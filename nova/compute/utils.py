@@ -1606,13 +1606,15 @@ def delete_arqs_if_needed(context, instance, arq_uuids=None):
         cyclient.delete_arqs_by_uuid(arq_uuids)
 
 
-def delete_ephemeral_encryption_secrets(context, instance_uuid, bdms):
+def delete_bdms_encryption_secrets(context, instance_uuid, bdms):
     # TODO(melwitt): This will also include the backing file secret UUID when
     # support for encrypted backing files is added.
     keys = ['encryption_secret_uuid']
-    for bdm in bdms:
+    # Only consider local BDMs for ephemeral encryption at this time.
+    local_bdms = [bdm for bdm in bdms if bdm.is_local]
+    for local_bdm in local_bdms:
         for key in keys:
-            secret_uuid = getattr(bdm, key, None)
+            secret_uuid = getattr(local_bdm, key, None)
             if secret_uuid is not None:
                 try:
                     crypto.delete_encryption_secret(

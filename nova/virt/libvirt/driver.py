@@ -11451,7 +11451,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                          host=fallback_from_host,
                                          receive=True)
             image.cache(fetch_func=copy_from_host, size=size,
-                        filename=filename)
+                        filename=filename, context=context)
 
         # NOTE(lyarwood): If the instance vm_state is shelved offloaded then we
         # must be unshelving for _try_fetch_image_cache to be called.
@@ -11535,14 +11535,16 @@ class LibvirtDriver(driver.ComputeDriver):
                         os_type=instance.os_type,
                         filename=cache_name,
                         size=info['virt_disk_size'],
-                        ephemeral_size=info['virt_disk_size'] / units.Gi)
+                        ephemeral_size=info['virt_disk_size'] / units.Gi,
+                        context=context)
                 elif cache_name.startswith('swap'):
                     flavor = instance.get_flavor()
                     swap_mb = flavor.swap
                     disk.cache(fetch_func=self._create_swap,
                                 filename="swap_%s" % swap_mb,
                                 size=swap_mb * units.Mi,
-                                swap_mb=swap_mb)
+                                swap_mb=swap_mb,
+                                context=context)
                 else:
                     self._try_fetch_image_cache(disk,
                                                 libvirt_utils.fetch_image,

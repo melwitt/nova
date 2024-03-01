@@ -14901,7 +14901,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             create_ephemeral_mock.assert_called_once_with(
                 ephemeral_size=1, fs_label='ephemeral_foo',
-                os_type='linux', target=ephemeral_backing)
+                os_type='linux', target=ephemeral_backing,
+                context=self.context)
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
