@@ -25879,6 +25879,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
             'properties': {
                 # This is the secret UUID for the encrypted rescue image.
                 'hw_ephemeral_encryption_secret_uuid': uuids.img_secret,
+                'hw_ephemeral_encryption_format': 'luks',
             }
         }
         if disk_encrypted:
@@ -26291,6 +26292,7 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
                 'hw_rescue_bus': 'virtio',
                 # This is the secret UUID for the encrypted rescue image.
                 'hw_ephemeral_encryption_secret_uuid': uuids.img_secret,
+                'hw_ephemeral_encryption_format': 'luks',
             }
         }
         if disk_encrypted:

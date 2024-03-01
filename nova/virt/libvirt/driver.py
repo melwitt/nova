@@ -4549,6 +4549,11 @@ class LibvirtDriver(driver.ComputeDriver):
             # prefix of 'rescue_'.
             instance.system_metadata.update(
                 {'rescue_image_' + property_name: img_secret_uuid})
+            property_name = 'hw_ephemeral_encryption_format'
+            img_encryption_format = active_image_meta.properties.get(
+                property_name)
+            instance.system_metadata.update(
+                {'rescue_image_' + property_name: img_encryption_format})
             instance.save()
 
         # If ephemeral encryption was requested, add the encryption attributes
@@ -11707,13 +11712,12 @@ class LibvirtDriver(driver.ComputeDriver):
         # refer to the base_image_ref during a rebase.
         image_meta = objects.ImageMeta.from_image_ref(
             context, self._image_api, instance.image_ref)
-        secret_uuid = image_meta.properties.get(
-            'hw_ephemeral_encryption_secret_uuid')
-        rescue_image_secret_uuid = instance.system_metadata.get(
-            'rescue_image_hw_ephemeral_encryption_secret_uuid')
         # If this is a rescue, we want to fetch the rescue image if one was
         # specified.
-        secret_uuid = rescue_image_secret_uuid or secret_uuid
+        secret_uuid = (
+            instance.system_metadata.get(
+                'rescue_image_hw_ephemeral_encryption_secret_uuid') or
+            image_meta.properties.get('hw_ephemeral_encryption_secret_uuid'))
 
         image_encryption = None
         if secret_uuid:
@@ -11726,8 +11730,10 @@ class LibvirtDriver(driver.ComputeDriver):
                     f'Failed to find encryption secret {secret_uuid} in the '
                     f'key manager for image {image_id}')
                 raise exception.EphemeralEncryptionSecretNotFound(msg)
-            encryption_format = image_meta.properties.get(
-                'hw_ephemeral_encryption_format')
+            encryption_format = (
+                instance.system_metadata.get(
+                    'rescue_image_hw_ephemeral_encryption_format') or
+                image_meta.properties.get('hw_ephemeral_encryption_format'))
             if not encryption_format:
                 msg = _(
                     'If hw_ephemeral_encryption_secret_uuid is set in '
