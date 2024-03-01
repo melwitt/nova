@@ -11386,9 +11386,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         return migrate_data
 
-    def _try_fetch_image_cache(self, image, fetch_func, context, filename,
-                               image_id, instance, size,
-                               fallback_from_host=None):
+    def _get_ephemeral_encryption_from_image(
+            self, context, image_id, instance):
         # If the image properties contained an ephemeral encryption secret UUID
         # for the encrypted image, we retrieve it from the image. We don't use
         # the image metadata from the instance system metadata because that
@@ -11417,10 +11416,24 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise exception.EphemeralEncryptionSecretNotFound(msg)
             encryption_format = image_meta.properties.get(
                 'hw_ephemeral_encryption_format')
+            if not encryption_format:
+                msg = _(
+                    'If hw_ephemeral_encryption_secret_uuid is set in '
+                    'image properties, hw_ephemeral_encryption_format must '
+                    'also be set')
+                raise exception.ImageUnacceptable(
+                    reason=msg, image_id=instance.image_ref)
             image_encryption = {
                 'secret': secret,
                 'format': encryption_format,
             }
+        return image_encryption
+
+    def _try_fetch_image_cache(self, image, fetch_func, context, filename,
+                               image_id, instance, size,
+                               fallback_from_host=None):
+        image_encryption = self._get_ephemeral_encryption_from_image(
+            context, image_id, instance)
         try:
             image.cache(fetch_func=fetch_func,
                         context=context,

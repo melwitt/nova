@@ -31044,3 +31044,19 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             drvr._try_fetch_image_cache, mock_imagebackend,
             mock.sentinel.fetch, self.context, mock.sentinel.filename,
             uuids.image_id, self.instance, mock.sentinel.size)
+
+    def test_ephemeral_encryption_fetch_image_cache_format_missing(self):
+        # Simulate an instance to be created from an encrypted source image but
+        # the encryption format is not present in the image properties.
+        self.mock_get_image_meta_by_ref.return_value = (
+            objects.ImageMeta.from_dict({'properties':
+                {'hw_ephemeral_encryption_secret_uuid': uuids.secret}}))
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        mock_imagebackend = mock.Mock(spec=imagebackend.Image)
+
+        self.assertRaises(
+            exception.ImageUnacceptable, drvr._try_fetch_image_cache,
+            mock_imagebackend, mock.sentinel.fetch, self.context,
+            mock.sentinel.filename, uuids.image_id, self.instance,
+            mock.sentinel.size)
