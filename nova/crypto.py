@@ -168,6 +168,31 @@ def _create_x509_openssl_config(conffile: str, upn: str):
         file.write(content % upn)
 
 
+def create_encryption_secret(
+    context: nova_context.RequestContext,
+    secret: ty.Union[str, bytes],
+    name: str,
+    key_mgr: ty.Optional['key_manager.API'] = None,
+) -> str:
+    """Create a secret in the key manager service.
+
+    :param context: The Nova auth context
+    :param secret: The secret data as a string or as bytes
+    :param name: A name/description for the secret
+    :returns: The UUID of the secret created in the key manager
+    """
+    if key_mgr is None:
+        key_mgr = _get_key_manager()
+    # Castellan ManagedObject
+    cmo = passphrase.Passphrase(secret, name=name)
+    try:
+        return key_mgr.store(context, cmo)
+    except castellan_exception.KeyManagerError as e:
+        msg = f'Creation of secret with name "{name}" failed: {str(e)}'
+        LOG.error(msg)
+        raise exception.EncryptionSecretCreateFailed(name=name, error=str(e))
+
+
 def ensure_vtpm_secret(
     context: nova_context.RequestContext,
     instance: 'objects.Instance',
@@ -210,10 +235,9 @@ def ensure_vtpm_secret(
     # If we get here, the instance has no vtpm_secret_uuid. Create a new one
     # and register it with the key manager.
     secret = base64.b64encode(os.urandom(_VTPM_SECRET_BYTE_LENGTH))
-    # Castellan ManagedObject
-    cmo = passphrase.Passphrase(
-        secret, name="vTPM secret for instance %s" % instance.uuid)
-    secret_uuid = key_mgr.store(context, cmo)
+    secret_uuid = create_encryption_secret(
+        context, secret, "vTPM secret for instance %s" % instance.uuid,
+        key_mgr)
     LOG.debug("Created vTPM secret with UUID %s",
               secret_uuid, instance=instance)
 
@@ -258,7 +282,7 @@ def delete_vtpm_secret(
     instance.save()
 
 
-def create_encryption_secret(
+def create_ephemeral_encryption_secret(
     context: nova_context.RequestContext,
     instance: 'objects.Instance',
     driver_bdm: 'driver_block_device.DriverBlockDevice',
@@ -270,13 +294,9 @@ def create_encryption_secret(
     if for_detail is None:
         for_detail = f"instance {instance.uuid} BDM {driver_bdm['uuid']}"
     secret_name = f'Ephemeral encryption secret for {for_detail}'
-    cmo = passphrase.Passphrase(secret, name=secret_name)
-    key_mgr = _get_key_manager()
-    secret_uuid = key_mgr.store(context, cmo)
+    secret_uuid = create_encryption_secret(context, secret, secret_name)
     LOG.debug(
-        f'Created "{secret_name}" with UUID {secret_uuid}',
-        instance=instance
-    )
+        f'Created "{secret_name}" with UUID {secret_uuid}', instance=instance)
     return secret_uuid, secret
 
 
