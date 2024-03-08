@@ -332,6 +332,22 @@ def check_ephemeral_encryption_key_access(ctxt, flavor, image_meta):
             crypto.delete_encryption_secret(ctxt, 'N/A', secret_uuid)
 
 
+def reject_ephemeral_encryption_instances_without_key_access():
+    """Reject requests to decorated funcs if user is missing key manager access
+
+    Raises EncryptionSecretCreateFailed if the check fails.
+    """
+
+    def outer(f):
+        @functools.wraps(f)
+        def inner(self, context, instance, *args, **kw):
+            check_ephemeral_encryption_key_access(
+                context, instance.flavor, instance.image_meta)
+            return f(self, context, instance, *args, **kw)
+        return inner
+    return outer
+
+
 def load_cells():
     global CELLS
     if not CELLS:
