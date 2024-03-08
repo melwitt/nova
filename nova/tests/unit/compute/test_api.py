@@ -327,7 +327,7 @@ class _ComputeAPIUnitTestMixIn(object):
             validate_and_build_base_options
         ):
             self.assertRaises(exception.PortLimitExceeded,
-                self.compute_api.create, self.context, 'fake_flavor',
+                self.compute_api.create, self.context, objects.Flavor(),
                 'image_id', min_count=min_count, max_count=max_count)
 
     def test_max_net_count_zero(self):
@@ -3912,7 +3912,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
     def _setup_fake_image_with_disabled_disk_config(self):
         self.fake_image = {
-            'id': 1,
+            'id': uuids.image1,
             'name': 'fake_name',
             'status': 'active',
             'properties': {"auto_disk_config": "Disabled"},
@@ -3952,7 +3952,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
         self.assertRaises(exception.AutoDiskConfigDisabledByImage,
             self.compute_api.create, self.context,
-            "fake_flavor", image_id, auto_disk_config=True)
+            objects.Flavor(), image_id, auto_disk_config=True)
 
     def test_rebuild_with_disabled_auto_disk_config_fails(self):
         fake_inst = self._create_instance_with_disabled_disk_config(
