@@ -243,6 +243,10 @@ VGPU_RESOURCE_SEMAPHORE = 'vgpu_resources'
 MIN_MDEV_LIVEMIG_LIBVIRT_VERSION = (8, 6, 0)
 MIN_MDEV_LIVEMIG_QEMU_VERSION = (8, 1, 0)
 
+# Minimum version supporting persistent mdevs.
+# https://libvirt.org/drvnodedev.html#mediated-devices-mdevs
+MIN_LIBVIRT_PERSISTENT_MDEV = (7, 3, 0)
+
 LIBVIRT_PERF_EVENT_PREFIX = 'VIR_PERF_PARAM_'
 
 # Maxphysaddr minimal support version.
@@ -837,10 +841,15 @@ class LibvirtDriver(driver.ComputeDriver):
         # wrongly modified.
         libvirt_cpu.power_down_all_dedicated_cpus()
 
-        # NOTE(melwitt): We shouldn't need to do this because we're setting
-        # autostart=True on the devices -- but if that fails for whatever
-        # reason and any devices become inactive, we can start them here.
-        self._start_assigned_mediated_devices_if_needed()
+        if not self._host.has_min_version(MIN_LIBVIRT_PERSISTENT_MDEV):
+            # TODO(sbauza): Remove this code once mediated devices are
+            # persisted across reboots.
+            self._recreate_assigned_mediated_devices()
+        else:
+            # NOTE(melwitt): We shouldn't need to do this because we're setting
+            # autostart=True on the devices -- but if that fails for whatever
+            # reason and any devices become inactive, we can start them here.
+            self._start_assigned_mediated_devices_if_needed()
 
         self._check_cpu_compatibility()
 
@@ -1090,8 +1099,9 @@ class LibvirtDriver(driver.ComputeDriver):
         LOG.debug('Enabling emulated TPM support')
 
     def _start_assigned_mediated_devices_if_needed(self):
-        # Get a list of inactive mdevs so we can start them and make them
-        # active.
+        # Get a list of inactive mdevs assigned to instances so we can start
+        # them and make them active.
+        assigned_mdevs = self._get_all_assigned_mediated_devices()
         flags = (
             libvirt.VIR_CONNECT_LIST_NODE_DEVICES_CAP_MDEV |
             libvirt.VIR_CONNECT_LIST_NODE_DEVICES_INACTIVE)
@@ -1099,8 +1109,13 @@ class LibvirtDriver(driver.ComputeDriver):
         names = [mdev.name() for mdev in inactive_mdevs]
         LOG.info(f'Found inactive mdevs: {names}')
         for mdev in inactive_mdevs:
-            LOG.info(f'Starting inactive mdev: {mdev.name()}')
-            self._host.device_start(mdev)
+            xmlstr = mdev.XMLDesc(0)
+            cfgdev = vconfig.LibvirtConfigNodeDevice()
+            cfgdev.parse_str(xmlstr)
+            mdev_uuid = self._get_mediated_device_uuid(cfgdev)
+            if mdev_uuid in assigned_mdevs:
+                LOG.info(f'Starting inactive mdev: {mdev.name()}')
+                self._host.device_start(mdev)
 
     @staticmethod
     def _is_existing_mdev(uuid):
@@ -1111,6 +1126,35 @@ class LibvirtDriver(driver.ComputeDriver):
         # libvirt API.
         # See https://bugzilla.redhat.com/show_bug.cgi?id=1376907 for ref.
         return os.path.exists('/sys/bus/mdev/devices/{0}'.format(uuid))
+
+    def _recreate_assigned_mediated_devices(self):
+        """Recreate assigned mdevs that could have disappeared if we reboot
+        the host.
+        """
+        # NOTE(sbauza): This method just calls sysfs to recreate mediated
+        # devices by looking up existing guest XMLs and doesn't use
+        # the Placement API so it works with or without a vGPU reshape.
+        mdevs = self._get_all_assigned_mediated_devices()
+        for (mdev_uuid, instance_uuid) in mdevs.items():
+            if not self._is_existing_mdev(mdev_uuid):
+                dev_name = libvirt_utils.mdev_uuid2name(mdev_uuid)
+                dev_info = self._get_mediated_device_information(dev_name)
+                parent = dev_info['parent']
+                parent_type = self._get_vgpu_type_per_pgpu(parent)
+                if dev_info['type'] != parent_type:
+                    # NOTE(sbauza): The mdev was created by using a different
+                    # vGPU type. We can't recreate the mdev until the operator
+                    # modifies the configuration.
+                    parent = "{}:{}:{}.{}".format(*parent[4:].split('_'))
+                    msg = ("The instance UUID %(inst)s uses a mediated device "
+                           "type %(type)s that is no longer supported by the "
+                           "parent PCI device, %(parent)s. Please correct "
+                           "the configuration accordingly." %
+                           {'inst': instance_uuid,
+                            'parent': parent,
+                            'type': dev_info['type']})
+                    raise exception.InvalidLibvirtMdevConfig(reason=msg)
+                self._create_new_mediated_device(parent, uuid=mdev_uuid)
 
     def _check_file_backed_memory_support(self):
         if not CONF.libvirt.file_backed_memory:
@@ -8573,14 +8617,7 @@ class LibvirtDriver(driver.ComputeDriver):
         xmlstr = virtdev.XMLDesc(0)
         cfgdev = vconfig.LibvirtConfigNodeDevice()
         cfgdev.parse_str(xmlstr)
-        # Starting with Libvirt 7.3, the uuid information is available in the
-        # node device information. If its there, use that. Otherwise,
-        # fall back to the previous behavior of parsing the uuid from the
-        # devname.
-        if cfgdev.mdev_information.uuid:
-            mdev_uuid = cfgdev.mdev_information.uuid
-        else:
-            mdev_uuid = libvirt_utils.mdev_name2uuid(cfgdev.name)
+        mdev_uuid = self._get_mediated_device_uuid(cfgdev)
 
         device = {
             "dev_id": cfgdev.name,
@@ -8591,6 +8628,18 @@ class LibvirtDriver(driver.ComputeDriver):
             "iommu_group": cfgdev.mdev_information.iommu_group,
         }
         return device
+
+    @staticmethod
+    def _get_mediated_device_uuid(cfgdev):
+        # Starting with Libvirt 7.3, the uuid information is available in the
+        # node device information. If its there, use that. Otherwise,
+        # fall back to the previous behavior of parsing the uuid from the
+        # devname.
+        if cfgdev.mdev_information.uuid:
+            mdev_uuid = cfgdev.mdev_information.uuid
+        else:
+            mdev_uuid = libvirt_utils.mdev_name2uuid(cfgdev.name)
+        return mdev_uuid
 
     def _get_mediated_devices(self, types=None):
         """Get host mediated devices.
@@ -8766,8 +8815,12 @@ class LibvirtDriver(driver.ComputeDriver):
                 # We need the PCI address, not the libvirt name
                 # The libvirt name is like 'pci_0000_84_00_0'
                 pci_addr = "{}:{}:{}.{}".format(*dev_name[4:].split('_'))
-                chosen_mdev = self._create_mdev(
-                    dev_name, dev_supported_type, uuid=uuid)
+                if not self._host.has_min_version(MIN_LIBVIRT_PERSISTENT_MDEV):
+                    chosen_mdev = nova.privsep.libvirt.create_mdev(
+                        pci_addr, dev_supported_type, uuid=uuid)
+                else:
+                    chosen_mdev = self._create_mdev(
+                        dev_name, dev_supported_type, uuid=uuid)
                 LOG.info('Created mdev: %s on pGPU: %s.',
                          chosen_mdev, pci_addr)
                 return chosen_mdev

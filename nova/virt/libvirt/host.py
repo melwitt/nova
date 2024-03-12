@@ -1670,7 +1670,7 @@ class Host(object):
         """Lookup devices.
 
         :param flags: a bitmask of flags to filter the returned devices.
-        :returns: a list of virNodeDevice xml strings.
+        :returns: a list of virNodeDevice instances.
         """
         try:
             return self.get_connection().listAllDevices(flags) or []
