@@ -849,7 +849,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # NOTE(melwitt): We shouldn't need to do this because we're setting
             # autostart=True on the devices -- but if that fails for whatever
             # reason and any devices become inactive, we can start them here.
-            self._start_assigned_mediated_devices_if_needed()
+            self._start_inactive_mediated_devices()
 
         self._check_cpu_compatibility()
 
@@ -1098,10 +1098,14 @@ class LibvirtDriver(driver.ComputeDriver):
 
         LOG.debug('Enabling emulated TPM support')
 
-    def _start_assigned_mediated_devices_if_needed(self):
-        # Get a list of inactive mdevs assigned to instances so we can start
-        # them and make them active.
-        assigned_mdevs = self._get_all_assigned_mediated_devices()
+    def _start_inactive_mediated_devices(self):
+        # Get a list of inactive mdevs so we can start them and make them
+        # active. We need to start inactive mdevs even if they are not
+        # currently assigned to instances because attempting to use an inactive
+        # mdev when booting a new instance, for example, will raise an error:
+        # libvirt.libvirtError: device not found: mediated device '<uuid>' not
+        # found.
+        # An inactive mdev is an mdev that is defined but not created.
         flags = (
             libvirt.VIR_CONNECT_LIST_NODE_DEVICES_CAP_MDEV |
             libvirt.VIR_CONNECT_LIST_NODE_DEVICES_INACTIVE)
@@ -1109,13 +1113,8 @@ class LibvirtDriver(driver.ComputeDriver):
         names = [mdev.name() for mdev in inactive_mdevs]
         LOG.info(f'Found inactive mdevs: {names}')
         for mdev in inactive_mdevs:
-            xmlstr = mdev.XMLDesc(0)
-            cfgdev = vconfig.LibvirtConfigNodeDevice()
-            cfgdev.parse_str(xmlstr)
-            mdev_uuid = self._get_mediated_device_uuid(cfgdev)
-            if mdev_uuid in assigned_mdevs:
-                LOG.info(f'Starting inactive mdev: {mdev.name()}')
-                self._host.device_start(mdev)
+            LOG.info(f'Starting inactive mdev: {mdev.name()}')
+            self._host.device_start(mdev)
 
     @staticmethod
     def _is_existing_mdev(uuid):
@@ -8617,7 +8616,14 @@ class LibvirtDriver(driver.ComputeDriver):
         xmlstr = virtdev.XMLDesc(0)
         cfgdev = vconfig.LibvirtConfigNodeDevice()
         cfgdev.parse_str(xmlstr)
-        mdev_uuid = self._get_mediated_device_uuid(cfgdev)
+        # Starting with Libvirt 7.3, the uuid information is available in the
+        # node device information. If its there, use that. Otherwise,
+        # fall back to the previous behavior of parsing the uuid from the
+        # devname.
+        if cfgdev.mdev_information.uuid:
+            mdev_uuid = cfgdev.mdev_information.uuid
+        else:
+            mdev_uuid = libvirt_utils.mdev_name2uuid(cfgdev.name)
 
         device = {
             "dev_id": cfgdev.name,
@@ -8628,18 +8634,6 @@ class LibvirtDriver(driver.ComputeDriver):
             "iommu_group": cfgdev.mdev_information.iommu_group,
         }
         return device
-
-    @staticmethod
-    def _get_mediated_device_uuid(cfgdev):
-        # Starting with Libvirt 7.3, the uuid information is available in the
-        # node device information. If its there, use that. Otherwise,
-        # fall back to the previous behavior of parsing the uuid from the
-        # devname.
-        if cfgdev.mdev_information.uuid:
-            mdev_uuid = cfgdev.mdev_information.uuid
-        else:
-            mdev_uuid = libvirt_utils.mdev_name2uuid(cfgdev.name)
-        return mdev_uuid
 
     def _get_mediated_devices(self, types=None):
         """Get host mediated devices.

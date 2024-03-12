@@ -27603,26 +27603,12 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
     @mock.patch.object(
         libvirt_driver.LibvirtDriver,
         '_register_all_undefined_instance_details', new=mock.Mock())
-    @mock.patch.object(libvirt_driver.LibvirtDriver,
-                       '_get_all_assigned_mediated_devices')
-    @mock.patch.object(
-        vconfig.LibvirtConfigNodeDevice, 'parse_str', new=mock.Mock())
-    @mock.patch.object(libvirt_driver.LibvirtDriver,
-                       '_get_mediated_device_uuid')
-    def test_start_assigned_mediated_devices_on_init_host(
-            self, mock_get_mdev_uuid, mock_get_all_assigned_mdevs):
-        mock_get_all_assigned_mdevs.return_value = {
-            uuids.mdev1: uuids.inst1,
-            uuids.mdev2: uuids.inst2,
-        }
+    def test_start_inactive_mediated_devices_on_init_host(self):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
-        drvr._host = mock.Mock()
         device1 = mock.MagicMock()
         device2 = mock.MagicMock()
-        device3 = mock.MagicMock()
-        drvr._host.list_all_devices.return_value = [device1, device2, device3]
-        mock_get_mdev_uuid.side_effect = [
-            uuids.mdev1, uuids.mdev2, uuids.mdev3]
+        drvr._host = mock.Mock()
+        drvr._host.list_all_devices.return_value = [device1, device2]
 
         drvr.init_host(host='foo')
 
