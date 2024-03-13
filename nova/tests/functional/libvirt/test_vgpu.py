@@ -105,7 +105,6 @@ class VGPUTestBase(base.ServersTestBase):
         return "{}:{}:{}.{}".format(*dev_name[4:].split('_'))
 
     def _create_mdev(self, physical_device, mdev_type, uuid=None):
-        print('called old')
         # We need to fake the newly created sysfs object by adding a new
         # FakeMdevDevice in the existing persisted Connection object so
         # when asking to get the existing mdevs, we would see it.
@@ -124,7 +123,6 @@ class VGPUTestBase(base.ServersTestBase):
         return uuid
 
     def _create_mdev_7_3(self, dev_name, mdev_type, uuid=None):
-        print('called new')
         # We need to fake the newly created sysfs object by adding a new
         # FakeMdevDevice in the existing persisted Connection object so
         # when asking to get the existing mdevs, we would see it.
@@ -778,3 +776,10 @@ class DifferentMdevClassesTests(VGPUTestBase):
                                expected_rc='CUSTOM_NOTVGPU')
         self.assert_mdev_usage(self.compute2, expected_amount=1,
                                expected_rc='CUSTOM_NOTVGPU')
+
+
+class VGPUTestsLibvirt7_3(VGPUTests):
+
+    # Minimum version supporting persistent mdevs is 7.3.0.
+    # https://libvirt.org/drvnodedev.html#mediated-devices-mdevs
+    FAKE_LIBVIRT_VERSION = 7003000

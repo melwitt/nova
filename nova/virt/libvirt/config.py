@@ -3541,7 +3541,7 @@ class LibvirtConfigNodeDeviceMdevInformation(LibvirtConfigObject):
             dev.append(self._text_node('uuid', self.uuid))
         if self.iommu_group:
             iommu_group = self._new_node('iommuGroup')
-            iommu_group.set('number', self.iommu_group)
+            iommu_group.set('number', str(self.iommu_group))
             dev.append(iommu_group)
         return dev
 

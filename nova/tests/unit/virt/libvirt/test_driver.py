@@ -27596,6 +27596,45 @@ class LibvirtDriverTestCase(test.NoDBTestCase, TraitsComparisonMixin):
         self.assertRaises(exception.InvalidLibvirtMdevConfig,
                           drvr.init_host, host='foo')
 
+    @mock.patch('oslo_utils.uuidutils.generate_uuid')
+    def test_create_mdev(self, mock_generate_uuid, uuid=None, drvr=None):
+        if drvr is None:
+            drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+            drvr._host = mock.Mock()
+
+        r = drvr._create_mdev(
+            mock.sentinel.dev_name, mock.sentinel.mdev_type, uuid=uuid)
+
+        drvr._host.device_create.assert_called_once()
+        dev_conf = drvr._host.device_create.call_args.args[0]
+        self.assertIsInstance(dev_conf, vconfig.LibvirtConfigNodeDevice)
+        self.assertEqual(mock.sentinel.dev_name, dev_conf.parent)
+        self.assertEqual(
+            mock.sentinel.mdev_type, dev_conf.mdev_information.type)
+        expected_uuid = uuid or mock_generate_uuid.return_value
+        self.assertEqual(expected_uuid, dev_conf.mdev_information.uuid)
+        drvr._host.device_define.assert_called_once_with(dev_conf)
+        drvr._host.device_set_autostart.assert_called_once_with(
+            drvr._host.device_define.return_value, autostart=True)
+        self.assertEqual(expected_uuid, r)
+
+    def test_create_mdev_with_uuid(self):
+        self.test_create_mdev(uuid=uuids.mdev)
+
+    @mock.patch('nova.virt.libvirt.driver.LOG.debug')
+    def test_create_mdev_autostart_error(self, mock_log_debug):
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), True)
+        drvr._host = mock.Mock()
+        drvr._host.device_set_autostart.side_effect = test.TestingException(
+            'error')
+
+        self.test_create_mdev(uuid=uuids.mdev, drvr=drvr)
+
+        mock_log_debug.assert_called_once_with(
+            'Failed to set autostart to True for mdev '
+            f'{drvr._host.device_define.return_value.name.return_value} with '
+            f'UUID {uuids.mdev}: error.')
+
     @mock.patch.object(
         fakelibvirt.Connection, 'getLibVersion',
         new=mock.Mock(return_value=versionutils.convert_version_to_int(

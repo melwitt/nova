@@ -8774,9 +8774,11 @@ class LibvirtDriver(driver.ComputeDriver):
         # host reboot.
         try:
             self._host.device_set_autostart(mdev_dev, autostart=True)
-        except exception.InternalError as e:
-            LOG.info(
-                f'Failed to set autostart to True for mdev '
+        except Exception as e:
+            # Autostart appears to be available starting in 7.8.0
+            # https://github.com/libvirt/libvirt/commit/c6607a25b93bd6b0188405785d6608fdf71c8e0a
+            LOG.debug(
+                'Failed to set autostart to True for mdev '
                 f'{mdev_dev.name()} with UUID {uuid}: {str(e)}.')
         return uuid
 
