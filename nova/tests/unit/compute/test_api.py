@@ -7506,6 +7506,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
 # TODO(stephenfin): The separation of the mixin is a hangover from cells v1
 # days and should be removed
+@ddt.ddt
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
     def setUp(self):
         super(ComputeAPIUnitTestCase, self).setUp()
@@ -8717,3 +8718,16 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
         self.assertRaises(
             exception.ServiceUnavailable,
             self.compute_api.detach_volume, self.context, instance, None)
+
+    def test_validate_image_ephemeral_encryption(self):
+        # Encryption secret UUID without format should fail.
+        image_properties = {
+            'hw_ephemeral_encryption_secret_uuid': uuids.secret}
+        self.assertRaises(
+            exception.ImageUnacceptable,
+            self.compute_api._validate_image_ephemeral_encryption,
+            image_properties, {'id': uuids.image})
+        # Adding format should succeed.
+        image_properties['hw_ephemeral_encryption_format'] = 'luks'
+        self.compute_api._validate_image_ephemeral_encryption(
+            image_properties, {'id': uuids.image})
