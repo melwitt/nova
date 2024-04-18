@@ -755,6 +755,28 @@ class API:
                                               reason=reason)
 
     @staticmethod
+    def _validate_image_ephemeral_encryption(image_properties, image):
+        # If hw_ephemeral_encryption_secret_uuid is set, require that
+        # hw_ephemeral_encryption_format also be set.  We want to be able to
+        # assume we know the format explicitly if a secret UUID is being
+        # provided.
+        format_value = image_properties.get('hw_ephemeral_encryption_format')
+        secret_uuid_value = image_properties.get(
+            'hw_ephemeral_encryption_secret_uuid')
+        encrypted_image = secret_uuid_value or format_value
+        if encrypted_image and not all([secret_uuid_value, format_value]):
+            reason = _(
+                'Both hw_ephemeral_encryption_secret_uuid and '
+                'hw_ephemeral_encryption_format must be set')
+            raise exception.ImageUnacceptable(
+                image_id=image.get('id', ''), reason=reason)
+        # If the image is encrypted, the image size reported by glance
+        # could be larger than the disk size requested in the flavor
+        # due to overhead such as the encryption header.
+        # Return overhead based on whether there is encryption.
+        return 0 if not encrypted_image else 1 * units.Gi
+
+    @staticmethod
     def _validate_flavor_image_nostatus(
         context, image, flavor, root_bdm, validate_numa=True,
         validate_pci=False,
@@ -853,6 +875,9 @@ class API:
             # since libvirt interpreted the value differently than other
             # drivers. A value of 0 means don't check size.
             if dest_size != 0:
+                API._validate_image_ephemeral_encryption(
+                    image_properties, image)
+
                 if image_size > dest_size:
                     raise exception.FlavorDiskSmallerThanImage(
                         flavor_size=dest_size, image_size=image_size)
