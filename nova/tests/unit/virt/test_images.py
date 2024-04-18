@@ -103,14 +103,28 @@ class QemuTestCase(test.NoDBTestCase):
                        side_effect=exception.ImageUnacceptable)
     @mock.patch.object(images, 'qemu_img_info')
     @mock.patch.object(images, 'fetch')
-    def test_fetch_to_raw_errors(self, convert_image, qemu_img_info, fetch):
+    def test_fetch_to_flat_errors(self, convert_image, qemu_img_info, fetch):
         qemu_img_info.backing_file = None
         qemu_img_info.file_format = 'qcow2'
         qemu_img_info.virtual_size = 20
         self.assertRaisesRegex(exception.ImageUnacceptable,
                                'Image href123 is unacceptable.*',
-                               images.fetch_to_raw,
+                               images.fetch_to_flat,
                                None, 'href123', '/no/path')
+
+    @mock.patch('os.unlink', new=mock.Mock())
+    @mock.patch.object(images, 'convert_image', new=mock.Mock())
+    @mock.patch.object(images, 'qemu_img_info')
+    @mock.patch.object(images, 'fetch', new=mock.Mock())
+    def test_fetch_to_flat_error_after_convert(self, mock_qemu_img_info):
+        mock_qemu_img_info.side_effect = [
+            mock.Mock(file_format='qcow2', backing_file=None),
+            mock.Mock(file_format='qcow2'),
+        ]
+        self.assertRaisesRegex(
+            exception.ImageUnacceptable,
+            'Converted to raw, but format is now qcow2', images.fetch_to_flat,
+            None, 'href123', '/some/path')
 
     @mock.patch.object(compute_utils, 'disk_ops_semaphore')
     @mock.patch('nova.privsep.utils.supports_direct_io', return_value=True)
@@ -179,5 +193,46 @@ class QemuTestCase(test.NoDBTestCase):
         mock_info.return_value = jsonutils.dumps(info)
         with mock.patch('os.path.exists', return_value=True):
             e = self.assertRaises(exception.ImageUnacceptable,
-                                  images.fetch_to_raw, None, 'foo', 'anypath')
+                                  images.fetch_to_flat, None, 'foo', 'anypath')
             self.assertIn('Invalid VMDK create-type specified', str(e))
+
+    @mock.patch('os.rename', new=mock.Mock())
+    @mock.patch('os.unlink', new=mock.Mock())
+    @mock.patch.object(images, 'convert_image')
+    @mock.patch.object(images, 'fetch')
+    @mock.patch('nova.privsep.qemu.unprivileged_qemu_img_info')
+    def test_fetch_ephemeral_unencrypted_source_qcow2(
+            self, mock_info, mock_fetch, mock_convert):
+        info_before = {'format': 'qcow2'}
+        info_after = {'format': 'raw'}
+        mock_info.side_effect = [
+            jsonutils.dumps(info_before), jsonutils.dumps(info_after)]
+        with mock.patch('os.path.exists', return_value=True):
+            images.fetch_to_flat(None, 'foo', 'anypath')
+        mock_convert.assert_called_once_with(
+            'anypath.part', 'anypath.converted', 'qcow2', 'raw',
+            src_encryption=None, dest_encryption=None)
+
+    @mock.patch('os.rename', new=mock.Mock())
+    @mock.patch('os.unlink', new=mock.Mock())
+    @mock.patch.object(images, 'convert_image')
+    @mock.patch.object(images, 'fetch')
+    @mock.patch('nova.privsep.qemu.unprivileged_qemu_img_info')
+    def test_fetch_ephemeral_encrypted_source_qcow2(
+            self, mock_info, mock_fetch, mock_convert):
+        src_encryption = {'format': 'luks', 'secret': mock.sentinel.src_secret}
+        dest_encryption = {
+            'format': 'luks',
+            'secret': mock.sentinel.dest_secret
+        }
+        info_before = {'format': 'qcow2'}
+        info_after = {'format': 'luks'}
+        mock_info.side_effect = [
+            jsonutils.dumps(info_before), jsonutils.dumps(info_after)]
+        with mock.patch('os.path.exists', return_value=True):
+            images.fetch_to_flat(
+                None, 'foo', 'anypath', src_encryption=src_encryption,
+                dest_encryption=dest_encryption)
+        mock_convert.assert_called_once_with(
+            'anypath.part', 'anypath.converted', 'qcow2', 'luks',
+            src_encryption=src_encryption, dest_encryption=dest_encryption)
