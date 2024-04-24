@@ -4950,6 +4950,69 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise exception.EphemeralEncryptionSecretNotFound(msg)
         return secret_uuid, secret, created
 
+    @staticmethod
+    def _create_ephemeral_backing_encryption_secret(
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+        image_meta: 'objects.ImageMeta',
+        driver_bdm: 'nova.virt.block_device.DriverBlockDevice',
+    ) -> ty.Tuple[ty.Optional[str], ty.Optional[str], bool]:
+        """Create a secret in the key manager for a BDM's backing file.
+
+        This will create a "copy" of the encrypted source image's secret that
+        is scoped to the BDM.
+
+        It will also "auto heal" in the event that a BDM has a backing file
+        secret UUID stored but that secret is *not* found in the key manager.
+        We can try to heal this situation by creating a new copy of the
+        encrypted source image's secret and updating the BDM.
+        """
+        bdm_secret_uuid = driver_bdm.get('backing_encryption_secret_uuid')
+
+        # NOTE(melwitt): backing_encryption_secret_uuid is meant to store
+        # the original (base_image_ref) backing file secret, if there was
+        # one. We don't want to set it to the secret of a shelved image,
+        # for example.
+        img_secret_uuid = None
+        if image_meta.id == driver_bdm['image_id']:
+            img_secret_uuid = image_meta.properties.get(
+                'hw_ephemeral_encryption_secret_uuid')
+
+        bdm_secret = None
+        img_secret = None
+
+        if bdm_secret_uuid:
+            bdm_secret = crypto.get_encryption_secret(context, bdm_secret_uuid)
+
+        created = False
+        if bdm_secret is None and img_secret_uuid:
+            # If the source image is encrypted, its secret should already
+            # exist. If it doesn't, something is wrong.
+            img_secret = crypto.get_encryption_secret(context, img_secret_uuid)
+            if img_secret is None:
+                msg = (
+                    f'Failed to find encryption secret {img_secret_uuid} for '
+                    f"image {driver_bdm['image_id']} in the key manager")
+                raise exception.EphemeralEncryptionSecretNotFound(_(msg))
+
+            # Make a copy of the source image secret to use as the backing
+            # file secret for this particular BDM. This will allow us to
+            # clean up secrets when the instance is the deleted and more
+            # importantly, it will provide redundancy in the event of a key
+            # manager secret deletion. (Example: a backing image secret
+            # deletion affecting 1 instance vs affecting 100 instances).
+            for_detail = (
+                f"instance {instance.uuid} BDM {driver_bdm['uuid']} "
+                'backing file')
+            bdm_secret_uuid, bdm_secret = (
+                crypto.create_ephemeral_encryption_secret(
+                    context, instance, driver_bdm, for_detail=for_detail,
+                    secret=img_secret))
+            driver_bdm['backing_encryption_secret_uuid'] = bdm_secret_uuid
+            created = True
+
+        return bdm_secret_uuid, bdm_secret, created
+
     def _create_ephemeral_encryption_libvirt_secrets(
             self, context, instance_uuid, flavor, image_meta,
             block_device_info):
@@ -5036,66 +5099,22 @@ class LibvirtDriver(driver.ComputeDriver):
                     driver_bdm['encryption_format'] = (
                         CONF.ephemeral_storage_encryption.default_format)
 
-                secret = None
-                backing_secret = None
-                image_secret_uuid = None
-
                 secret_uuid, secret, created = (
                     self._get_or_create_ephemeral_encryption_secret(
                         context, instance, driver_bdm))
                 if created:
                     created_keymgr_secrets.append(secret_uuid)
 
-                # Stash the UUID of the backing file secret if needed
-                image_secret_uuid = None
-
                 # Swap and ephemeral disks will not have encrypted backing
                 # files (and will not have image_id set).
+                backing_secret = None
                 if ('image_id' in driver_bdm and
                         CONF.libvirt.images_type in ('qcow2', 'default')):
-
-                    backing_secret_uuid = driver_bdm.get(
-                        'backing_encryption_secret_uuid')
-                    if backing_secret_uuid is None:
-                        # NOTE(melwitt): backing_encryption_secret_uuid is
-                        # meant to store the original (base_image_ref) backing
-                        # file secret (if there was one). We don't want to set
-                        # it to the secret of a shelved image, for example.
-                        if image_meta.id == driver_bdm['image_id']:
-                            image_secret_uuid = image_meta.properties.get(
-                                'hw_ephemeral_encryption_secret_uuid')
-                    else:
-                        image_secret_uuid = backing_secret_uuid
-
-                    if image_secret_uuid:
-                        # If the source image is encrypted, its secret
-                        # should already exist. If it doesn't, something is
-                        # wrong.
-                        backing_secret = crypto.get_encryption_secret(
-                            context, image_secret_uuid)
-                        if backing_secret is None:
-                            msg = (
-                                'Failed to find encryption secret '
-                                f'{image_secret_uuid} in the key manager '
-                                f"for image {driver_bdm['image_id']}")
-                            raise exception.EphemeralEncryptionSecretNotFound(
-                                msg)
-                        if backing_secret_uuid is None:
-                            # Make a copy of the source image secret to use as
-                            # the backing file secret for this particular BDM.
-                            # This will allow us to clean up secrets when the
-                            # instance is the deleted.
-                            for_detail = (
-                                f"instance {instance.uuid} BDM "
-                                f"{driver_bdm['uuid']} backing file")
-                            backing_secret_uuid, backing_secret = (
-                                crypto.create_ephemeral_encryption_secret(
-                                    context, instance, driver_bdm,
-                                    for_detail=for_detail,
-                                    secret=backing_secret))
-                            created_keymgr_secrets.append(backing_secret_uuid)
-                            driver_bdm['backing_encryption_secret_uuid'] = (
-                                backing_secret_uuid)
+                    backing_secret_uuid, backing_secret, created = (
+                        self._create_ephemeral_backing_encryption_secret(
+                            context, instance, image_meta, driver_bdm))
+                    if backing_secret_uuid and created:
+                        created_keymgr_secrets.append(backing_secret_uuid)
 
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
@@ -5111,17 +5130,14 @@ class LibvirtDriver(driver.ComputeDriver):
                     secret_usage, secret, secret_uuid)
                 created_libvirt_secrets.append(secret_usage)
                 # Do the same for the backing file secret if there is one.
-                if backing_secret is not None:
+                if backing_secret_uuid and backing_secret is not None:
                     # NOTE(melwitt): Even though backing files are potentially
                     # shared amongst multiple instances, let each instance BDM
-                    # keep its own copy of the secret so that cleanup can be
-                    # done.
+                    # keep its own copy of the secret to simplify tracking
+                    # across migrations and cleaning up.
                     secret_usage += '_backing'
-                    if self._host.find_secret('volume', secret_usage):
-                        self._host.delete_secret('volume', secret_usage)
-                    self._host.create_secret(
-                        'volume', secret_usage, password=backing_secret,
-                        uuid=backing_secret_uuid)
+                    self._create_and_replace_libvirt_secret(
+                        secret_usage, backing_secret, backing_secret_uuid)
                     created_libvirt_secrets.append(secret_usage)
         except Exception:
             # Clean up key manager secrets we created.
