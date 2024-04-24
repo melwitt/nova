@@ -5136,13 +5136,13 @@ class LibvirtDriver(driver.ComputeDriver):
             # Reset driver BDM encryption attributes back to their original
             # values.
             for i, orig_driver_bdm in enumerate(orig_encrypted_bdms):
-
                 driver_bdm = encrypted_bdms[i]
                 for key in ('encryption_format', 'encryption_secret_uuid',
                         'backing_encryption_secret_uuid'):
                     if key in driver_bdm:
                         driver_bdm[key] = orig_driver_bdm[key]
                 driver_bdm.save()
+            # Clean up libvirt secrets we created.
             for secret_usage in created_libvirt_secrets:
                 try:
                     if self._host.find_secret('volume', secret_usage):
