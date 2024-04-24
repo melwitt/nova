@@ -11794,7 +11794,7 @@ class LibvirtDriver(driver.ComputeDriver):
             context: nova_context.RequestContext,
             image_id: str,
             instance: 'objects.Instance',
-    ) -> ty.Optional[ty.Dict[str, str]]:
+    ) -> ty.Tuple['objects.ImageMeta', ty.Optional[ty.Dict[str, str]]]:
         # If the image properties contained an ephemeral encryption secret UUID
         # for the encrypted image, we retrieve it from the image. We don't use
         # the image metadata from the instance system metadata because that
