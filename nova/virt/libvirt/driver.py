@@ -4683,19 +4683,6 @@ class LibvirtDriver(driver.ComputeDriver):
             }
             disk_info['mapping']['disk.rescue'].update(rescue_encryption)
 
-            # If this is not a stable rescue, we need to add encryption
-            # info back to the image disk if it is encrypted.
-            if rescue_image_meta is None:
-                # We need to use the original block_device_info here
-                # because block_device_info will have been set to None for
-                # legacy rescue earlier in this method.
-                image_bdms = driver.block_device_info_get_image(
-                    original_block_device_info)
-                if image_bdms:
-                    image_bdm = image_bdms[0]
-                    disk_info['mapping']['disk'].update(
-                        blockinfo.get_encryption_info_from_bdm(image_bdm))
-
             # If the source image is encrypted, its secret
             # should already exist. If it doesn't, something is
             # wrong.
@@ -4703,16 +4690,27 @@ class LibvirtDriver(driver.ComputeDriver):
             if secret is None:
                 msg = (
                     f'Failed to find encryption secret {img_secret_uuid} in '
-                    f'the key manager for image {rescue_image_id}')
-                raise exception.EphemeralEncryptionSecretNotFound(msg)
+                    f'the key manager for rescue image {rescue_image_id}')
+                raise exception.EphemeralEncryptionSecretNotFound(_(msg))
             secret_usage = f'{instance.uuid}_rescue_disk'
             # Be extra defensive here and delete any existing libvirt
             # secret to ensure we are creating the secret we retrieved or
             # created in the key manager just now.
-            if self._host.find_secret('volume', secret_usage):
-                self._host.delete_secret('volume', secret_usage)
-            self._host.create_secret(
-                'volume', secret_usage, password=secret, uuid=img_secret_uuid)
+            self._create_and_replace_libvirt_secret(
+                secret_usage, secret, img_secret_uuid)
+
+        # If this is not a stable rescue, we need to add encryption
+        # info back to the image disk if it is encrypted.
+        if rescue_image_meta is None:
+            # We need to use the original block_device_info here
+            # because block_device_info will have been set to None for
+            # legacy rescue earlier in this method.
+            image_bdms = driver.block_device_info_get_image(
+                original_block_device_info)
+            if image_bdms:
+                image_bdm = image_bdms[0]
+                disk_info['mapping']['disk'].update(
+                    blockinfo.get_encryption_info_from_bdm(image_bdm))
 
     def unrescue(
         self,
@@ -4959,8 +4957,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
-                if persist:
-                    driver_bdm.save()
+                driver_bdm.save()
 
                 # Stash the passphrase itself in a libvirt secret using the
                 # same UUID as the key manager secret for easy retrieval later
