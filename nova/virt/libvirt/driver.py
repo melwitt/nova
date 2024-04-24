@@ -847,9 +847,9 @@ class LibvirtDriver(driver.ComputeDriver):
 
         # Set REGISTER_IMAGE_PROPERTY_DEFAULTS in the instance system_metadata
         # to default values for properties that have not already been set.
-        self._register_all_undefined_instance_details()
+        instances = self._register_all_undefined_instance_details()
 
-        self._cleanup_unused_ephemeral_encryption_secrets()
+        self._cleanup_unused_ephemeral_encryption_secrets(instances)
 
         if CONF.libvirt.rescue_image_id:
             LOG.info(
@@ -883,7 +883,8 @@ class LibvirtDriver(driver.ComputeDriver):
             'supports_address_space_emulated': supports_maxphysaddr,
         })
 
-    def _register_all_undefined_instance_details(self) -> None:
+    def _register_all_undefined_instance_details(
+            self) -> 'objects.InstanceList':
         """Register the default image properties of instances on this host
 
         For each instance found on this host by InstanceList.get_by_host ensure
@@ -892,15 +893,16 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         context = nova_context.get_admin_context()
         hostname = self._host.get_hostname()
-        for instance in objects.InstanceList.get_by_host(
-            context, hostname, expected_attrs=['flavor', 'system_metadata']
-        ):
+        instances = objects.InstanceList.get_by_host(
+            context, hostname, expected_attrs=['flavor', 'system_metadata'])
+        for instance in instances:
             try:
                 self._register_undefined_instance_details(context, instance)
             except Exception:
                 LOG.exception('Ignoring unknown failure while attempting '
                               'to save the defaults for unregistered image '
                               'properties', instance=instance)
+        return instances
 
     def _register_undefined_instance_details(
         self,
@@ -1798,16 +1800,20 @@ class LibvirtDriver(driver.ComputeDriver):
             msg = '\n'.join(exception_msgs)
             raise exception.EphemeralEncryptionCleanupFailed(error=msg)
 
-    def _cleanup_unused_ephemeral_encryption_secrets(self):
+    def _cleanup_unused_ephemeral_encryption_secrets(self, instances):
         # First make a list of the guest secrets that are in use on this host.
-        guests = self._host.list_guests(only_running=False)
+        bdms = objects.BlockDeviceMappingList()
+        for instance in instances:
+            if hardware.get_ephemeral_encryption_constraint(
+                    instance.flavor, instance.image_meta):
+                bdms += instance.get_bdms()
+        # If no BDMs using encryption were found, we have nothing to do.
+        if not bdms:
+            return
         secret_uuids_in_use = set()
-        for guest in guests:
-            disk_confs = guest.get_all_disks()
-            for disk_conf in disk_confs:
-                if disk_conf.ephemeral_encryption:
-                    secret_uuids_in_use.add(
-                       disk_conf.ephemeral_encryption.secret.uuid)
+        for bdm in bdms:
+            if 'encryption_secret_uuid' in bdm:
+                secret_uuids_in_use.add(bdm['encryption_secret_uuid'])
         # Then get a list of all secrets on the host and delete any that are
         # not in use by guests on this host.
         exception_msgs = []
@@ -4831,6 +4837,19 @@ class LibvirtDriver(driver.ComputeDriver):
             self._host.create_secret(
                 'volume', secret_usage, password=secret, uuid=img_secret_uuid)
 
+    def _create_and_replace_libvirt_secret(
+        self,
+        secret_usage: str,
+        password: str,
+        secret_uuid: str
+    ) -> None:
+        # Create a libvirt secret and replace the existing secret if one is
+        # found.
+        if self._host.find_secret('volume', secret_usage):
+            self._host.delete_secret('volume', secret_usage)
+        self._host.create_secret(
+            'volume', secret_usage, password=password, uuid=secret_uuid)
+
     def unrescue(
         self,
         context: nova_context.RequestContext,
@@ -4868,7 +4887,11 @@ class LibvirtDriver(driver.ComputeDriver):
         pass
 
     @staticmethod
-    def _get_or_create_encryption_secret(context, instance, driver_bdm):
+    def _get_or_create_ephemeral_encryption_secret(
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+        driver_bdm: 'nova.virt.block_device.DriverBlockDevice',
+    ) -> ty.Tuple[str, str, bool]:
         created = False
         secret_uuid = driver_bdm.get('encryption_secret_uuid')
         if secret_uuid is None:
@@ -4996,7 +5019,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 image_secret_uuid = None
 
                 secret_uuid, secret, created = (
-                    self._get_or_create_encryption_secret(
+                    self._get_or_create_ephemeral_encryption_secret(
                         context, instance, driver_bdm))
                 if created:
                     created_keymgr_secrets.append(secret_uuid)
@@ -5063,10 +5086,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Be extra defensive here and delete any existing libvirt
                 # secret to ensure we are creating the secret we retrieved or
                 # created in the key manager just now.
-                if self._host.find_secret('volume', secret_usage):
-                    self._host.delete_secret('volume', secret_usage)
-                self._host.create_secret(
-                    'volume', secret_usage, password=secret, uuid=secret_uuid)
+                self._create_and_replace_libvirt_secret(
+                    secret_usage, secret, secret_uuid)
                 created_libvirt_secrets.append(secret_usage)
                 # Do the same for the backing file secret if there is one.
                 if backing_secret is not None:
@@ -5082,6 +5103,7 @@ class LibvirtDriver(driver.ComputeDriver):
                         uuid=backing_secret_uuid)
                     created_libvirt_secrets.append(secret_usage)
         except Exception:
+            # Clean up key manager secrets we created.
             for secret_uuid in created_keymgr_secrets:
                 try:
                     crypto.delete_encryption_secret(
@@ -5090,7 +5112,8 @@ class LibvirtDriver(driver.ComputeDriver):
                     LOG.exception(
                         f'Failed to delete encryption secret '
                         f'{secret_uuid} in the key manager', instance=instance)
-
+            # Reset driver BDM encryption attributes back to their original
+            # values.
             for i, orig_driver_bdm in enumerate(orig_encrypted_bdms):
                 if persist:
                     driver_bdm = encrypted_bdms[i]
@@ -5108,6 +5131,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     LOG.exception(
                         f'Failed to delete libvirt secret {secret_usage}',
                         instance=instance)
+            # Re-raise the exception.
             raise
 
         return block_device_info
@@ -8591,6 +8615,54 @@ class LibvirtDriver(driver.ComputeDriver):
         finally:
             self._create_domain_cleanup_lxc(instance)
 
+    def _refresh_ephemeral_encryption_libvirt_secrets(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+    ) -> None:
+        for bdm in instance.get_bdms():
+            if 'encryption_secret_uuid' in bdm:
+                secret_uuid = bdm['encryption_secret_uuid']
+                secret_usage = f'{instance.uuid}_{bdm.uuid}'
+                self._refresh_ephemeral_encryption_libvirt_secret(
+                    context, secret_uuid, secret_usage,
+                    for_detail=f'BDM {bdm.uuid}')
+
+    def _refresh_ephemeral_encryption_libvirt_secret(
+        self,
+        context: nova_context.RequestContext,
+        secret_uuid: str,
+        secret_usage: str,
+        for_detail: ty.Optional[str] = None,
+    ) -> None:
+        """Retrieve a secret from the key manager and create a libvirt secret.
+
+        If an existing libvirt secret is found, it will be replaced with the
+        secret retrieved from the key manager.
+
+        :param context: The RequestContext for API and DB calls
+        :param secret_uuid: The UUID of the secret in the key manager
+        :param secret_usage: Name of the resource related to the secret
+        :param for_detail: Optional string to describe what the secret is for,
+            if it is not found (aid in debugging/auditing)
+
+        :raises EphemeralEncryptionSecretNotFound: If the secret is not found
+            in the key manager service
+        """
+        secret = crypto.get_encryption_secret(context, secret_uuid)
+        if secret is None:
+            for_detail = f' for {for_detail}' if for_detail else ''
+            msg = (
+                f'Failed to find encryption secret {secret_uuid} in the '
+                f'key manager{for_detail}')
+            raise exception.EphemeralEncryptionSecretNotFound(_(msg))
+        msg = (
+            f'Refreshing libvirt secret {secret_usage} with secret '
+            f'{secret_uuid} from the key manager')
+        LOG.info(msg)
+        self._create_and_replace_libvirt_secret(
+            secret_usage, secret, secret_uuid)
+
     def _create_guest(
         self,
         context: nova_context.RequestContext,
@@ -8628,6 +8700,25 @@ class LibvirtDriver(driver.ComputeDriver):
                 guest.launch(pause=pause)
 
             return guest
+        except libvirt.libvirtError as ex:
+            # If guest launch fails due to a missing ephemeral encryption
+            # libvirt secret, refresh secrets from the key manager and retry
+            # guest launch.
+            if (ex.get_error_code() == libvirt.VIR_ERR_NO_SECRET and
+                    hardware.get_ephemeral_encryption_constraint(
+                        instance.flavor, instance.image_meta)):
+                LOG.exception(
+                    'Libvirt secret was not found while starting the guest '
+                    'with ephemeral encryption. Attempting to create missing '
+                    'libvirt secrets', instance=instance)
+                self._refresh_ephemeral_encryption_libvirt_secrets(
+                    context, instance)
+                # Try once more to start the guest.
+                if power_on or pause:
+                    guest.launch(pause=pause)
+                return guest
+            else:
+                raise
         finally:
             if libvirt_secret is not None:
                 libvirt_secret.undefine()
