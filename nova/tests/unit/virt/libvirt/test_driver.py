@@ -31375,13 +31375,15 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             device_name='/dev/vda', volume_size=1, source_type='image',
             destination_type='local', guest_format=None, encrypted=True,
             encryption_format='luks', encryption_options=None,
-            encryption_secret_uuid=uuids.src_secret, boot_index=0)
+            encryption_secret_uuid=uuids.src_secret,
+            backing_encryption_secret_uuid=None, boot_index=0)
         eph_bdm = block_device_obj.BlockDeviceMapping(
             id=2, uuid=uuids.ephemeral, device_type='disk', disk_bus='virtio',
             no_device=False, device_name='/dev/vdb', volume_size=1,
             source_type='blank', destination_type='local', guest_format=None,
             encrypted=True, encryption_format='luks', encryption_options=None,
-            encryption_secret_uuid=uuids.eph_secret, boot_index=1)
+            encryption_secret_uuid=uuids.eph_secret,
+            backing_encryption_secret_uuid=None, boot_index=1)
         block_device_info = driver.get_block_device_info(
             instance, [img_bdm, eph_bdm])
         encrypted_bdms = driver.block_device_info_get_encrypted_disks(

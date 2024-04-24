@@ -3380,10 +3380,10 @@ class LibvirtDriver(driver.ComputeDriver):
             context: nova_context.RequestContext,
             instance: 'objects.Instance',
             image_id: str,
-            encryption: ty.Dict[str, ty.Any],
+            encryption: EncryptionOptions,
             encrypted_bdms: ty.List[
                 driver_block_device.DriverImageBlockDevice],
-    ) -> ty.Tuple[ty.Optional[ty.Dict[str, ty.Any]], ty.Dict[str, ty.Any]]:
+    ) -> ty.Tuple[ty.Optional[EncryptionOptions], ty.Dict[str, ty.Any]]:
         """Populate encryption related metadata and create target encryption.
 
         When we snapshot an encrypted image, we need to also store the
@@ -3395,7 +3395,7 @@ class LibvirtDriver(driver.ComputeDriver):
         snapshot.
         """
         dest_encryption = None
-        props = {}
+        props: ty.Dict[str, ty.Any] = {}
         if encryption:
             dest_encryption = copy.deepcopy(encryption)
             root_bdm = block_device.get_root_bdm(encrypted_bdms)
@@ -3574,9 +3574,30 @@ class LibvirtDriver(driver.ComputeDriver):
         self._set_quiesced(context, instance, image_meta, False)
 
     def _get_xml_for_live_snapshot_with_encryption(
-            self, guest, source_path, target_path, source_format, secret_uuid,
-            encryption):
-        disk_conf = guest.get_disk(source_path)
+            self,
+            guest: libvirt_guest.Guest,
+            source_path: str,
+            target_path: str,
+            source_format: str,
+            secret_uuid: str,
+            encryption: EncryptionOptions,
+    ) -> str:
+        """Get disk XML for the live snapshot destination with encryption.
+
+        A live snapshot is a libvirt block copy operation.
+
+        :param guest: The libvirt.Guest object
+        :param source_path: The source path of the block copy
+        :param target_path: The target destination path of the block copy
+        :param source_format: The source driver format, e.g. qcow2 or luks
+        :param secret_uuid: The UUID of the libvirt secret for encryption
+        :param encryption: Dict detailing various encryption
+            attributes of the disk, such as the format and passphrase
+
+        :returns: The target disk XML as a string
+        """
+        disk_conf: vconfig.LibvirtConfigGuestDisk = guest.get_disk(source_path)
+        disk_conf.driver_format = 'qcow2'
         disk_conf.source_path = target_path
         disk_conf.ephemeral_encryption.format = encryption.get('format')
         if not self._host.find_secret('volume', secret_uuid):
