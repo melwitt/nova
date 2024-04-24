@@ -14907,7 +14907,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
             fetch_image_mock.assert_called_once_with(
                 context=self.context, image_id=instance.image_ref,
-                target=root_backing, trusted_certs=instance.trusted_certs)
+                target=root_backing, trusted_certs=instance.trusted_certs,
+                src_encryption=None)
 
             verify_base_size_mock.assert_has_calls([
                 mock.call(root_backing, instance.flavor.root_gb * units.Gi),

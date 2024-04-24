@@ -168,6 +168,11 @@ class InjectionInfo(collections.namedtuple(
                 'admin_pass=<SANITIZED>)') % (self.network_info, self.files)
 
 
+class EncryptionOptions(ty.TypedDict):
+    secret: str
+    format: str
+
+
 # NOTE(lyarwood): Dict of volume drivers supported by the libvirt driver, keyed
 # by the connection_info['driver_volume_type'] returned by Cinder for each
 # volume type it supports
@@ -11614,19 +11619,23 @@ class LibvirtDriver(driver.ComputeDriver):
             context: nova_context.RequestContext,
             image_id: str,
             instance: 'objects.Instance',
-    ) -> ty.Optional[ty.Dict[str, str]]:
+    ) -> ty.Optional[EncryptionOptions]:
         # If the image properties contained an ephemeral encryption secret UUID
-        # for the encrypted image, we retrieve it from the image. We don't use
-        # the image metadata from the instance system metadata because that
-        # refers to the original image from which the instance was created,
-        # which is not necessarily the image we are creating from now (example:
-        # unshelve).
-        image_meta = objects.ImageMeta.from_image_ref(
-            context, self._image_api, image_id)
+        # for the encrypted image, we retrieve it from the image if it's
+        # different than the base_image_ref. We don't use the image metadata
+        # from the instance system metadata in that case because that refers to
+        # the original image from which the instance was created, which is not
+        # necessarily the image we are creating from now (example: unshelve).
+        base_image_ref = instance.system_metadata.get('image_base_image_ref')
+        if image_id != base_image_ref:
+            image_meta = objects.ImageMeta.from_image_ref(
+                context, self._image_api, image_id)
+        else:
+            image_meta = objects.ImageMeta.from_instance(instance)
         secret_uuid = image_meta.properties.get(
             'hw_ephemeral_encryption_secret_uuid')
 
-        image_encryption = None
+        image_encryption: ty.Optional[EncryptionOptions] = None
         if secret_uuid:
             LOG.debug(
                 f'Fetching image with encryption secret UUID {secret_uuid}',
