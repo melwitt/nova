@@ -980,8 +980,17 @@ class HostTestCase(test.NoDBTestCase):
 
         secret = mock.MagicMock()
         mock_sec.return_value = secret
-        self.host.create_secret('iscsi', 'iscsivol', password="foo")
+        self.host.create_secret(
+            'iscsi', 'iscsivol', password="foo", description="bar")
         secret.setValue.assert_called_once_with("foo")
+
+        xmlstr = mock_sec.call_args.args[0]
+        print(xmlstr)
+        conf = vconfig.LibvirtConfigSecret()
+        conf.parse_str(xmlstr)
+        self.assertEqual("iscsi", conf.usage_type)
+        self.assertEqual("iscsivol", conf.usage_id)
+        self.assertEqual("bar", conf.description)
 
     @mock.patch('nova.virt.libvirt.host.Host.find_secret')
     def test_delete_secret(self, mock_find_secret):
