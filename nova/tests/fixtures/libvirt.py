@@ -1731,10 +1731,14 @@ class Secret(object):
         self._uuid = tree.find('./uuid').text
         self._private = tree.get('private') == 'yes'
         self._usage_id = None
+        self._description = None
         usage = tree.find('./usage')
         if usage is not None:
             if usage.get('type') == 'volume':
                 self._usage_id = usage.find('volume').text
+        description = tree.find('./description')
+        if description is not None:
+            self._description = description.text
 
     def setValue(self, value, flags=0):
         self._value = value
@@ -1768,6 +1772,9 @@ class Secret(object):
     def usageID(self):
         if self._usage_id is not None:
             return self._usage_id
+
+    def XMLDesc(self, flags: int) -> str:
+        return self._xml
 
 
 class Connection(object):
