@@ -332,6 +332,26 @@ def reject_ephemeral_encryption_instances(operation):
     return outer
 
 
+def check_ephemeral_encryption_key_access(ctxt, flavor, image_meta):
+    if hardware.get_ephemeral_encryption_constraint(flavor, image_meta):
+        # NOTE(melwitt): Infer the key manager service configuration from ours
+        # and check for the role. The thinking here is to minimize the need to
+        # actually call the key manager service API and adding expense to
+        # the majority of requests that are likely to pass the check.
+        if not CONF.oslo_policy.enforce_scope and 'creator' not in ctxt.roles:
+            # We have to actually try to create a secret to test access. The
+            # GET /secrets API allows pretty much all users.
+            try:
+                secret_uuid = crypto.create_encryption_secret(
+                    ctxt, 'test',
+                    'verifying key access for ephemeral encryption')
+            except exception.EncryptionSecretCreateFailed as e:
+                msg = str(e)
+                if 'forbidden' in msg.lower():
+                    raise exception.EncryptionSecretCreateForbidden(msg)
+            crypto.delete_encryption_secret(ctxt, 'N/A', secret_uuid)
+
+
 def load_cells():
     global CELLS
     if not CELLS:
@@ -1683,6 +1703,8 @@ class API:
 
         if image_href:
             image_id, boot_meta = self._get_image(context, image_href)
+            check_ephemeral_encryption_key_access(
+                context, flavor, _get_image_meta_obj(boot_meta))
         else:
             # This is similar to the logic in _retrieve_trusted_certs_object.
             if (trusted_certs or
