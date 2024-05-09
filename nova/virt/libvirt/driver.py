@@ -38,6 +38,7 @@ import operator
 import os
 import pwd
 import random
+import re
 import shutil
 import sys
 import tempfile
@@ -1804,15 +1805,18 @@ class LibvirtDriver(driver.ComputeDriver):
     def _cleanup_unused_ephemeral_encryption_secrets(self, instances):
         # First make a list of the guest secrets that are in use on this host.
         bdms = objects.BlockDeviceMappingList()
+        instance_uuids = set()
         for instance in instances:
             if hardware.get_ephemeral_encryption_constraint(
                     instance.flavor, instance.image_meta):
                 bdms += instance.get_bdms()
+            instance_uuids.add(instance.uuid)
         secret_uuids_in_use = set()
         for bdm in bdms:
             if ('encryption_secret_uuid' in bdm and
                     bdm.encryption_secret_uuid is not None):
                 secret_uuids_in_use.add(bdm.encryption_secret_uuid)
+
         # Then get a list of all secrets on the host and delete any that are
         # not in use by guests on this host.
         exception_msgs = []
@@ -1821,21 +1825,30 @@ class LibvirtDriver(driver.ComputeDriver):
             config = vconfig.LibvirtConfigSecret()
             config.parse_str(secret.XMLDesc(0))
 
-            if (config.description is not None and
-                    config.description.startswith('Ephemeral encryption') and
+            if config.description is not None:
+                # Rescue disks do not have BDM records, so their secret UUIDs
+                # will never be in secret_uuids_in_use. Instead, if we
+                # encounter a rescue disk secret, we will consider it to be in
+                # use if the instance associated with it is on this host.
+                m = re.match(
+                    r'Ephemeral encryption secret for instance ([A-Za-z0-9-]) '
+                    'rescue disk', config.description)
+                if m and m.group(1) in instance_uuids:
+                    continue
+                elif (config.description.startswith('Ephemeral encryption') and
                         config.uuid not in secret_uuids_in_use):
-                LOG.info(
-                    f'Cleaning up unused libvirt secret {config.uuid} with '
-                    f'usage: {config.usage_id} and description: '
-                    f'{config.description}')
-                try:
-                    self._host.delete_secret('volume', config.usage_id)
-                except libvirt.libvirtError as e:
-                    msg = (
-                        f'Failed to delete libvirt secret {config.usage_id}: '
-                        f'{str(e)}')
-                    LOG.exception(msg)
-                    exception_msgs.append(msg)
+                    LOG.info(
+                        f'Cleaning up unused libvirt secret {config.uuid} '
+                        f'with usage: {config.usage_id} and description: '
+                        f'{config.description}')
+                    try:
+                        self._host.delete_secret('volume', config.usage_id)
+                    except libvirt.libvirtError as e:
+                        msg = (
+                            'Failed to delete libvirt secret '
+                            f'{config.usage_id}: {str(e)}')
+                        LOG.exception(msg)
+                        exception_msgs.append(msg)
         if exception_msgs:
             msg = '\n'.join(exception_msgs)
             raise exception.EphemeralEncryptionCleanupFailed(error=msg)
@@ -4704,10 +4717,13 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise exception.EphemeralEncryptionSecretNotFound(_(msg))
             secret_usage = f'{instance.uuid}_rescue_disk'
             # Be extra defensive here and delete any existing libvirt
-            # secret to ensure we are creating the secret we retrieved or
-            # created in the key manager just now.
+            # secret to ensure we are creating the secret we retrieved from
+            # the key manager just now.
+            description = (
+                f"Ephemeral encryption secret for instance {instance.uuid} "
+                "rescue disk")
             self._create_and_replace_libvirt_secret(
-                secret_usage, secret, img_secret_uuid)
+                secret_usage, secret, img_secret_uuid, description=description)
 
         # If this is not a stable rescue, we need to add encryption
         # info back to the image disk if it is encrypted.
@@ -5552,9 +5568,11 @@ class LibvirtDriver(driver.ComputeDriver):
                              size=size,
                              ephemeral_size=ephemeral_gb)
 
+        print(f'block_device_info = {block_device_info}')
         for idx, eph in enumerate(driver.block_device_info_get_ephemerals(
                 block_device_info)):
             disk_name = blockinfo.get_eph_disk(idx)
+            print(disk_name)
             disk_info_mapping = disk_mapping[disk_name]
             disk_image = image(disk_name, disk_info_mapping=disk_info_mapping)
             # Short circuit the exists() tests if we already created a disk
@@ -11971,7 +11989,9 @@ class LibvirtDriver(driver.ComputeDriver):
                     f'Failed to find encryption secret {secret_uuid} in the '
                     f'key manager for image {image_id}')
                 raise exception.EphemeralEncryptionSecretNotFound(msg)
-            if not image_meta.properties.get('hw_ephemeral_encryption_format'):
+            encryption_format = image_meta.properties.get(
+                'hw_ephemeral_encryption_format')
+            if not encryption_format:
                 msg = _(
                     'If hw_ephemeral_encryption_secret_uuid is set in '
                     'image properties, hw_ephemeral_encryption_format must '
