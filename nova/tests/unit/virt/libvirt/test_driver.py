@@ -31407,7 +31407,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
             img_driver_bdm = block_device_info['image'][0]
             self.mock_create_secret.assert_called_once_with(
                 self.context, instance, img_driver_bdm,
-                for_detail=f'image {uuids.image}')
+                for_detail=f'image {uuids.image}',
+                secret=mock.sentinel.src_secret)
         elif task_state in task_states.shelving_states:
             expected_dest_encryption['secret'] = mock.sentinel.src_secret
             expected_props['hw_ephemeral_encryption_secret_uuid'] = (

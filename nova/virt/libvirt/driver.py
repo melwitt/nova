@@ -3390,9 +3390,9 @@ class LibvirtDriver(driver.ComputeDriver):
         encryption secret UUID alongside the image. We will need the passphrase
         in order to use the image later.
 
-        We create a new encryption secret for the snapshot and return it in a
-        dict containing the encryption attributes needed to generate the
-        snapshot.
+        We use the same encryption passphrase by default for the snapshot and
+        return it in a dict containing the encryption attributes needed to
+        generate the snapshot.
         """
         dest_encryption = None
         props: ty.Dict[str, ty.Any] = {}
@@ -3400,23 +3400,25 @@ class LibvirtDriver(driver.ComputeDriver):
             dest_encryption = copy.deepcopy(encryption)
             root_bdm = block_device.get_root_bdm(encrypted_bdms)
             if instance.task_state not in task_states.shelving_states:
-                # NOTE(melwitt): We create a new secret for the snapshot, so
-                # that we will be able to read it if/when an instance is booted
-                # from the snapshot in the future.
+                # We are creating a new secret UUID for the shelved image with
+                # the same passphrase as the root disk.
                 secret_uuid, secret = (
                     crypto.create_ephemeral_encryption_secret(
                         context, instance, root_bdm,
-                        for_detail=f'image {image_id}'))
+                        for_detail=f'image {image_id}',
+                        secret=encryption.get('secret')))
                 dest_encryption['secret'] = secret
             else:
-                LOG.info('Re-using existing ephemeral encryption secret for '
-                         'the snapshot', instance=instance)
-                # Reuse the existing secret to avoid a potential change in
+                # Reuse the existing secret UUID to avoid a potential change in
                 # ownership. Example: an admin user shelves (and offloads) the
                 # instance of a non-admin user. We don't want the non-admin
                 # user to lose access to the secret for their shelved instance
                 # snapshot.
                 secret_uuid = root_bdm.encryption_secret_uuid
+                LOG.info(
+                    'Re-using existing ephemeral encryption secret '
+                    f'{secret_uuid} for the shelved snapshot',
+                    instance=instance)
 
             props['hw_ephemeral_encryption'] = True
             encryption_format = encryption.get('format')
