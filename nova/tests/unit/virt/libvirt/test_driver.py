@@ -31504,12 +31504,11 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         expected_dest_encryption = {'format': 'luks'}
         expected_props = {
             'hw_ephemeral_encryption': True,
-            'hw_ephemeral_encryption_format': 'luks',
+            'os_encrypt_format': 'luks',
         }
         if task_state is None:
             expected_dest_encryption['secret'] = mock.sentinel.secret
-            expected_props['hw_ephemeral_encryption_secret_uuid'] = (
-                uuids.secret)
+            expected_props['os_encrypt_key_id'] = uuids.secret
             img_driver_bdm = block_device_info['image'][0]
             self.mock_create_secret.assert_called_once_with(
                 self.context, instance, img_driver_bdm,
@@ -31517,8 +31516,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
                 secret=mock.sentinel.src_secret)
         elif task_state in task_states.shelving_states:
             expected_dest_encryption['secret'] = mock.sentinel.src_secret
-            expected_props['hw_ephemeral_encryption_secret_uuid'] = (
-                uuids.src_secret)
+            expected_props['os_encrypt_key_id'] = uuids.src_secret
             self.mock_create_secret.assert_not_called()
 
         self.assertEqual(
@@ -31531,3 +31529,48 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
     def test_create_snapshot_encryption_metadata_shelving(self):
         self._test_create_snapshot_encryption_metadata(
             task_state=task_states.SHELVING)
+
+    def test_get_xml_for_live_snapshot_with_encryption(self, not_found=False):
+        domain = mock.Mock(spec=fakelibvirt.virDomain)
+        domain.XMLDesc.return_value = f"""
+            <domain type="kvm">
+              <devices>
+                <disk type="file" device="disk">
+                  <driver name="qemu" type="qcow2" cache="none"/>
+                  <source file="source_file">
+                    <encryption format="luks">
+                      <secret type="passphrase" uuid="{uuids.secret1}"/>
+                    </encryption>
+                  </source>
+                  <backingStore type="file">
+                    <format type="raw"/>
+                    <source file="backing_file"/>
+                  </backingStore>
+                  <target dev="vda" bus="virtio"/>
+                </disk>
+              </devices>
+            </domain>
+            """
+        guest = libvirt_guest.Guest(domain)
+        expected_xml = f"""
+                <disk type="file" device="disk">
+                  <driver name="qemu" type="qcow2" cache="none"/>
+                  <source file="destination_file">
+                    <encryption format="luks">
+                      <secret type="passphrase" uuid="{uuids.secret1}"/>
+                    </encryption>
+                  </source>
+                  <backingStore type="file">
+                    <format type="qcow2"/>
+                    <source file="backing_file"/>
+                  </backingStore>
+                  <target dev="vda" bus="virtio"/>
+                </disk>
+            """
+        xml = self.drvr._get_xml_for_live_snapshot_with_encryption(
+            guest, 'source_file', 'destination_file', 'qcow2')
+        # Normalize XML for the comparison, otherwise it won't match.
+        parser = etree.XMLParser(remove_blank_text=True)
+        expected_xml = etree.tostring(
+            etree.XML(expected_xml, parser), pretty_print=True).decode()
+        self.assertEqual(expected_xml, xml)

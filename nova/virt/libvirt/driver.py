@@ -3388,10 +3388,10 @@ class LibvirtDriver(driver.ComputeDriver):
             context: nova_context.RequestContext,
             instance: 'objects.Instance',
             image_id: str,
-            encryption: EncryptionOptions,
+            encryption: EncryptionInfo,
             encrypted_bdms: ty.List[
                 driver_block_device.DriverImageBlockDevice],
-    ) -> ty.Tuple[ty.Optional[EncryptionOptions], ty.Dict[str, ty.Any]]:
+    ) -> ty.Tuple[ty.Optional[EncryptionInfo], ty.Dict[str, ty.Any]]:
         """Populate encryption related metadata and create target encryption.
 
         When we snapshot an encrypted image, we need to also store the
@@ -3431,8 +3431,8 @@ class LibvirtDriver(driver.ComputeDriver):
             props['hw_ephemeral_encryption'] = True
             encryption_format = encryption.get('format')
             if encryption_format:
-                props['hw_ephemeral_encryption_format'] = encryption_format
-            props['hw_ephemeral_encryption_secret_uuid'] = secret_uuid
+                props['os_encrypt_format'] = encryption_format
+            props['os_encrypt_key_id'] = secret_uuid
 
         return dest_encryption, props
 
@@ -3589,8 +3589,6 @@ class LibvirtDriver(driver.ComputeDriver):
             source_path: str,
             target_path: str,
             source_format: str,
-            secret_uuid: str,
-            encryption: EncryptionOptions,
     ) -> str:
         """Get disk XML for the live snapshot destination with encryption.
 
@@ -3599,22 +3597,15 @@ class LibvirtDriver(driver.ComputeDriver):
         :param guest: The libvirt.Guest object
         :param source_path: The source path of the block copy
         :param target_path: The target destination path of the block copy
-        :param source_format: The source driver format, e.g. qcow2 or luks
-        :param secret_uuid: The UUID of the libvirt secret for encryption
-        :param encryption: Dict detailing various encryption
-            attributes of the disk, such as the format and passphrase
+        :param source_format: The on-disk format such as qcow2 or raw
 
         :returns: The target disk XML as a string
         """
         disk_conf: vconfig.LibvirtConfigGuestDisk = guest.get_disk(source_path)
         disk_conf.driver_format = 'qcow2'
         disk_conf.source_path = target_path
-        disk_conf.ephemeral_encryption.format = encryption.get('format')
-        if not self._host.find_secret('volume', secret_uuid):
-            self._host.create_secret(
-                'volume', secret_uuid, password=encryption.get('secret'),
-                uuid=secret_uuid)
-        disk_conf.ephemeral_encryption.secret.uuid = secret_uuid
+        if disk_conf.backing_store is not None:
+            disk_conf.backing_store.format = source_format
         return disk_conf.to_xml()
 
     def _live_snapshot(self, context, instance, guest, disk_path, out_path,
@@ -3678,8 +3669,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 # instead.
                 secret_uuid = uuidutils.generate_uuid()
                 disk_xml = self._get_xml_for_live_snapshot_with_encryption(
-                    guest, disk_path, disk_delta, source_format, secret_uuid,
-                    encryption)
+                    guest, disk_path, disk_delta, source_format)
                 dev.copy(disk_xml, reuse_ext=True, shallow=True)
 
             while not dev.is_job_complete():
