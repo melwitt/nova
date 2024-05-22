@@ -221,18 +221,18 @@
         {
             "OS-EXT-IMG-SIZE:size": "25165824",
             "created": "2011-01-01T01:02:03Z",
-            "id": "95fad737-9325-4855-b37e-20a62268ec88",
+            "id": "0117ec10-79ab-45c6-9add-c59ac278a152",
             "links": [
                 {
-                    "href": "http://openstack.example.com/v2/6f70656e737461636b20342065766572/images/95fad737-9325-4855-b37e-20a62268ec88",
+                    "href": "http://openstack.example.com/v2/6f70656e737461636b20342065766572/images/0117ec10-79ab-45c6-9add-c59ac278a152",
                     "rel": "self"
                 },
                 {
-                    "href": "http://openstack.example.com/6f70656e737461636b20342065766572/images/95fad737-9325-4855-b37e-20a62268ec88",
+                    "href": "http://openstack.example.com/6f70656e737461636b20342065766572/images/0117ec10-79ab-45c6-9add-c59ac278a152",
                     "rel": "bookmark"
                 },
                 {
-                    "href": "http://glance.openstack.example.com/images/95fad737-9325-4855-b37e-20a62268ec88",
+                    "href": "http://glance.openstack.example.com/images/0117ec10-79ab-45c6-9add-c59ac278a152",
                     "rel": "alternate",
                     "type": "application/vnd.openstack.image"
                 }
@@ -250,84 +250,24 @@
         {
             "OS-EXT-IMG-SIZE:size": "25165824",
             "created": "2011-01-01T01:02:03Z",
-            "id": "535426d4-5d75-44f4-9591-a2123d23c33f",
+            "id": "020e26bd-7539-4656-8c76-82f8820843ed",
             "links": [
                 {
-                    "href": "http://openstack.example.com/v2/6f70656e737461636b20342065766572/images/535426d4-5d75-44f4-9591-a2123d23c33f",
+                    "href": "http://openstack.example.com/v2/6f70656e737461636b20342065766572/images/020e26bd-7539-4656-8c76-82f8820843ed",
                     "rel": "self"
                 },
                 {
-                    "href": "http://openstack.example.com/6f70656e737461636b20342065766572/images/535426d4-5d75-44f4-9591-a2123d23c33f",
+                    "href": "http://openstack.example.com/6f70656e737461636b20342065766572/images/020e26bd-7539-4656-8c76-82f8820843ed",
                     "rel": "bookmark"
                 },
                 {
-                    "href": "http://glance.openstack.example.com/images/535426d4-5d75-44f4-9591-a2123d23c33f",
+                    "href": "http://glance.openstack.example.com/images/020e26bd-7539-4656-8c76-82f8820843ed",
                     "rel": "alternate",
                     "type": "application/vnd.openstack.image"
                 }
             ],
             "metadata": {
                 "hw_ephemeral_encryption": "False"
-            },
-            "minDisk": 0,
-            "minRam": 0,
-            "name": "fakeimage123456",
-            "progress": 100,
-            "status": "ACTIVE",
-            "updated": "2011-01-01T01:02:03Z"
-        },
-        {
-            "OS-EXT-IMG-SIZE:size": "25165824",
-            "created": "2011-01-01T01:02:03Z",
-            "id": "5f7d4f5b-3781-4a4e-9046-a2a800e807e5",
-            "links": [
-                {
-                    "href": "http://openstack.example.com/v2/6f70656e737461636b20342065766572/images/5f7d4f5b-3781-4a4e-9046-a2a800e807e5",
-                    "rel": "self"
-                },
-                {
-                    "href": "http://openstack.example.com/6f70656e737461636b20342065766572/images/5f7d4f5b-3781-4a4e-9046-a2a800e807e5",
-                    "rel": "bookmark"
-                },
-                {
-                    "href": "http://glance.openstack.example.com/images/5f7d4f5b-3781-4a4e-9046-a2a800e807e5",
-                    "rel": "alternate",
-                    "type": "application/vnd.openstack.image"
-                }
-            ],
-            "metadata": {
-                "hw_ephemeral_encryption": "True",
-                "hw_ephemeral_encryption_format": "luks"
-            },
-            "minDisk": 0,
-            "minRam": 0,
-            "name": "fakeimage123456",
-            "progress": 100,
-            "status": "ACTIVE",
-            "updated": "2011-01-01T01:02:03Z"
-        },
-        {
-            "OS-EXT-IMG-SIZE:size": "25165824",
-            "created": "2011-01-01T01:02:03Z",
-            "id": "261b52ed-f693-4147-8f3b-d25df5efd968",
-            "links": [
-                {
-                    "href": "http://openstack.example.com/v2/6f70656e737461636b20342065766572/images/261b52ed-f693-4147-8f3b-d25df5efd968",
-                    "rel": "self"
-                },
-                {
-                    "href": "http://openstack.example.com/6f70656e737461636b20342065766572/images/261b52ed-f693-4147-8f3b-d25df5efd968",
-                    "rel": "bookmark"
-                },
-                {
-                    "href": "http://glance.openstack.example.com/images/261b52ed-f693-4147-8f3b-d25df5efd968",
-                    "rel": "alternate",
-                    "type": "application/vnd.openstack.image"
-                }
-            ],
-            "metadata": {
-                "hw_ephemeral_encryption": "True",
-                "hw_ephemeral_encryption_format": "plain"
             },
             "minDisk": 0,
             "minRam": 0,
