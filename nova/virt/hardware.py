@@ -2827,27 +2827,3 @@ def get_ephemeral_encryption_constraint(
         raise exception.FlavorImageConflict(emsg % data)
 
     return flavor_eph_encryption or image_eph_encryption
-
-
-def get_ephemeral_encryption_format(
-    flavor: 'objects.Flavor',
-    image_meta: 'objects.ImageMeta',
-) -> ty.Optional[str]:
-    """Get the ephemeral encryption format.
-
-    :param flavor: an objects.Flavor object
-    :param image_meta: an objects.ImageMeta object
-    :raises: nova.exception.FlavorImageConflict or nova.exception.Invalid
-    :returns: BlockDeviceEncryptionFormatType or None
-    """
-    eph_format = _get_unique_flavor_image_meta(
-        'ephemeral_encryption_format', flavor, image_meta)
-    if eph_format:
-        if eph_format not in fields.BlockDeviceEncryptionFormatType.ALL:
-            allowed = fields.BlockDeviceEncryptionFormatType.ALL
-            raise exception.Invalid(
-                f"Invalid ephemeral encryption format {eph_format}. "
-                f"Allowed values: {', '.join(allowed)}"
-            )
-        return eph_format
-    return None
