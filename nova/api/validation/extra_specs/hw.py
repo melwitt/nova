@@ -15,7 +15,6 @@
 """Validators for ``hw`` namespaced extra specs."""
 
 from nova.api.validation.extra_specs import base
-from nova.objects import fields
 
 
 realtime_validators = [
@@ -550,18 +549,6 @@ ephemeral_encryption_validators = [
         value={
             'type': bool,
             'description': 'Whether to enable ephemeral storage encryption.',
-        },
-    ),
-    base.ExtraSpecValidator(
-        name='hw:ephemeral_encryption_format',
-        description=(
-            'The encryption format to be used if ephemeral storage '
-            'encryption is enabled via hw:ephemeral_encryption.'
-        ),
-        value={
-            'type': str,
-            'description': 'The encryption format to be used if enabled.',
-            'enum': fields.BlockDeviceEncryptionFormatType.ALL,
         },
     ),
 ]
