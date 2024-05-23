@@ -218,6 +218,7 @@ class DriverBlockDevice(dict):
 
 
 class DriverSwapBlockDevice(DriverBlockDevice):
+    _proxy_as_attr_inherited = set(['encryption_options'])
     _fields = set([
         'device_name',
         'swap_size',
@@ -255,7 +256,7 @@ class DriverSwapBlockDevice(DriverBlockDevice):
 
 class DriverImageBlockDevice(DriverBlockDevice):
     _valid_source = 'image'
-    _proxy_as_attr_inherited = set(['image_id'])
+    _proxy_as_attr_inherited = set(['image_id', 'encryption_options'])
     _new_only_fields = set([
         'disk_bus',
         'device_type',
@@ -304,6 +305,7 @@ class DriverImageBlockDevice(DriverBlockDevice):
 
 
 class DriverEphemeralBlockDevice(DriverBlockDevice):
+    _proxy_as_attr_inherited = set(['encryption_options'])
     _new_only_fields = set([
         'disk_bus',
         'device_type',
