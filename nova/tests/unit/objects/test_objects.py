@@ -1079,7 +1079,7 @@ class TestRegistry(test.NoDBTestCase):
 object_data = {
     'Aggregate': '1.3-f315cb68906307ca2d1cca84d4753585',
     'AggregateList': '1.3-3ea55a050354e72ef3306adefa553957',
-    'BlockDeviceMapping': '1.21-220abb8aa1450e759b72fce8ec6ff955',
+    'BlockDeviceMapping': '1.21-7dc05984a7b9f0bc8d5cdbe679aa4a4a',
     'BlockDeviceMappingList': '1.18-73bcbbae5ef5e8adcedbc821db869306',
     'BuildRequest': '1.3-077dee42bed93f8a5b62be77657b7152',
     'BuildRequestList': '1.0-cd95608eccb89fbc702c8b52f38ec738',
@@ -1097,6 +1097,7 @@ object_data = {
     'DiskMetadata': '1.0-e7a0f1ccccf10d26a76b28e7492f3788',
     'EC2Ids': '1.0-474ee1094c7ec16f8ce657595d8c49d9',
     'EC2InstanceMapping': '1.0-a4556eb5c5e94c045fe84f49cf71644f',
+    'EncryptOptions': '1.0-a5c72e3af9e6fe835f6df7d70065d566',
     'Flavor': '1.2-4ce99b41327bb230262e5a8f45ff0ce3',
     'FlavorList': '1.1-52b5928600e7ca973aa4fc1e46f3934c',
     'HostMapping': '1.0-1a3390a696792a552ab7bd31a77ba9ac',

@@ -15,6 +15,7 @@
 from oslo_db import api as oslo_db_api
 from oslo_db.sqlalchemy import update_match
 from oslo_log import log as logging
+from oslo_serialization import jsonutils
 from oslo_utils import uuidutils
 from oslo_utils import versionutils
 
@@ -99,7 +100,8 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         'encryption_secret_uuid': fields.UUIDField(nullable=True),
         'encryption_format': fields.BlockDeviceEncryptionFormatTypeField(
             nullable=True),
-        'encryption_options': fields.StringField(nullable=True),
+        'encryption_options': fields.ObjectField('EncryptOptions',
+                                                 nullable=True),
     }
 
     def obj_make_compatible(self, primitive, target_version):
@@ -185,6 +187,10 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
                 # generate a UUID on read since the object requires it
                 bdm_id = db_block_device['id']
                 db_block_device[key] = cls._create_uuid(context, bdm_id)
+            if key == 'encryption_options' and db_block_device.get(key):
+                cls._set_encryption_options_from_json_blob(
+                    block_device_obj, db_block_device[key])
+                continue
             block_device_obj[key] = db_block_device[key]
         if 'instance' in expected_attrs:
             my_inst = objects.Instance(context)
@@ -195,6 +201,18 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         block_device_obj._context = context
         block_device_obj.obj_reset_changes()
         return block_device_obj
+
+    @staticmethod
+    def _set_encryption_options_from_json_blob(block_device_obj, json_str):
+        block_device_obj['encryption_options'] = (
+            objects.EncryptOptions.obj_from_primitive(
+                jsonutils.loads(json_str)))
+
+    def _convert_encryption_options_to_json_blob(self, updates):
+        if ('encryption_options' in updates and
+                self.encryption_options is not None):
+            updates['encryption_options'] = (
+                jsonutils.dumps(self.encryption_options.obj_to_primitive()))
 
     def _create(self, context, update_or_create=False):
         """Create the block device record in the database.
@@ -217,6 +235,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         if 'instance' in updates:
             raise exception.ObjectActionError(action='create',
                                               reason='instance assigned')
+        self._convert_encryption_options_to_json_blob(updates)
 
         if update_or_create:
             db_bdm = db.block_device_mapping_update_or_create(
@@ -250,6 +269,7 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
             raise exception.ObjectActionError(action='save',
                                               reason='instance changed')
         updates.pop('id', None)
+        self._convert_encryption_options_to_json_blob(updates)
         updated = db.block_device_mapping_update(self._context, self.id,
                                                  updates, legacy=False)
         if not updated:
