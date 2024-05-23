@@ -190,6 +190,7 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
         encryption = {
             'secret': 'a_secret',
             'format': 'luks',
+            'options': objects.EncryptOptions.get_default(),
         }
         self._test_create_image(
             '/some/stuff', 'qcow2', '1234567891234',
