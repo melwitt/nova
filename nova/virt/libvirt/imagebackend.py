@@ -562,6 +562,7 @@ class Image(metaclass=abc.ABCMeta):
             encryption = {
                 'format': self.disk_info_mapping.get('encryption_format'),
                 'secret': secret,
+                'options': self.disk_info_mapping.get('encryption_options'),
             }
             return encryption
 
