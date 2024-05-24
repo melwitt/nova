@@ -4563,6 +4563,10 @@ class LibvirtDriver(driver.ComputeDriver):
                     driver_bdm['encryption_format'] = (
                         CONF.ephemeral_storage_encryption.default_format)
 
+                if driver_bdm.get('encryption_options') is None:
+                    driver_bdm['encryption_options'] = (
+                        objects.EncryptOptions.get_default())
+
                 secret_uuid, secret, created = (
                     self._get_or_create_ephemeral_encryption_secret(
                         context, instance, driver_bdm))

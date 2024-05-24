@@ -634,6 +634,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         # not exist, qcow2 disk does not exist, qcow2 disk does not exist
         mock_exists.side_effect = [False, True, False, False, False]
 
+        encryption_options = objects.EncryptOptions.get_default()
         disk_info = {
             'bus': 'virtio',
             'dev': '/dev/vda',
@@ -641,6 +642,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
             'encrypted': True,
             'encryption_secret_uuid': uuids.secret,
             'encryption_format': 'luks',
+            'encryption_options': encryption_options,
         }
         image = self.image_class(
             self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
@@ -648,6 +650,7 @@ class Qcow2TestCase(_ImageTestCase, test.NoDBTestCase):
         expected_encryption = {
             'format': 'luks',
             'secret': mock_get_secret.return_value,
+            'options': encryption_options,
         }
         kwargs = {'context': self.CONTEXT}
 
