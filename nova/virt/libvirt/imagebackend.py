@@ -16,6 +16,7 @@
 import abc
 import base64
 import contextlib
+import copy
 import errno
 import functools
 import os
@@ -37,6 +38,7 @@ from nova import crypto
 from nova import exception
 from nova.i18n import _
 from nova.image import glance
+from nova.objects import encrypt_options
 import nova.privsep.libvirt
 import nova.privsep.path
 from nova.storage import rbd_utils
@@ -827,9 +829,12 @@ class Qcow2(Image):
             # encrypted source image, so that instances can track and decrypt
             # their backing file.
             image_encryption = kwargs.pop('src_encryption', None)
+            base_encryption = copy.deepcopy(image_encryption)
+            base_encryption['options'] = (
+                encrypt_options.EncryptOptions.get_default())
             prepare_template(
                 target=base, src_encryption=image_encryption,
-                dest_encryption=image_encryption, *args, **kwargs)
+                dest_encryption=base_encryption, *args, **kwargs)
 
         # NOTE(ankit): Update the mtime of the base file so the image
         # cache manager knows it is in use.
