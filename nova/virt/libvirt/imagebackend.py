@@ -257,7 +257,8 @@ class Image(metaclass=abc.ABCMeta):
                         json_str)['file']['filename']
                 else:
                     bstore.source_file = backing_file
-                bstore.driver_format = 'raw'
+                # FIXME(melwitt): Could this also be 'qcow2'?
+                bstore.format = 'raw'
                 backing_encryption = vconfig.LibvirtConfigGuestDiskEncryption()
                 backing_secret = (
                     vconfig.LibvirtConfigGuestDiskEncryptionSecret())
@@ -829,9 +830,12 @@ class Qcow2(Image):
             # encrypted source image, so that instances can track and decrypt
             # their backing file.
             image_encryption = kwargs.pop('src_encryption', None)
-            base_encryption = copy.deepcopy(image_encryption)
-            base_encryption['options'] = (
-                encrypt_options.EncryptOptions.get_default())
+            base_encryption = None
+            if image_encryption:
+                base_encryption = copy.deepcopy(image_encryption)
+                base_encryption['options'] = (
+                    encrypt_options.EncryptOptions.get_default())
+
             prepare_template(
                 target=base, src_encryption=image_encryption,
                 dest_encryption=base_encryption, *args, **kwargs)
