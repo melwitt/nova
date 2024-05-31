@@ -131,7 +131,12 @@ class ImageMetaPropsPayload(base.NotificationPayloadBase):
     # Version 1.11: Added 'hw_locked_memory' field
     # Version 1.12: Added 'hw_viommu_model' field
     # Version 1.13: Added 'hw_virtio_packed_ring' field
-    VERSION = '1.13'
+    # Version 1.14: Added 'os_encrypt_format', 'os_encrypt_cipher',
+    #                     'os_encrypt_key_id',
+    #                     'os_encrypt_key_deletion_policy',
+    #                     'os_decrypt_container_format', and 'os_decrypt_size'
+    #                     fields
+    VERSION = '1.14'
 
     # NOTE(efried): This logic currently relies on all of the fields of
     # ImageMetaProps being initialized with no arguments. See the docstring.
@@ -141,7 +146,7 @@ class ImageMetaPropsPayload(base.NotificationPayloadBase):
     #  class being used in more than one place.
     fields = {
         k: v.__class__() for k, v in image_meta.ImageMetaProps.fields.items()
-            if k not in ('hw_ephemeral_encryption_secret_uuid',)}
+            if k not in ('os_encrypt_key_id',)}
 
     SCHEMA = {
         k: ('image_meta_props', k) for k in fields}
