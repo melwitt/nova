@@ -228,7 +228,9 @@ class _ImageTestCase(object):
     def test_libvirt_info_scsi_with_unit(self, disk_unit):
         self._test_libvirt_info_scsi_with_unit(disk_unit)
 
-    def test_libvirt_info_with_encryption(self):
+    @mock.patch('nova.virt.libvirt.utils.get_disk_backing_file',
+                return_value='fake_backing_file')
+    def test_libvirt_info_with_encryption(self, mock_get_bfile):
         disk_info = {
             'bus': 'virtio',
             'dev': '/dev/vda',
@@ -236,6 +238,7 @@ class _ImageTestCase(object):
             'encrypted': True,
             'encryption_format': 'luks',
             'encryption_secret_uuid': uuids.secret,
+            'backing_encryption_secret_uuid': uuids.bsecret,
         }
         image = self.image_class(
             self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
@@ -264,6 +267,15 @@ class _ImageTestCase(object):
         self.assertEqual("passphrase", disk.ephemeral_encryption.secret.type)
         self.assertEqual(uuids.secret, disk.ephemeral_encryption.secret.uuid)
         self.assertEqual("luks", disk.ephemeral_encryption.format)
+
+        self.assertEqual("fake_backing_file", disk.backing_store.source_file)
+        self.assertEqual(disk.driver_format, disk.backing_store.format)
+        self.assertEqual(
+            "passphrase", disk.backing_store.ephemeral_encryption.secret.type)
+        self.assertEqual(
+            uuids.bsecret, disk.backing_store.ephemeral_encryption.secret.uuid)
+        self.assertEqual(
+            "luks", disk.backing_store.ephemeral_encryption.format)
 
     @mock.patch('nova.crypto.get_encryption_secret',
                 return_value=mock.sentinel.secret)
