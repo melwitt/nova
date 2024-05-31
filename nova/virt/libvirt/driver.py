@@ -11684,8 +11684,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 context, self._image_api, image_id)
         else:
             image_meta = objects.ImageMeta.from_instance(instance)
-        secret_uuid = image_meta.properties.get(
-            'hw_ephemeral_encryption_secret_uuid')
+        secret_uuid = image_meta.properties.get('os_encrypt_key_id')
 
         image_encryption: ty.Optional[EncryptionInfo] = None
         if secret_uuid:
@@ -11698,13 +11697,11 @@ class LibvirtDriver(driver.ComputeDriver):
                     f'Failed to find encryption secret {secret_uuid} in the '
                     f'key manager for image {image_id}')
                 raise exception.EphemeralEncryptionSecretNotFound(msg)
-            encryption_format = image_meta.properties.get(
-                'hw_ephemeral_encryption_format')
+            encryption_format = image_meta.properties.get('os_encrypt_format')
             if not encryption_format:
                 msg = _(
-                    'If hw_ephemeral_encryption_secret_uuid is set in '
-                    'image properties, hw_ephemeral_encryption_format must '
-                    'also be set')
+                    'If os_encrypt_key_id is set in image properties, then '
+                    'os_encrypt_format must also be set')
                 raise exception.ImageUnacceptable(
                     reason=msg, image_id=image_id)
             image_encryption = {

@@ -31108,8 +31108,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         # Simulate an instance to be created from an encrypted source image.
         self.mock_get_image_meta_by_ref.return_value = (
             objects.ImageMeta.from_dict({'properties': {
-                'hw_ephemeral_encryption_secret_uuid': uuids.secret,
-                'hw_ephemeral_encryption_format': 'luks',
+                'os_encrypt_key_id': uuids.secret,
+                'os_encrypt_format': 'luks',
             }}))
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
@@ -31140,7 +31140,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         self.mock_get_secret.return_value = None
         self.mock_get_image_meta_by_ref.return_value = (
             objects.ImageMeta.from_dict({'properties':
-                {'hw_ephemeral_encryption_secret_uuid': uuids.secret}}))
+                {'os_encrypt_key_id': uuids.secret}}))
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         mock_imagebackend = mock.Mock(spec=imagebackend.Image)
@@ -31156,7 +31156,7 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         # the encryption format is not present in the image properties.
         self.mock_get_image_meta_by_ref.return_value = (
             objects.ImageMeta.from_dict({'properties':
-                {'hw_ephemeral_encryption_secret_uuid': uuids.secret}}))
+                {'os_encrypt_key_id': uuids.secret}}))
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         mock_imagebackend = mock.Mock(spec=imagebackend.Image)
