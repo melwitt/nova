@@ -1439,9 +1439,11 @@ class LibvirtConfigGuestDiskBackingStore(LibvirtConfigObject):
         self.driver_name = None
         self.driver_format = None
         self.backing_store = None
+        self.format = None
         self.ephemeral_encryption = None
 
     def format_dom(self):
+        # https://libvirt.org/kbase/backing_chains.html
         bstore = super(LibvirtConfigGuestDiskBackingStore, self).format_dom()
 
         if self.source_type is not None:
@@ -1450,8 +1452,8 @@ class LibvirtConfigGuestDiskBackingStore(LibvirtConfigObject):
         if self.index is not None:
             bstore.set('index', self.index)
 
-        if self.driver_format is not None:
-            bstore.append(etree.Element('format', type=self.driver_format))
+        if self.format is not None:
+            bstore.append(etree.Element('format', type=self.format))
 
         if self.source_type == 'file':
             source = etree.Element('source', file=self.source_file)
