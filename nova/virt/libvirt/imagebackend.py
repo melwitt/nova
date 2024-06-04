@@ -832,7 +832,7 @@ class Qcow2(Image):
             # their backing file.
             image_encryption = kwargs.pop('src_encryption', None)
             base_encryption = None
-            if image_encryption:
+            if image_encryption and bdm_encryption:
                 base_encryption = copy.deepcopy(image_encryption)
                 base_encryption['options'] = (
                     encrypt_options.EncryptOptions.get_default())

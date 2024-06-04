@@ -1692,17 +1692,19 @@ class API:
         :param image_meta_dict: The image metadata for the request
         :block_device_mapping: The current block_device_mapping for the request
         """
-        # NOTE(melwitt): If this image is encrypted and hw_ephemeral_encryption
-        # was not explicitly specified, we will consider the image as having
+        # NOTE(melwitt): If this image is encrypted and hw*ephemeral_encryption
+        # was not explicitly set, we will consider the image as having
         # requested encryption. The intention is to avoid silently decrypting
         # data by taking an encrypted image and producing unencrypted disks
         # from it without clear indication to do so.
         # In this case, we add hw_ephemeral_encryption to the image meta dict
         # and the contents will be stored in Instance.system_metadata and the
         # RequestSpec later in the server create|rebuild path.
-        if ('os_encrypt_key_id' in image_meta_dict and
-                'hw_ephemeral_encryption' not in image_meta_dict):
-            image_meta_dict['hw_ephemeral_encryption'] = True
+        image_properties = image_meta_dict['properties']
+        if ('os_encrypt_key_id' in image_properties and
+                'hw_ephemeral_encryption' not in image_properties and
+                'hw:ephemeral_encryption' not in flavor.extra_specs):
+            image_properties['hw_ephemeral_encryption'] = True
 
         image_meta = _get_image_meta_obj(image_meta_dict)
         if not hardware.get_ephemeral_encryption_constraint(
