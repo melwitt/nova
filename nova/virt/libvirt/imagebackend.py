@@ -1315,15 +1315,6 @@ class Rbd(Image):
                   'store': store_name})
 
     def clone(self, context, image_id_or_uri, copy_to_store=True):
-        encryption = self.get_encryption(context)
-        if encryption:
-            # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
-            # with an encryption key different from its parent is not
-            # supported. Support should be available in v18 and when we can
-            # require >= v18 we can support clone of encrypted images.
-            # See https://github.com/ceph/ceph/commit/1d3de19
-            raise NotImplementedError(
-                _('clone() with encryption is not implemented'))
         image_meta = IMAGE_API.get(context, image_id_or_uri,
                                    include_locations=True)
         locations = image_meta['locations']
