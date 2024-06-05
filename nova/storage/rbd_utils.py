@@ -14,7 +14,10 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
-import urllib
+import re
+import tempfile
+import typing as ty
+import urllib.parse
 
 from eventlet import tpool
 
@@ -24,10 +27,12 @@ from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 from oslo_utils import encodeutils
 from oslo_utils import excutils
+from oslo_utils import versionutils
 
 import nova.conf
 from nova import exception
 from nova.i18n import _
+from nova.objects import encryption_details
 
 try:
     import rados
@@ -41,6 +46,12 @@ CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
 
 RESIZE_SNAPSHOT_NAME = 'nova-resize'
+
+
+class EncryptionInfo(ty.TypedDict):
+    secret: str
+    format: str
+    details: encryption_details.EncryptDetails
 
 
 class RbdProxy(object):
@@ -189,6 +200,52 @@ class RBDDriver(object):
             args.extend(['--conf', self.ceph_conf])
         return args
 
+    def get_version(self) -> str:
+        """Get the Ceph version in X.Y.Z format"""
+
+        args = ['ceph', '--version']
+        out, _ = processutils.execute(*args)
+        m = re.search(r'\d+\.\d+\.\d+', out)
+        if not m:
+            raise exception.NotFound('Ceph version could not be found.')
+        return m.group(0)
+
+    def info(
+        self,
+        name: str,
+        pool: ty.Optional[str] = None,
+    ) -> ty.Dict[str, ty.Any]:
+        """Get image info in JSON format"""
+        args = [
+            'rbd', 'info', '/'.join([pool or self.pool, name]),
+            '--format', 'json'] + self.ceph_args()
+        out, _ = processutils.execute(*args)
+        return jsonutils.loads(out)
+
+    def format_encryption(
+        self,
+        name: str,
+        encryption: EncryptionInfo,
+        pool: ty.Optional[str] = None,
+    ) -> None:
+        encryption_format = encryption['format']
+        if encryption_format == 'luks':
+            encryption_format == 'luks1'
+
+        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+            # Write out the passphrase secret to a temp file
+            f.write(encryption['secret'])
+
+            # Ensure the secret is written to disk, we can't .close() here as
+            # that removes the file when using NamedTemporaryFile
+            f.flush()
+
+            args = [
+                'rbd', 'encryption', 'format',
+                '/'.join([pool or self.pool, name]), encryption_format,
+                '--passphrase-file', f.name] + self.ceph_args()
+            processutils.execute(*args)
+
     def get_mon_addrs(self, strip_brackets=True):
         args = ['ceph', 'mon', 'dump', '--format=json'] + self.ceph_args()
         out, _ = processutils.execute(*args)
@@ -255,13 +312,23 @@ class RBDDriver(object):
                       dict(loc=url, err=e))
             return False
 
+    @property
+    def clone_supports_different_encryption_key(self) -> bool:
+        """Whether this version of Ceph supports a different key from parent
+
+        Prior to Ceph v18 (Reef) creating a cloned image with an encryption key
+        different from its parent is not supported.
+        """
+        return (versionutils.convert_version_to_int(self.get_version()) >=
+                    versionutils.convert_version_to_int('18.0.0'))
+
     def clone(self, image_location, dest_name, dest_pool=None):
         _fsid, pool, image, snapshot = self.parse_url(
                 image_location['url'])
         LOG.debug('cloning %(pool)s/%(img)s@%(snap)s to '
                   '%(dest_pool)s/%(dest_name)s',
                   dict(pool=pool, img=image, snap=snapshot,
-                       dest_pool=dest_pool, dest_name=dest_name))
+                       dest_pool=dest_pool or self.pool, dest_name=dest_name))
         with RADOSClient(self, str(pool)) as src_client:
             with RADOSClient(self, dest_pool) as dest_client:
                 try:

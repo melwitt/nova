@@ -244,7 +244,7 @@ class Image(metaclass=abc.ABCMeta):
             # Config for encrypted backing file, if applicable.
             backing_secret_uuid = (
                 self.disk_info_mapping.get('backing_encryption_secret_uuid'))
-            if backing_secret_uuid is not None:
+            if backing_secret_uuid and self.driver_format == 'qcow2':
                 bstore = vconfig.LibvirtConfigGuestDiskBackingStore()
                 bstore.source_type = 'file'
                 # Backing file will be JSON if it's encrypted (the encryption
@@ -1124,6 +1124,28 @@ class Rbd(Image):
 
         return info
 
+    def disk_encryption(self, info):
+        super().disk_encryption(info)
+        # NOTE(melwitt): If this version of Ceph does not support a child image
+        # having a different encryption passphrase from its parent image and
+        # this image is a clone, generate guest XML using the
+        # backing_encryption_secret_uuid (which is the encrypted source image
+        # secret UUID) instead of the usual encryption_secret_uuid.
+        if (info.ephemeral_encryption and
+                    'parent' in self.driver.info(self.rbd_name) and
+                    not self.driver.clone_supports_different_encryption_key):
+            backing_secret_uuid = self.disk_info_mapping.get(
+                'backing_encryption_secret_uuid')
+            if backing_secret_uuid:
+                version = self.driver.get_version()
+                LOG.info(
+                    f'This version of Ceph ({version}) does not support a '
+                    'child image having a different encryption key from its '
+                    'parent image. Using the BDM '
+                    f'backing_encryption_secret_uuid {backing_secret_uuid} to '
+                    'generate the guest XML.')
+                info.ephemeral_encryption.secret.uuid = backing_secret_uuid
+
     def _can_fallocate(self):
         return False
 
@@ -1314,15 +1336,6 @@ class Rbd(Image):
                   'store': store_name})
 
     def clone(self, context, image_id_or_uri, copy_to_store=True):
-        encryption = self.get_encryption(context)
-        if encryption:
-            # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
-            # with an encryption key different from its parent is not
-            # supported. Support should be available in v18 and when we can
-            # require >= v18 we can support clone of encrypted images.
-            # See https://github.com/ceph/ceph/commit/1d3de19
-            raise NotImplementedError(
-                _('clone() with encryption is not implemented'))
         image_meta = IMAGE_API.get(context, image_id_or_uri,
                                    include_locations=True)
         locations = image_meta['locations']
@@ -1348,6 +1361,10 @@ class Rbd(Image):
         reason = _('No image locations are accessible')
         raise exception.ImageUnacceptable(image_id=image_id_or_uri,
                                           reason=reason)
+
+        encryption = self.get_encryption(context)
+        if encryption and self.driver.clone_supports_different_encryption_key:
+            self.driver.format_encryption(self.rbd_name, encryption)
 
     def flatten(self):
         # NOTE(vdrok): only flatten images if they are not already flattened,

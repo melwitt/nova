@@ -3288,6 +3288,17 @@ class LibvirtDriver(driver.ComputeDriver):
             disk_info_mapping=disk_info['mapping']['root'])
 
         encryption = root_disk.get_encryption(context)
+        dest_encryption = None
+        if encryption:
+            # Generate image metadata for the snapshot, the encryption
+            # secret UUID will be needed to access the encrypted disk if
+            # the snapshot is used to create an instance later.
+            encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                block_device_info)
+            dest_encryption, meta_props = (
+                self._create_snapshot_encryption_metadata(
+                    context, instance, image_id, encryption, encrypted_bdms))
+            metadata['properties'].update(meta_props)
 
         # NOTE(dgenin): Instances with LVM encrypted ephemeral storage require
         #               cold snapshots. Currently, checking for encryption is
@@ -3321,18 +3332,6 @@ class LibvirtDriver(driver.ComputeDriver):
                           expected_state=task_states.IMAGE_PENDING_UPLOAD)
 
         try:
-            if source_type == 'rbd' and encryption:
-                # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
-                # with an encryption key different from its parent is not
-                # supported. Support should be available in v18 and when we can
-                # require >= v18 we can support clone of encrypted images.
-                # See https://github.com/ceph/ceph/commit/1d3de19
-                LOG.info('Performing standard snapshot because direct '
-                         'snapshot does not currently support creation of a '
-                         'cloned image with an encryption key different from '
-                         'its parent.', instance=instance)
-                raise NotImplementedError(
-                    _('direct_snapshot() with encryption is not implemented'))
             metadata['location'] = root_disk.direct_snapshot(
                 context, snapshot_name, image_format, image_id,
                 instance.image_ref)
@@ -3363,19 +3362,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Suspend the guest, so this is no longer a live snapshot
                 self._suspend_guest_for_snapshot(
                     context, live_snapshot, original_power_state, instance)
-
-            dest_encryption = None
-            if encryption:
-                # Generate image metadata for the snapshot, the encryption
-                # secret UUID will be needed to access the encrypted disk if
-                # the snapshot is used to create an instance later.
-                encrypted_bdms = driver.block_device_info_get_encrypted_disks(
-                    block_device_info)
-                dest_encryption, meta_props = (
-                    self._create_snapshot_encryption_metadata(
-                        context, instance, image_id,
-                        encryption, encrypted_bdms))
-                metadata['properties'].update(meta_props)
 
             snapshot_directory = CONF.libvirt.snapshots_directory
             fileutils.ensure_tree(snapshot_directory)
@@ -5207,8 +5193,19 @@ class LibvirtDriver(driver.ComputeDriver):
                 # files (and will not have image_id set).
                 backing_secret_uuid = None
                 backing_secret = None
-                if ('image_id' in driver_bdm and
-                        CONF.libvirt.images_type in ('qcow2', 'default')):
+                if ('image_id' in driver_bdm and CONF.libvirt.images_type in
+                        ('qcow2', 'default', 'rbd')):
+                    # NOTE(melwitt): rbd is included here for the clone() case
+                    # to track the encryption secret UUID of the source
+                    # (parent) image.
+                    # If our version of Ceph doesn't support a child image
+                    # having a different encryption key from its parent image,
+                    # we will need to use the source image secret
+                    # (backing_encryption_secret_uuid) instead of
+                    # the new secret (encryption_secret_uuid) we had intended
+                    # to use for the child image. If our version of Ceph does
+                    # support a different encryption key, we will use the new
+                    # secret we created earlier encryption_secret_uuid.
                     backing_secret_uuid, backing_secret, created = (
                         self._create_ephemeral_backing_encryption_secret(
                             context, instance, image_meta, driver_bdm))
@@ -5950,13 +5947,6 @@ class LibvirtDriver(driver.ComputeDriver):
                             src_encryption=src_encryption,
                             dest_encryption=dest_encryption)
                     except NotImplementedError:
-                        # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned
-                        # image with an encryption key different from its
-                        # parent is not supported. Support should be available
-                        # in v18 and when we can require >= v18 we can support
-                        # clone of encrypted images.
-                        # See https://github.com/ceph/ceph/commit/1d3de19
-
                         # We ignore [workarounds]never_download_image_if_on_rbd
                         # here because if the image is encrypted and if we also
                         # never download images, we wouldn't be able to support
