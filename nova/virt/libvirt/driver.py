@@ -3288,6 +3288,17 @@ class LibvirtDriver(driver.ComputeDriver):
             disk_info_mapping=disk_info['mapping']['root'])
 
         encryption = root_disk.get_encryption(context)
+        dest_encryption = None
+        if encryption:
+            # Generate image metadata for the snapshot, the encryption
+            # secret UUID will be needed to access the encrypted disk if
+            # the snapshot is used to create an instance later.
+            encrypted_bdms = driver.block_device_info_get_encrypted_disks(
+                block_device_info)
+            dest_encryption, meta_props = (
+                self._create_snapshot_encryption_metadata(
+                    context, instance, image_id, encryption, encrypted_bdms))
+            metadata['properties'].update(meta_props)
 
         # NOTE(dgenin): Instances with LVM encrypted ephemeral storage require
         #               cold snapshots. Currently, checking for encryption is
@@ -3321,18 +3332,18 @@ class LibvirtDriver(driver.ComputeDriver):
                           expected_state=task_states.IMAGE_PENDING_UPLOAD)
 
         try:
-            if source_type == 'rbd' and encryption:
-                # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
-                # with an encryption key different from its parent is not
-                # supported. Support should be available in v18 and when we can
-                # require >= v18 we can support clone of encrypted images.
-                # See https://github.com/ceph/ceph/commit/1d3de19
-                LOG.info('Performing standard snapshot because direct '
-                         'snapshot does not currently support creation of a '
-                         'cloned image with an encryption key different from '
-                         'its parent.', instance=instance)
-                raise NotImplementedError(
-                    _('direct_snapshot() with encryption is not implemented'))
+            # if source_type == 'rbd' and encryption:
+            #     # TODO(melwitt): In Ceph v17 (Quincy) creating a cloned image
+            #     # with an encryption key different from its parent is not
+            #     # supported. Support should be available in v18 and when we can
+            #     # require >= v18 we can support clone of encrypted images.
+            #     # See https://github.com/ceph/ceph/commit/1d3de19
+            #     LOG.info('Performing standard snapshot because direct '
+            #              'snapshot does not currently support creation of a '
+            #              'cloned image with an encryption key different from '
+            #              'its parent.', instance=instance)
+            #     raise NotImplementedError(
+            #         _('direct_snapshot() with encryption is not implemented'))
             metadata['location'] = root_disk.direct_snapshot(
                 context, snapshot_name, image_format, image_id,
                 instance.image_ref)
@@ -3363,19 +3374,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 # Suspend the guest, so this is no longer a live snapshot
                 self._suspend_guest_for_snapshot(
                     context, live_snapshot, original_power_state, instance)
-
-            dest_encryption = None
-            if encryption:
-                # Generate image metadata for the snapshot, the encryption
-                # secret UUID will be needed to access the encrypted disk if
-                # the snapshot is used to create an instance later.
-                encrypted_bdms = driver.block_device_info_get_encrypted_disks(
-                    block_device_info)
-                dest_encryption, meta_props = (
-                    self._create_snapshot_encryption_metadata(
-                        context, instance, image_id,
-                        encryption, encrypted_bdms))
-                metadata['properties'].update(meta_props)
 
             snapshot_directory = CONF.libvirt.snapshots_directory
             fileutils.ensure_tree(snapshot_directory)
