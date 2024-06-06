@@ -390,6 +390,14 @@ class TestDriverBlockDevice(test.NoDBTestCase):
                 elif isinstance(test_bdm._bdm_obj.fields[field],
                                 fields.BooleanField):
                     fake_value = not test_bdm[field_or_alias]
+                elif isinstance(test_bdm._bdm_obj.fields[field],
+                                fields.ObjectField):
+                    # For ObjectFields, just set them to an instance of the
+                    # object class to cover the code path. Otherwise, we would
+                    # need to create a valid example value every time we add an
+                    # ObjectField to objects.BlockDeviceMapping.
+                    fake_value = getattr(
+                        objects, test_bdm._bdm_obj.fields[field].objname)()
                 else:
                     fake_value = 'fake_changed_value'
                 test_bdm[field_or_alias] = fake_value
