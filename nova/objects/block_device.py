@@ -15,6 +15,7 @@
 from oslo_db import api as oslo_db_api
 from oslo_db.sqlalchemy import update_match
 from oslo_log import log as logging
+from oslo_serialization import jsonutils
 from oslo_utils import uuidutils
 from oslo_utils import versionutils
 
@@ -69,7 +70,8 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
     # Version 1.20: Added volume_type
     # Version 1.21: Added encrypted, encryption_secret_uuid, encryption_format
     #               and encryption_options
-    VERSION = '1.21'
+    # Version 1.22: Added encryption_details
+    VERSION = '1.22'
 
     fields = {
         'id': fields.IntegerField(),
@@ -99,11 +101,20 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         'encryption_secret_uuid': fields.UUIDField(nullable=True),
         'encryption_format': fields.BlockDeviceEncryptionFormatTypeField(
             nullable=True),
+        # NOTE(melwitt): The encryption_options field was never used and has
+        # been replaced by encryption_details.
         'encryption_options': fields.StringField(nullable=True),
+        'encryption_details': fields.ObjectField(
+            'EncryptDetails', nullable=True),
     }
 
     def obj_make_compatible(self, primitive, target_version):
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (1, 22):
+            primitive.pop('encryption_details', None)
+            # Prevent older versions from trying to lazy-load the unused
+            # encryption_options field.
+            primitive['encryption_options'] = None
         if target_version < (1, 21):
             primitive.pop('encrypted', None)
             primitive.pop('encryption_secret_uuid', None)
@@ -185,6 +196,13 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
                 # generate a UUID on read since the object requires it
                 bdm_id = db_block_device['id']
                 db_block_device[key] = cls._create_uuid(context, bdm_id)
+            if key == 'encryption_details' and db_block_device.get(key):
+                cls._set_encryption_details_from_json_blob(
+                    block_device_obj, db_block_device[key])
+                continue
+            if key == 'encryption_options':
+                # The encryption_options field is not used.
+                continue
             block_device_obj[key] = db_block_device[key]
         if 'instance' in expected_attrs:
             my_inst = objects.Instance(context)
@@ -195,6 +213,18 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         block_device_obj._context = context
         block_device_obj.obj_reset_changes()
         return block_device_obj
+
+    @staticmethod
+    def _set_encryption_details_from_json_blob(block_device_obj, json_str):
+        block_device_obj['encryption_details'] = (
+            objects.EncryptDetails.obj_from_primitive(
+                jsonutils.loads(json_str)))
+
+    def _convert_encryption_details_to_json_blob(self, updates):
+        if ('encryption_details' in updates and
+                self.encryption_details is not None):
+            updates['encryption_details'] = (
+                jsonutils.dumps(self.encryption_details.obj_to_primitive()))
 
     def _create(self, context, update_or_create=False):
         """Create the block device record in the database.
@@ -217,6 +247,12 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         if 'instance' in updates:
             raise exception.ObjectActionError(action='create',
                                               reason='instance assigned')
+        # The encryption_options field is not used.
+        if 'encryption_options' in updates:
+            raise exception.ObjectActionError(
+                action='create', reason='encryption_options assigned')
+
+        self._convert_encryption_details_to_json_blob(updates)
 
         if update_or_create:
             db_bdm = db.block_device_mapping_update_or_create(
@@ -249,7 +285,13 @@ class BlockDeviceMapping(base.NovaPersistentObject, base.NovaObject,
         if 'instance' in updates:
             raise exception.ObjectActionError(action='save',
                                               reason='instance changed')
+        # The encryption_options field is not used.
+        if 'encryption_options' in updates:
+            raise exception.ObjectActionError(
+                action='save', reason='encryption_options changed')
+
         updates.pop('id', None)
+        self._convert_encryption_details_to_json_blob(updates)
         updated = db.block_device_mapping_update(self._context, self.id,
                                                  updates, legacy=False)
         if not updated:

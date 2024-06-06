@@ -143,7 +143,7 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
                 '-o', f"encrypt.format={encryption.get('format')}",
             ]
 
-            encryption_options = {
+            encryption_details = {
                 'cipher-alg': 'aes-256',
                 'cipher-mode': 'xts',
                 'hash-alg': 'sha256',
@@ -151,7 +151,7 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
                 'ivgen-alg': 'plain64',
                 'ivgen-hash-alg': 'sha256',
             }
-            for option, value in encryption_options.items():
+            for option, value in encryption_details.items():
                 encryption_opts += [
                     '-o',
                     f'encrypt.{option}={value}',
@@ -190,6 +190,7 @@ class LibvirtUtilsTestCase(test.NoDBTestCase):
         encryption = {
             'secret': 'a_secret',
             'format': 'luks',
+            'details': objects.EncryptDetails(),
         }
         self._test_create_image(
             '/some/stuff', 'qcow2', '1234567891234',

@@ -122,9 +122,10 @@ TRAITS_CPU_MAPPING = make_reverse_cpu_traits_mapping()
 VTPM_DIR = '/var/lib/libvirt/swtpm/'
 
 
-class EncryptionOptions(ty.TypedDict):
+class EncryptionInfo(ty.TypedDict):
     secret: str
     format: str
+    details: 'objects.EncryptDetails'
 
 
 def create_image(
@@ -132,7 +133,7 @@ def create_image(
     disk_format: str,
     disk_size: ty.Optional[ty.Union[str, int]],
     backing_file: ty.Optional[str] = None,
-    encryption: ty.Optional[EncryptionOptions] = None
+    encryption: ty.Optional[EncryptionInfo] = None
 ) -> None:
     """Disk image creation with qemu-img
     :param path: Desired location of the disk image
@@ -187,28 +188,16 @@ def create_image(
                 '-o', 'encrypt.key-secret=sec',
                 '-o', f"encrypt.format={encryption['format']}",
             ]
-            # Supported luks options:
-            #  cipher-alg=<str>       - Name of cipher algorithm and key length
-            #  cipher-mode=<str>      - Name of encryption cipher mode
-            #  hash-alg=<str>         - Name of hash algorithm to use for PBKDF
-            #  iter-time=<num>        - Time to spend in PBKDF in milliseconds
-            #  ivgen-alg=<str>        - Name of IV generator algorithm
-            #  ivgen-hash-alg=<str>   - Name of IV generator hash algorithm
-            #
-            # NOTE(melwitt): Sensible defaults (that match the qemu defaults)
-            # are hardcoded at this time for simplicity and consistency when
-            # instances are migrated. Configuration of luks options could be
-            # added in a future release.
-            encryption_options = {
-                'cipher-alg': 'aes-256',
-                'cipher-mode': 'xts',
-                'hash-alg': 'sha256',
-                'iter-time': 2000,
-                'ivgen-alg': 'plain64',
-                'ivgen-hash-alg': 'sha256',
+            details = encryption['details']
+            encryption_details = {
+                'cipher-alg': details.cipher_algorithm,
+                'cipher-mode': details.cipher_mode,
+                'hash-alg': details.hash_algorithm,
+                'iter-time': details.iter_time,
+                'ivgen-alg': details.ivgen_algorithm,
+                'ivgen-hash-alg': details.ivgen_hash_algorithm,
             }
-
-            for option, value in encryption_options.items():
+            for option, value in encryption_details.items():
                 encryption_opts += [
                     '-o',
                     f'encrypt.{option}={value}',

@@ -66,7 +66,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
          'encrypted': False,
          'encryption_secret_uuid': None,
          'encryption_format': None,
-         'encryption_options': None})
+         'encryption_details': None})
 
     swap_driver_bdm = {
         'device_name': '/dev/sdb1',
@@ -75,7 +75,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
         'encrypted': False,
         'encryption_secret_uuid': None,
         'encryption_format': None,
-        'encryption_options': None}
+        'encryption_details': None}
 
     ephemeral_bdm_dict = block_device.BlockDeviceDict(
         {'id': 2, 'instance_uuid': uuids.instance,
@@ -91,7 +91,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
          'encrypted': False,
          'encryption_secret_uuid': None,
          'encryption_format': None,
-         'encryption_options': None})
+         'encryption_details': None})
 
     ephemeral_driver_bdm = {
         'device_name': '/dev/sdc1',
@@ -102,7 +102,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
         'encrypted': False,
         'encryption_secret_uuid': None,
         'encryption_format': None,
-        'encryption_options': None}
+        'encryption_details': None}
 
     volume_bdm_dict = block_device.BlockDeviceDict(
         {'id': 3, 'instance_uuid': uuids.instance,
@@ -241,7 +241,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
          'encrypted': True,
          'encryption_secret_uuid': uuids.secret,
          'encryption_format': 'plain',
-         'encryption_options': None})
+         'encryption_details': None})
 
     image_driver_bdm = {
         'device_name': '/dev/vda',
@@ -254,7 +254,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
         'encrypted': True,
         'encryption_secret_uuid': uuids.secret,
         'encryption_format': 'plain',
-        'encryption_options': None}
+        'encryption_details': None}
 
     def setUp(self):
         super(TestDriverBlockDevice, self).setUp()
@@ -390,6 +390,14 @@ class TestDriverBlockDevice(test.NoDBTestCase):
                 elif isinstance(test_bdm._bdm_obj.fields[field],
                                 fields.BooleanField):
                     fake_value = not test_bdm[field_or_alias]
+                elif isinstance(test_bdm._bdm_obj.fields[field],
+                                fields.ObjectField):
+                    # For ObjectFields, just set them to an instance of the
+                    # object class to cover the code path. Otherwise, we would
+                    # need to create a valid example value every time we add an
+                    # ObjectField to objects.BlockDeviceMapping.
+                    fake_value = getattr(
+                        objects, test_bdm._bdm_obj.fields[field].objname)()
                 else:
                     fake_value = 'fake_changed_value'
                 test_bdm[field_or_alias] = fake_value
@@ -423,7 +431,7 @@ class TestDriverBlockDevice(test.NoDBTestCase):
             self.assertEqual(set([]), test_bdm._bdm_obj.obj_what_changed())
 
         # Test that nothing is set on the object if there are no actual changes
-        test_bdm._bdm_obj.obj_reset_changes()
+        test_bdm._bdm_obj.obj_reset_changes(recursive=True)
         with mock.patch.object(test_bdm._bdm_obj, 'save') as save_mock:
             save_mock.side_effect = check_save
             test_bdm.save()
