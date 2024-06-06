@@ -47,6 +47,7 @@ from nova.compute import task_states
 from nova.compute import vm_states
 import nova.conf
 import nova.context
+from nova.db import constants as db_const
 from nova.db.main import models
 from nova.db import utils as db_utils
 from nova.db.utils import require_context
@@ -4642,20 +4643,71 @@ def purge_shadow_tables(context, before_date, status_fn=None):
                             'table': table.name})
             continue
 
-        if col is not None:
-            delete = table.delete().where(col < before_date)
-        else:
-            delete = table.delete()
+        # NOTE(melwitt): Limit the number of rows in a single transaction to
+        # avoid an error like:
+        #
+        # sqlalchemy.exc.OperationalError: (pymysql.err.OperationalError)
+        #   (1180, 'Got error 90 "Message too long" during COMMIT')
+        #   (Background on this error at: http://sqlalche.me/e/e3q8)
+        while True:
+            with conn.begin():
+                select = table.select()
+                if col is not None:
+                    select = select.where(col < before_date)
+                select = select.limit(db_const.MAX_INT)
+                print(select)
+                rows = conn.execute(select).all()
+                if not rows:
+                    break
+                for row in rows:
+                    delete = table.delete(row)
+                    print(delete)
+                    deleted = conn.execute(delete)
+            if deleted.rowcount > 0:
+                status_fn(_('Deleted %(rows)i rows from %(table)s based on '
+                            'timestamp column %(col)s') % {
+                                'rows': deleted.rowcount,
+                                'table': table.name,
+                                'col': col is None and '(n/a)' or col.name})
+            total_deleted += deleted.rowcount
 
-        with conn.begin():
-            deleted = conn.execute(delete)
-        if deleted.rowcount > 0:
-            status_fn(_('Deleted %(rows)i rows from %(table)s based on '
-                        'timestamp column %(col)s') % {
-                            'rows': deleted.rowcount,
-                            'table': table.name,
-                            'col': col is None and '(n/a)' or col.name})
-        total_deleted += deleted.rowcount
+        # while True:
+        #     print(table)
+        #     select = table.select()
+        #     if col is not None:
+        #         select = select.where(col < before_date)
+        #     #select = select.limit(db_const.MAX_INT)
+        #     select = select.limit(db_const.MAX_INT).scalar_subquery()
+        #     with conn.begin():
+        #         print(select)
+        #         #rows = conn.execute(select).all()
+        #         #if not ids:
+        #         #    break
+        #         #delete = table.delete().where(table.c.id.in_(ids))
+        #         delete = table.delete(select)
+        #         deleted = conn.execute(delete)
+        #         if deleted.rowcount == 0:
+        #             break
+        #         print(delete)
+        #         #deleted = conn.execute(delete)
+
+        # if col is not None:
+            # delete = table.delete().where(col < before_date)
+        #    pass
+        # else:
+        #    pass
+            # delete = table.delete().limit(db_const.MAX_INT)
+        # print(delete)
+
+        # with conn.begin():
+        #     deleted = conn.execute(delete)
+        # if deleted.rowcount > 0:
+        #     status_fn(_('Deleted %(rows)i rows from %(table)s based on '
+        #                 'timestamp column %(col)s') % {
+        #                     'rows': deleted.rowcount,
+        #                     'table': table.name,
+        #                     'col': col is None and '(n/a)' or col.name})
+        # total_deleted += deleted.rowcount
 
     conn.close()
 
