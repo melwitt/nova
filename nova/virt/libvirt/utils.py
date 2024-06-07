@@ -125,7 +125,7 @@ VTPM_DIR = '/var/lib/libvirt/swtpm/'
 class EncryptionInfo(ty.TypedDict):
     secret: str
     format: str
-    options: 'objects.EncryptOptions'
+    details: 'objects.EncryptDetails'
 
 
 def create_image(
@@ -188,16 +188,16 @@ def create_image(
                 '-o', 'encrypt.key-secret=sec',
                 '-o', f"encrypt.format={encryption['format']}",
             ]
-            options = encryption['options']
-            encryption_options = {
-                'cipher-alg': options.cipher_algorithm,
-                'cipher-mode': options.cipher_mode,
-                'hash-alg': options.hash_algorithm,
-                'iter-time': options.iter_time,
-                'ivgen-alg': options.ivgen_algorithm,
-                'ivgen-hash-alg': options.ivgen_hash_algorithm,
+            details = encryption['details']
+            encryption_details = {
+                'cipher-alg': details.cipher_algorithm,
+                'cipher-mode': details.cipher_mode,
+                'hash-alg': details.hash_algorithm,
+                'iter-time': details.iter_time,
+                'ivgen-alg': details.ivgen_algorithm,
+                'ivgen-hash-alg': details.ivgen_hash_algorithm,
             }
-            for option, value in encryption_options.items():
+            for option, value in encryption_details.items():
                 encryption_opts += [
                     '-o',
                     f'encrypt.{option}={value}',

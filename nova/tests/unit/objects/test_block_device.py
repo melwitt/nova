@@ -445,13 +445,13 @@ class TestBlockDeviceMappingUUIDMigration(test.TestCase):
         self._assert_online_migration(2, 2, limit=2)
 
 
-class TestBlockDeviceMappingEncryptOptions(test.TestCase):
+class TestBlockDeviceMappingEncryptDetails(test.TestCase):
 
     def setUp(self):
         super().setUp()
         self.ctxt = context.RequestContext(
             'fake-user-id', 'fake-project-id')
-        self.encryption_options = objects.EncryptOptions(
+        self.encryption_details = objects.EncryptDetails(
             cipher_algorithm=fields.CipherAlgorithm.AES_256,
             cipher_mode=fields.CipherMode.XTS,
             hash_algorithm=fields.HashAlgorithm.SHA256,
@@ -460,67 +460,67 @@ class TestBlockDeviceMappingEncryptOptions(test.TestCase):
             ivgen_hash_algorithm=fields.HashAlgorithm.SHA256)
 
     def test_create(self):
-        # Create a BDM with encryption_options.
+        # Create a BDM with encryption_details.
         bdm = objects.BlockDeviceMapping(
             self.ctxt, instance_uuid=uuids.instance)
-        bdm.encryption_options = self.encryption_options
+        bdm.encryption_details = self.encryption_details
         bdm.create()
-        # The encryption_options in the database should be a json blob string
+        # The encryption_details in the database should be a json blob string
         # that matches the values from the object.
         db_bdm = db.block_device_mapping_get_all_by_instance(
             self.ctxt, uuids.instance)[0]
         self.assertEqual(
-            jsonutils.dumps(bdm.encryption_options.obj_to_primitive()),
-            db_bdm['encryption_options'])
+            jsonutils.dumps(bdm.encryption_details.obj_to_primitive()),
+            db_bdm['encryption_details'])
 
     def test_save(self):
-        # Create a BDM with encryption_options.
+        # Create a BDM with encryption_details.
         bdm = objects.BlockDeviceMapping(
             self.ctxt, instance_uuid=uuids.instance)
-        bdm.encryption_options = self.encryption_options
+        bdm.encryption_details = self.encryption_details
         bdm.create()
         # Change the values.
-        bdm.encryption_options.cipher_algorithm = (
+        bdm.encryption_details.cipher_algorithm = (
             fields.CipherAlgorithm.TWOFISH_256)
-        bdm.encryption_options.cipher_mode = fields.CipherMode.ECB
-        bdm.encryption_options.hash_algorithm = fields.HashAlgorithm.SHA512
-        bdm.encryption_options.iter_time = 3000
-        bdm.encryption_options.ivgen_algorithm = fields.IVGenAlgorithm.ESSIV
-        bdm.encryption_options.ivgen_hash_algorithm = fields.HashAlgorithm.MD5
+        bdm.encryption_details.cipher_mode = fields.CipherMode.ECB
+        bdm.encryption_details.hash_algorithm = fields.HashAlgorithm.SHA512
+        bdm.encryption_details.iter_time = 3000
+        bdm.encryption_details.ivgen_algorithm = fields.IVGenAlgorithm.ESSIV
+        bdm.encryption_details.ivgen_hash_algorithm = fields.HashAlgorithm.MD5
         # Save it to the database.
         bdm.save()
-        # The encryption_options in the database should be a json blob string
+        # The encryption_details in the database should be a json blob string
         # that matches the values from the object.
         db_bdm = db.block_device_mapping_get_all_by_instance(
             self.ctxt, uuids.instance)[0]
         self.assertEqual(
-            jsonutils.dumps(bdm.encryption_options.obj_to_primitive()),
-            db_bdm['encryption_options'])
+            jsonutils.dumps(bdm.encryption_details.obj_to_primitive()),
+            db_bdm['encryption_details'])
 
     def test_get_by_instance_uuid(self):
-        # Create a BDM with encryption_options.
+        # Create a BDM with encryption_details.
         bdm = objects.BlockDeviceMapping(
             self.ctxt, instance_uuid=uuids.instance)
-        bdm.encryption_options = self.encryption_options
+        bdm.encryption_details = self.encryption_details
         bdm.create()
         # Get the object from the database.
         got_bdm = objects.BlockDeviceMappingList.get_by_instance_uuid(
             self.ctxt, uuids.instance)[0]
         self.assertEqual(
             fields.CipherAlgorithm.AES_256,
-            got_bdm.encryption_options.cipher_algorithm)
+            got_bdm.encryption_details.cipher_algorithm)
         self.assertEqual(
-            fields.CipherMode.XTS, got_bdm.encryption_options.cipher_mode)
+            fields.CipherMode.XTS, got_bdm.encryption_details.cipher_mode)
         self.assertEqual(
             fields.HashAlgorithm.SHA256,
-            got_bdm.encryption_options.hash_algorithm)
-        self.assertEqual(2000, got_bdm.encryption_options.iter_time)
+            got_bdm.encryption_details.hash_algorithm)
+        self.assertEqual(2000, got_bdm.encryption_details.iter_time)
         self.assertEqual(
             fields.IVGenAlgorithm.PLAIN64,
-            got_bdm.encryption_options.ivgen_algorithm)
+            got_bdm.encryption_details.ivgen_algorithm)
         self.assertEqual(
             fields.HashAlgorithm.SHA256,
-            got_bdm.encryption_options.ivgen_hash_algorithm)
+            got_bdm.encryption_details.ivgen_hash_algorithm)
 
 
 class TestBlockDeviceMappingObject(test_objects._LocalTest,

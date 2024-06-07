@@ -27,7 +27,7 @@ from oslo_utils import units
 
 from nova import exception
 from nova.i18n import _
-from nova.objects import encrypt_options
+from nova.objects import encrypt_details
 import nova.privsep.utils
 
 LOG = logging.getLogger(__name__)
@@ -40,7 +40,7 @@ QEMU_IMG_LIMITS = processutils.ProcessLimits(
 class EncryptionInfo(ty.TypedDict):
     secret: str
     format: str
-    options: 'encrypt_options.EncryptOptions'
+    details: 'encrypt_details.EncryptDetails'
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint
@@ -182,16 +182,16 @@ def unprivileged_convert_image(
                 encryption_opts += [
                     '-o', f"{prefix}format={dest_encryption['format']}"
                 ]
-            options = dest_encryption['options']
-            encryption_options = {
-                'cipher-alg': options.cipher_algorithm,
-                'cipher-mode': options.cipher_mode,
-                'hash-alg': options.hash_algorithm,
-                'iter-time': options.iter_time,
-                'ivgen-alg': options.ivgen_algorithm,
-                'ivgen-hash-alg': options.ivgen_hash_algorithm,
+            details = dest_encryption['details']
+            encryption_details = {
+                'cipher-alg': details.cipher_algorithm,
+                'cipher-mode': details.cipher_mode,
+                'hash-alg': details.hash_algorithm,
+                'iter-time': details.iter_time,
+                'ivgen-alg': details.ivgen_algorithm,
+                'ivgen-hash-alg': details.ivgen_hash_algorithm,
             }
-            for option, value in encryption_options.items():
+            for option, value in encryption_details.items():
                 encryption_opts += [
                     '-o', f'{prefix}{option}={value}',
                 ]

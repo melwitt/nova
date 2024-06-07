@@ -17,7 +17,7 @@ from unittest import mock
 
 import ddt
 
-from nova.objects import encrypt_options
+from nova.objects import encrypt_details
 import nova.privsep.qemu
 from nova import test
 from nova.tests import fixtures
@@ -106,7 +106,7 @@ class QemuTestCase(test.NoDBTestCase):
         encryption = {
             'format': 'luks',
             'secret': '12345',
-            'options': encrypt_options.EncryptOptions.get_default(),
+            'details': encrypt_details.EncryptDetails(),
         }
 
         nova.privsep.qemu.convert_image(
@@ -159,7 +159,7 @@ class QemuTestCase(test.NoDBTestCase):
         dest_encryption = {
             'format': 'luks',
             'secret': '67890',
-            'options': encrypt_options.EncryptOptions.get_default(),
+            'details': encrypt_details.EncryptDetails(),
         }
         nova.privsep.qemu.convert_image(
             '/fake/source', '/fake/dest', in_format, out_format,
