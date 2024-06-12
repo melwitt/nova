@@ -32,7 +32,7 @@ from oslo_utils import versionutils
 import nova.conf
 from nova import exception
 from nova.i18n import _
-from nova.objects import encryption_details
+from nova.objects import encrypt_details
 
 try:
     import rados
@@ -51,7 +51,7 @@ RESIZE_SNAPSHOT_NAME = 'nova-resize'
 class EncryptionInfo(ty.TypedDict):
     secret: str
     format: str
-    details: encryption_details.EncryptDetails
+    details: encrypt_details.EncryptDetails
 
 
 class RbdProxy(object):
@@ -222,6 +222,14 @@ class RBDDriver(object):
         out, _ = processutils.execute(*args)
         return jsonutils.loads(out)
 
+    def is_clone(self, name: str, pool: ty.Optional[str] = None) -> bool:
+        with RBDVolumeProxy(self, name, pool=pool) as vol:
+            try:
+                vol.parent_id()
+            except rbd.ImageNotFound:
+                return False
+            return True
+
     def format_encryption(
         self,
         name: str,
@@ -232,19 +240,24 @@ class RBDDriver(object):
         if encryption_format == 'luks':
             encryption_format == 'luks1'
 
-        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
-            # Write out the passphrase secret to a temp file
-            f.write(encryption['secret'])
+        with RBDVolumeProxy(self, name, pool=pool) as vol:
+            return vol.encryption_format(
+                encryption_format, encryption['secret'],
+                cipher_alg=encryption['details'].cipher_algorithm)
 
-            # Ensure the secret is written to disk, we can't .close() here as
-            # that removes the file when using NamedTemporaryFile
-            f.flush()
+        # with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+        #     # Write out the passphrase secret to a temp file
+        #     f.write(encryption['secret'])
 
-            args = [
-                'rbd', 'encryption', 'format',
-                '/'.join([pool or self.pool, name]), encryption_format,
-                '--passphrase-file', f.name] + self.ceph_args()
-            processutils.execute(*args)
+        #     # Ensure the secret is written to disk, we can't .close() here as
+        #     # that removes the file when using NamedTemporaryFile
+        #     f.flush()
+
+        #     args = [
+        #         'rbd', 'encryption', 'format',
+        #         '/'.join([pool or self.pool, name]), encryption_format,
+        #         '--passphrase-file', f.name] + self.ceph_args()
+        #     processutils.execute(*args)
 
     def get_mon_addrs(self, strip_brackets=True):
         args = ['ceph', 'mon', 'dump', '--format=json'] + self.ceph_args()
@@ -316,11 +329,13 @@ class RBDDriver(object):
     def clone_supports_different_encryption_key(self) -> bool:
         """Whether this version of Ceph supports a different key from parent
 
-        Prior to Ceph v18 (Reef) creating a cloned image with an encryption key
-        different from its parent is not supported.
+        Prior to Ceph v18.1.0 (Reef) creating a cloned image with an encryption
+        key different from its parent is not supported.
+
+        https://github.com/ceph/ceph/commit/1d3de19
         """
         return (versionutils.convert_version_to_int(self.get_version()) >=
-                    versionutils.convert_version_to_int('18.0.0'))
+                    versionutils.convert_version_to_int('18.1.0'))
 
     def clone(self, image_location, dest_name, dest_pool=None):
         _fsid, pool, image, snapshot = self.parse_url(

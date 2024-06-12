@@ -1124,27 +1124,26 @@ class Rbd(Image):
 
         return info
 
-    def disk_encryption(self, info):
-        super().disk_encryption(info)
-        # NOTE(melwitt): If this version of Ceph does not support a child image
-        # having a different encryption passphrase from its parent image and
-        # this image is a clone, generate guest XML using the
-        # backing_encryption_secret_uuid (which is the encrypted source image
-        # secret UUID) instead of the usual encryption_secret_uuid.
-        if (info.ephemeral_encryption and
-                    'parent' in self.driver.info(self.rbd_name) and
-                    not self.driver.clone_supports_different_encryption_key):
-            backing_secret_uuid = self.disk_info_mapping.get(
-                'backing_encryption_secret_uuid')
-            if backing_secret_uuid:
-                version = self.driver.get_version()
-                LOG.info(
-                    f'This version of Ceph ({version}) does not support a '
-                    'child image having a different encryption key from its '
-                    'parent image. Using the BDM '
-                    f'backing_encryption_secret_uuid {backing_secret_uuid} to '
-                    'generate the guest XML.')
-                info.ephemeral_encryption.secret.uuid = backing_secret_uuid
+    # def disk_encryption(self, info):
+    #     super().disk_encryption(info)
+    #     # NOTE(melwitt): If this version of Ceph does not support a child image
+    #     # having a different encryption passphrase from its parent image and
+    #     # this image is a clone, generate guest XML using the
+    #     # backing_encryption_secret_uuid (which is the encrypted source image
+    #     # secret UUID) instead of the usual encryption_secret_uuid.
+    #     if (info.ephemeral_encryption and self.driver.is_clone(self.rbd_name)
+    #             and not self.driver.clone_supports_different_encryption_key):
+    #         backing_secret_uuid = self.disk_info_mapping.get(
+    #             'backing_encryption_secret_uuid')
+    #         if backing_secret_uuid:
+    #             version = self.driver.get_version()
+    #             LOG.info(
+    #                 f'This version of Ceph ({version}) does not support a '
+    #                 'child image having a different encryption key from its '
+    #                 'parent image. Using the BDM '
+    #                 f'backing_encryption_secret_uuid {backing_secret_uuid} to '
+    #                 'generate the guest XML.')
+    #             info.ephemeral_encryption.secret.uuid = backing_secret_uuid
 
     def _can_fallocate(self):
         return False
@@ -1350,7 +1349,14 @@ class Rbd(Image):
         for location in locations:
             if self.driver.is_cloneable(location, image_meta):
                 LOG.debug('Selected location: %(loc)s', {'loc': location})
-                return self.driver.clone(location, self.rbd_name)
+                result = self.driver.clone(location, self.rbd_name)
+                # If a different child image passphrase is supported, set it.
+                encryption = self.get_encryption(context)
+                if (encryption and
+                        self.driver.clone_supports_different_encryption_key):
+                    self.driver.format_encryption(self.rbd_name, encryption)
+                return result
+
 
         # Not clone-able in our ceph, so try to get glance to copy it for us
         # and then retry
@@ -1361,10 +1367,6 @@ class Rbd(Image):
         reason = _('No image locations are accessible')
         raise exception.ImageUnacceptable(image_id=image_id_or_uri,
                                           reason=reason)
-
-        encryption = self.get_encryption(context)
-        if encryption and self.driver.clone_supports_different_encryption_key:
-            self.driver.format_encryption(self.rbd_name, encryption)
 
     def flatten(self):
         # NOTE(vdrok): only flatten images if they are not already flattened,

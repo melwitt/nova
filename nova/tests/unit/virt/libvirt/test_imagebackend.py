@@ -228,6 +228,8 @@ class _ImageTestCase(object):
     def test_libvirt_info_scsi_with_unit(self, disk_unit):
         self._test_libvirt_info_scsi_with_unit(disk_unit)
 
+    @mock.patch('nova.storage.rbd_utils.RBDDriver.info',
+                new=mock.Mock(return_value={}))
     @mock.patch('nova.storage.rbd_utils.RBDDriver.get_mon_addrs',
                 new=mock.Mock(return_value=(['host'], ['port'])))
     @mock.patch('nova.virt.libvirt.utils.get_disk_backing_file',
@@ -270,14 +272,18 @@ class _ImageTestCase(object):
         self.assertEqual(uuids.secret, disk.ephemeral_encryption.secret.uuid)
         self.assertEqual("luks", disk.ephemeral_encryption.format)
 
-        self.assertEqual("fake_backing_file", disk.backing_store.source_file)
-        self.assertEqual(disk.driver_format, disk.backing_store.format)
-        self.assertEqual(
-            "passphrase", disk.backing_store.ephemeral_encryption.secret.type)
-        self.assertEqual(
-            uuids.bsecret, disk.backing_store.ephemeral_encryption.secret.uuid)
-        self.assertEqual(
-            "luks", disk.backing_store.ephemeral_encryption.format)
+        if image.driver_format == 'qcow2':
+            self.assertEqual(
+                "fake_backing_file", disk.backing_store.source_file)
+            self.assertEqual(disk.driver_format, disk.backing_store.format)
+            self.assertEqual(
+                "passphrase",
+                disk.backing_store.ephemeral_encryption.secret.type)
+            self.assertEqual(
+                uuids.bsecret,
+                disk.backing_store.ephemeral_encryption.secret.uuid)
+            self.assertEqual(
+                "luks", disk.backing_store.ephemeral_encryption.format)
 
     @mock.patch('nova.crypto.get_encryption_secret',
                 return_value=mock.sentinel.secret)
@@ -2297,6 +2303,8 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
         mock_imgapi.copy_image_to_store.assert_called_once_with(
             self.CONTEXT, 'foo', 'store')
 
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.storage.rbd_utils.RBDDriver')
     @mock.patch('nova.virt.libvirt.imagebackend.IMAGE_API')
     def test_clone_copy_to_store(self, mock_imgapi, mock_driver_):
@@ -2353,6 +2361,8 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
             # recursed after the copy-to-store operation
             mock.call('fake', fake_image)])
 
+    @mock.patch('nova.virt.libvirt.imagebackend.Image.get_encryption',
+                new=mock.Mock(return_value=None))
     @mock.patch('nova.storage.rbd_utils.RBDDriver')
     @mock.patch('nova.virt.libvirt.imagebackend.IMAGE_API')
     def test_clone_without_needed_copy(self, mock_imgapi, mock_driver_):
@@ -2396,11 +2406,27 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
             mock_copy.assert_not_called()
         mock_driver.is_cloneable.assert_called_once_with('fake', fake_image)
 
+    @mock.patch(
+        'nova.storage.rbd_utils.RBDDriver.is_cloneable',
+        new=mock.Mock(return_value=True))
+    @mock.patch(
+        'nova.storage.rbd_utils.RBDDriver.clone', new=mock.Mock())
+    @mock.patch(
+        'nova.storage.rbd_utils.RBDDriver.'
+        'clone_supports_different_encryption_key',
+        new_callable=mock.PropertyMock)
     @mock.patch('nova.crypto.get_encryption_secret')
-    def test_clone_with_encryption(self, mock_get_secret):
-        # At this time (Ceph 17 aka Quincy) there is not support for cloning an
-        # encrypted image that has a different passphrase than the parent. So
-        # we have to do a standard snapshot.
+    @mock.patch('nova.virt.libvirt.imagebackend.IMAGE_API')
+    def test_clone_with_encryption(
+            self, mock_imgapi, mock_get_secret, mock_supports_different_key,
+            supports_different_key=False):
+        mock_supports_different_key.return_value = supports_different_key
+        fake_image = {
+            'id': 'foo',
+            'disk_format': 'raw',
+            'locations': ['fake'],
+        }
+        mock_imgapi.get.return_value = fake_image
         disk_info = {
             'bus': 'virtio',
             'dev': '/dev/vda',
@@ -2408,12 +2434,11 @@ class RbdTestCase(_ImageTestCase, test.NoDBTestCase):
             'encrypted': True,
             'encryption_secret_uuid': uuids.secret,
             'encryption_format': 'luks',
+            'backing_encryption_secret_uuid': uuids.source_image_secret,
         }
         image = self.image_class(
             self.INSTANCE, self.NAME, disk_info_mapping=disk_info)
-        ex = self.assertRaises(
-            NotImplementedError, image.clone, self.CONTEXT, 'fake_image_id')
-        self.assertIn('clone() with encryption is not implemented', str(ex))
+        image.clone(self.CONTEXT, 'fake_image_id')
         mock_get_secret.assert_called_once_with(self.CONTEXT, uuids.secret)
 
     @mock.patch('nova.virt.images.convert_image')
