@@ -4994,13 +4994,14 @@ class LibvirtDriver(driver.ComputeDriver):
         context: nova_context.RequestContext,
         instance: 'objects.Instance',
         driver_bdm: 'nova.virt.block_device.DriverBlockDevice',
+        secret: ty.Optional[str] = None,
     ) -> ty.Tuple[str, str, bool]:
         created = False
         secret_uuid = driver_bdm.get('encryption_secret_uuid')
         if secret_uuid is None:
             # Create a passphrase and stash it in the key manager
             secret_uuid, secret = crypto.create_ephemeral_encryption_secret(
-                context, instance, driver_bdm)
+                context, instance, driver_bdm, secret=secret)
             # Stash the UUID of said secret in our driver BDM
             driver_bdm['encryption_secret_uuid'] = secret_uuid
             created = True
@@ -5183,11 +5184,13 @@ class LibvirtDriver(driver.ComputeDriver):
                 if driver_bdm.get('encryption_details') is None:
                     driver_bdm['encryption_details'] = objects.EncryptDetails()
 
-                secret_uuid, secret, created = (
-                    self._get_or_create_ephemeral_encryption_secret(
-                        context, instance, driver_bdm))
-                if created:
-                    created_keymgr_secrets.append(secret_uuid)
+                if (CONF.libvirt.images_type != 'rbd' or rbd_utils.RBDDriver().
+                            clone_supports_different_encryption_key):
+                    secret_uuid, secret, created = (
+                        self._get_or_create_ephemeral_encryption_secret(
+                            context, instance, driver_bdm))
+                    if created:
+                        created_keymgr_secrets.append(secret_uuid)
 
                 # Swap and ephemeral disks will not have encrypted backing
                 # files (and will not have image_id set).
@@ -5195,22 +5198,36 @@ class LibvirtDriver(driver.ComputeDriver):
                 backing_secret = None
                 if ('image_id' in driver_bdm and CONF.libvirt.images_type in
                         ('qcow2', 'default', 'rbd')):
-                    # NOTE(melwitt): rbd is included here for the clone() case
-                    # to track the encryption secret UUID of the source
-                    # (parent) image.
-                    # If our version of Ceph doesn't support a child image
-                    # having a different encryption key from its parent image,
-                    # we will need to use the source image secret
-                    # (backing_encryption_secret_uuid) instead of
-                    # the new secret (encryption_secret_uuid) we had intended
-                    # to use for the child image. If our version of Ceph does
-                    # support a different encryption key, we will use the new
-                    # secret we created earlier encryption_secret_uuid.
+                    # RBD is included here for the clone() case to track the
+                    # encryption secret UUID of the source (parent) image.
                     backing_secret_uuid, backing_secret, created = (
                         self._create_ephemeral_backing_encryption_secret(
                             context, instance, image_meta, driver_bdm))
                     if backing_secret_uuid and created:
                         created_keymgr_secrets.append(backing_secret_uuid)
+
+                    # NOTE(melwitt): If our version of Ceph doesn't support a
+                    # child image having a different encryption key from its
+                    # parent image, we will need to use a copy of the source
+                    # image secret (backing_encryption_secret_uuid) for the
+                    # child image.
+                    if (backing_secret_uuid and
+                            CONF.libvirt.images_type == 'rbd' and
+                            not rbd_utils.RBDDriver().
+                                clone_supports_different_encryption_key):
+                        version = rbd_utils.RBDDriver().get_version()
+                        LOG.info(
+                            f'This version of Ceph ({version}) does not '
+                            'support a child image having a different '
+                            'encryption key from its parent image. Using a '
+                            'copy of backing_encryption_secret_uuid '
+                            f'{backing_secret_uuid} for the clone.')
+                        secret_uuid, secret, created = (
+                            self._get_or_create_ephemeral_encryption_secret(
+                                context, instance, driver_bdm,
+                                secret=backing_secret))
+                        if created:
+                            created_keymgr_secrets.append(secret_uuid)
 
                 # Ensure this is all saved back down in the database via the
                 # o.vo BlockDeviceMapping object
