@@ -20,6 +20,7 @@
 networking and storage of VMs, and compute hosts on which they run)."""
 
 import collections
+import configparser
 import functools
 import re
 import typing as ty
@@ -314,17 +315,36 @@ def reject_vdpa_instances(operation, until=None):
 
 def check_ephemeral_encryption_key_access(ctxt, flavor, image_meta):
     if hardware.get_ephemeral_encryption_constraint(flavor, image_meta):
-        # NOTE(melwitt): Infer the key manager service configuration from ours
-        # and check for the role. The thinking here is to minimize the need to
-        # actually call the key manager service API and adding expense to
-        # the majority of requests that are likely to pass the check.
-        if not CONF.oslo_policy.enforce_scope and 'creator' not in ctxt.roles:
+        # NOTE(melwitt): Verifying key creation access is expensive, so only
+        # check for it if we have reason to believe key creation might fail.
+        #
+        # First, try to get the policy enforce_scope setting from the key
+        # manager service config file default path.
+        barbican_enforce_scope = None
+        barbican_conf = configparser.RawConfigParser()
+        try:
+            barbican_conf.read_file(open('/etc/barbican/barbican.conf'))
+            if barbican_conf.has_option('oslo_policy', 'enforce_scope'):
+                barbican_enforce_scope = strutils.bool_from_string(
+                    barbican_conf.get('oslo_policy', 'enforce_scope'))
+        except FileNotFoundError:
+            pass
+
+        if barbican_enforce_scope is None:
+            # If we couldn't find the policy enforce_scope setting from the key
+            # manager service config, try to infer the setting from the Nova
+            # config.
+            enforce_scope = CONF.oslo_policy.enforce_scope
+        else:
+            enforce_scope = barbican_enforce_scope
+
+        if not enforce_scope and 'creator' not in ctxt.roles:
             # We have to actually try to create a secret to test access. The
             # GET /secrets API allows pretty much all users.
             try:
                 secret_uuid = crypto.create_encryption_secret(
                     ctxt, 'test',
-                    'verifying key access for ephemeral encryption')
+                    '[nova] verifying key access for ephemeral encryption')
             except exception.EncryptionSecretCreateFailed as e:
                 msg = str(e)
                 if 'forbidden' in msg.lower():
