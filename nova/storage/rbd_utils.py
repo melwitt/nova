@@ -33,6 +33,7 @@ import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova.objects import encrypt_details
+from nova.objects import fields
 
 try:
     import rados
@@ -230,6 +231,24 @@ class RBDDriver(object):
                 return False
             return True
 
+    def load_encryption(
+        self,
+        name: str,
+        encryption: EncryptionInfo,
+        secret: str,
+        pool: ty.Optional[str] = None,
+    ) -> None:
+        encryption_format = encryption['format']
+        if encryption_format == 'luks':
+            encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
+
+        with RBDVolumeProxy(self, name, pool=pool) as vol:
+            LOG.debug(
+                f"loading encryption for image {name} with format "
+                f"{encryption['format']} ({encryption_format})")
+            #return vol.encryption_load(encryption_format, encryption['secret'])
+            return vol.encryption_load(encryption_format, secret)
+
     def format_encryption(
         self,
         name: str,
@@ -238,12 +257,26 @@ class RBDDriver(object):
     ) -> None:
         encryption_format = encryption['format']
         if encryption_format == 'luks':
-            encryption_format == 'luks1'
+            encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
+
+        cipher_alg_map = {
+            fields.CipherAlgorithm.AES_128:
+                rbd.RBD_ENCRYPTION_ALGORITHM_AES128,
+            fields.CipherAlgorithm.AES_256:
+                rbd.RBD_ENCRYPTION_ALGORITHM_AES256,
+        }
+        cipher_alg = cipher_alg=cipher_alg_map[
+            encryption['details'].cipher_algorithm]
 
         with RBDVolumeProxy(self, name, pool=pool) as vol:
+            LOG.debug(
+                f"formatting encryption for image {name} with format "
+                f"{encryption['format']} "
+                f"({encryption_format}) and cipher algorithm "
+                f"{encryption['details'].cipher_algorithm} ({cipher_alg})")
             return vol.encryption_format(
-                encryption_format, encryption['secret'],
-                cipher_alg=encryption['details'].cipher_algorithm)
+                encryption_format, encryption['secret'], cipher_alg=cipher_alg)
+                # cipher_alg=encryption['details'].cipher_algorithm)
 
         # with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
         #     # Write out the passphrase secret to a temp file

@@ -604,6 +604,10 @@ class Image(metaclass=abc.ABCMeta):
                 'secret': secret,
                 'details': self.disk_info_mapping.get('encryption_details'),
             }
+            backing_secret_uuid = self.disk_info_mapping.get('backing_encryption_secret_uuid')
+            if backing_secret_uuid:
+                secret = crypto.get_encryption_secret(context, backing_secret_uuid)
+                encryption['backing_secret'] = secret
             return encryption
 
     @staticmethod
@@ -1183,6 +1187,11 @@ class Rbd(Image):
             self._remove_non_raw_cache_image(base)
             prepare_template(target=base, *args, **kwargs)
 
+        # prepare_template() may have cloned the image into a new rbd
+        # image already instead of downloading it locally
+        if not self.exists():
+            self.driver.import_image(base, self.rbd_name)
+
         # FIXME(lyarwood): Context is provided as a kwarg here thanks to
         # the legacy ephemeral encryption implementation. It should likely
         # be an arg but the required refactor isn't trivial.
@@ -1193,6 +1202,14 @@ class Rbd(Image):
         # image_encryption contains the encryption attributes for the source
         # image, if it is encrypted.
         image_encryption = kwargs.pop('src_encryption', None)
+
+        if not self.exists() and bdm_encryption:
+            self.driver.format_encryption(
+                self.rbd_name, encryption=bdm_encryption)
+            # Grow the image to compensate for the overhead associated with the
+            # LUKS header.
+            # https://docs.ceph.com/en/latest/rbd/rbd-encryption
+            #self.driver.resize(self.rbd_name, size)
 
         filename = self._get_lock_name(base)
 
@@ -1215,16 +1232,16 @@ class Rbd(Image):
 
         # prepare_template() may have cloned the image into a new rbd
         # image already instead of downloading it locally
-        if not self.exists():
-            # If the destination image needs to be encrypted, convert the
-            # image. The source image (base image) is never encrypted.
-            if bdm_encryption:
-                staged = f'{base}.converted'
-                with fileutils.remove_path_on_error(staged):
-                    convert_and_import_rbd_image(base, staged)
-                    os.unlink(staged)
-            else:
-                self.driver.import_image(base, self.rbd_name)
+        # if not self.exists():
+        #     # If the destination image needs to be encrypted, convert the
+        #     # image. The source image (base image) is never encrypted.
+        #     if bdm_encryption:
+        #         staged = f'{base}.converted'
+        #         with fileutils.remove_path_on_error(staged):
+        #             convert_and_import_rbd_image(base, staged)
+        #             os.unlink(staged)
+        #     else:
+        #         self.driver.import_image(base, self.rbd_name)
 
         # If the base image is not encrypted and we are creating an encrypted
         # disk, the base image will have a larger virtual size than the
@@ -1349,12 +1366,25 @@ class Rbd(Image):
         for location in locations:
             if self.driver.is_cloneable(location, image_meta):
                 LOG.debug('Selected location: %(loc)s', {'loc': location})
+
+                _fsid, pool, image, snapshot = self.driver.parse_url(location['url'])
+                encryption = self.get_encryption(context)
+                #if (encryption and
+                #        self.driver.clone_supports_different_encryption_key):
+                #    self.driver.load_encryption(image, encryption, encryption['backing_secret'], pool=pool)
+
                 result = self.driver.clone(location, self.rbd_name)
                 # If a different child image passphrase is supported, set it.
-                encryption = self.get_encryption(context)
                 if (encryption and
                         self.driver.clone_supports_different_encryption_key):
+                    path = f'rbd:vms/{self.rbd_name}:id=cinder:conf=/etc/ceph/ceph.conf'
+                    image_info = images.qemu_img_info(path)
+                    print(image_info)
                     self.driver.format_encryption(self.rbd_name, encryption)
+                    #self.driver.load_encryption(self.rbd_name, encryption, encryption['secret'])
+                    #self.driver.resize(self.rbd_name, self.get_disk_size(self.rbd_name))
+                    image_info = images.qemu_img_info(path)
+                    print(image_info)
                 return result
 
 
