@@ -1128,8 +1128,11 @@ class Rbd(Image):
 
         return info
 
-    # def disk_encryption(self, info):
-    #     super().disk_encryption(info)
+    def disk_encryption(self, info):
+        super().disk_encryption(info)
+        # https://libvirt.org/formatstorageencryption.html
+        if info.ephemeral_encryption:
+            info.ephemeral_encryption.engine = 'librbd'
     #     # NOTE(melwitt): If this version of Ceph does not support a child image
     #     # having a different encryption passphrase from its parent image and
     #     # this image is a clone, generate guest XML using the

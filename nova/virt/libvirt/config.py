@@ -1707,9 +1707,11 @@ class LibvirtConfigGuestDiskEncryption(LibvirtConfigObject):
             root_name='diskencryption', **kwargs)
         self.format = None
         self.secret = None
+        self.engine = None
 
     def parse_dom(self, xmldoc):
         self.format = xmldoc.get('format')
+        self.engine = xmldoc.get('engine')
         for c in xmldoc:
             if c.tag == 'secret':
                 m = LibvirtConfigGuestDiskEncryptionSecret()
@@ -1719,6 +1721,7 @@ class LibvirtConfigGuestDiskEncryption(LibvirtConfigObject):
     def format_dom(self):
         obj = etree.Element("encryption")
         obj.set("format", self.format)
+        obj.set("engine", self.engine)
         obj.append(self.secret.format_dom())
 
         return obj

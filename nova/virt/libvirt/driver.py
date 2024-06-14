@@ -5002,6 +5002,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # Create a passphrase and stash it in the key manager
             secret_uuid, secret = crypto.create_ephemeral_encryption_secret(
                 context, instance, driver_bdm, secret=secret)
+            print(f'secret = {secret}')
             # Stash the UUID of said secret in our driver BDM
             driver_bdm['encryption_secret_uuid'] = secret_uuid
             created = True
@@ -5197,7 +5198,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 backing_secret_uuid = None
                 backing_secret = None
                 if ('image_id' in driver_bdm and CONF.libvirt.images_type in
-                        ('qcow2', 'default', 'rbd')):
+                        ('qcow2', 'default')):
                     # RBD is included here for the clone() case to track the
                     # encryption secret UUID of the source (parent) image.
                     backing_secret_uuid, backing_secret, created = (
