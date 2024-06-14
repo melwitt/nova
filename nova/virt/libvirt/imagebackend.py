@@ -32,6 +32,7 @@ from oslo_utils import excutils
 from oslo_utils import fileutils
 from oslo_utils import strutils
 from oslo_utils import units
+from oslo_utils import uuidutils
 
 import nova.conf
 from nova import crypto
@@ -604,10 +605,6 @@ class Image(metaclass=abc.ABCMeta):
                 'secret': secret,
                 'details': self.disk_info_mapping.get('encryption_details'),
             }
-            backing_secret_uuid = self.disk_info_mapping.get('backing_encryption_secret_uuid')
-            if backing_secret_uuid:
-                secret = crypto.get_encryption_secret(context, backing_secret_uuid)
-                encryption['backing_secret'] = secret
             return encryption
 
     @staticmethod
@@ -1128,8 +1125,11 @@ class Rbd(Image):
 
         return info
 
-    # def disk_encryption(self, info):
-    #     super().disk_encryption(info)
+    def disk_encryption(self, info):
+        super().disk_encryption(info)
+        # https://libvirt.org/formatstorageencryption.html
+        if info.ephemeral_encryption:
+            info.ephemeral_encryption.engine = 'librbd'
     #     # NOTE(melwitt): If this version of Ceph does not support a child image
     #     # having a different encryption passphrase from its parent image and
     #     # this image is a clone, generate guest XML using the
@@ -1363,30 +1363,43 @@ class Rbd(Image):
             raise exception.ImageUnacceptable(image_id=image_id_or_uri,
                                               reason=reason)
 
+        encryption = self.get_encryption(context)
+
         for location in locations:
             if self.driver.is_cloneable(location, image_meta):
+                fsid, pool, image, snapshot = self.driver.parse_url(
+                    location['url'])
+                if encryption:
+                    image_size = self.driver.size(image, pool=pool)
+                    if not self.driver.exists(
+                            image, pool=pool, snapshot='snap_for_encryption'):
+                        # Resize the source image first to ensure the child
+                        # image has enough space to accommodate the LUKS header
+                        # etc.
+                        self.driver.resize(
+                            image, image_size + 1 * units.Gi, pool=pool)
+                        # Create a snapshot of the temporarily enlarged image.
+                        self.driver.create_snap(
+                            image, 'snap_for_encryption', pool=pool,
+                            protect=True)
+                        # Resize the source image back to its original size.
+                        self.driver.resize(image, image_size, pool=pool)
+                    location = {
+                        'url':
+                        f'rbd://{fsid}/{pool}/{image}/snap_for_encryption',
+                    }
+
                 LOG.debug('Selected location: %(loc)s', {'loc': location})
-
-                _fsid, pool, image, snapshot = self.driver.parse_url(location['url'])
-                encryption = self.get_encryption(context)
-                #if (encryption and
-                #        self.driver.clone_supports_different_encryption_key):
-                #    self.driver.load_encryption(image, encryption, encryption['backing_secret'], pool=pool)
-
                 result = self.driver.clone(location, self.rbd_name)
-                # If a different child image passphrase is supported, set it.
-                if (encryption and
-                        self.driver.clone_supports_different_encryption_key):
-                    path = f'rbd:vms/{self.rbd_name}:id=cinder:conf=/etc/ceph/ceph.conf'
-                    image_info = images.qemu_img_info(path)
-                    print(image_info)
-                    self.driver.format_encryption(self.rbd_name, encryption)
-                    #self.driver.load_encryption(self.rbd_name, encryption, encryption['secret'])
-                    #self.driver.resize(self.rbd_name, self.get_disk_size(self.rbd_name))
-                    image_info = images.qemu_img_info(path)
-                    print(image_info)
-                return result
 
+                if encryption:
+                    self.driver.format_encryption(self.rbd_name, encryption)
+                    # Resize the clone back to the original size of the source
+                    # image.
+                    self.driver.resize_with_encryption(self.rbd_name,
+                                                      image_size,
+                                                      encryption)
+                return result
 
         # Not clone-able in our ceph, so try to get glance to copy it for us
         # and then retry

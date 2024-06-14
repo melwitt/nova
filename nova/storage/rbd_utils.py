@@ -27,6 +27,7 @@ from oslo_serialization import jsonutils
 from oslo_service import loopingcall
 from oslo_utils import encodeutils
 from oslo_utils import excutils
+from oslo_utils import units
 from oslo_utils import versionutils
 
 import nova.conf
@@ -390,19 +391,31 @@ class RBDDriver(object):
                     raise exception.Forbidden(_('no write permission on '
                                                 'storage pool %s') % dest_pool)
 
-    def size(self, name):
-        with RBDVolumeProxy(self, name, read_only=True) as vol:
+    def size(self, name, pool=None):
+        with RBDVolumeProxy(self, name, read_only=True, pool=pool) as vol:
             return vol.size()
 
-    def resize(self, name, size):
+    def resize(self, name, size, pool=None):
         """Resize RBD volume.
 
         :name: Name of RBD object
         :size: New size in bytes
         """
         LOG.debug('resizing rbd image %s to %d', name, size)
-        with RBDVolumeProxy(self, name) as vol:
+        with RBDVolumeProxy(self, name, pool=pool) as vol:
             vol.resize(size)
+
+    def resize_with_encryption(self, name, size, encryption, pool=None):
+        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+            # Write out the passphrase secret to a temp file
+            f.write(encryption['secret'])
+            # Ensure the secret is written to disk, we can't .close() here as
+            # that removes the file when using NamedTemporaryFile
+            f.flush()
+            args = ['rbd', 'resize', '--size', f'{int(size / units.Mi)}M',
+                    '--allow-shrink', '--encryption-passphrase-file', f.name,
+                    '/'.join([pool or self.pool, name])] + self.ceph_args()
+            processutils.execute(*args)
 
     def parent_info(self, volume, pool=None):
         """Returns the pool, image and snapshot name for the parent of an
