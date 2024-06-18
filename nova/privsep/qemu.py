@@ -63,6 +63,7 @@ def unprivileged_convert_image(
     compress: bool,
     src_encryption: ty.Optional[EncryptionInfo] = None,
     dest_encryption: ty.Optional[EncryptionInfo] = None,
+    skip_image_creation: bool = False,
 ) -> None:
     """Disk image conversion with qemu-img
 
@@ -76,6 +77,8 @@ def unprivileged_convert_image(
         attributes for the source image such as the format and passphrase.
     :param dest_encryption: (Optional) Dict detailing various encryption
         attributes for the destination image such as the format and passphrase.
+    :param skip_image_creation: (Optional) Whether to skip image creation by
+        QEMU, for example if the target image was created in advance.
 
     The in_format and out_format represent disk image file formats in QEMU,
     which are:
@@ -112,7 +115,14 @@ def unprivileged_convert_image(
         cache_mode = 'none'
     else:
         cache_mode = 'writeback'
-    cmd = ['qemu-img', 'convert', '-t', cache_mode, '-O', out_format]
+    cmd = ['qemu-img', 'convert', '-t', cache_mode]
+
+    if not skip_image_creation:
+        # qemu-img: --target-image-opts (required by -n) and -O are mutually
+        # exclusive
+        cmd += ['-O', out_format]
+    else:
+        cmd += ['-n']
 
     # qemu-img: --image-opts and --format are mutually exclusive
     # If the source is encrypted, we will need to pass encryption related
@@ -194,19 +204,6 @@ def unprivileged_convert_image(
             # NamedTemporaryFile
             dest_secret_file.flush()
 
-            prefix = 'encrypt.' if out_format == 'qcow2' else ''
-            encryption_opts += [
-                '--object', f"secret,id=sec1,file={dest_secret_file.name}",
-                '-o', f'{prefix}key-secret=sec1',
-            ]
-            if prefix:
-                # The encryption format is only relevant for the 'qcow2' disk
-                # format. Otherwise, the disk format is 'luks' and the
-                # encryption format is implied and not accepted as an option in
-                # that case.
-                encryption_opts += [
-                    '-o', f"{prefix}format={dest_encryption['format']}"
-                ]
             details = dest_encryption['details']
             encryption_details = {
                 'cipher-alg': details.cipher_algorithm,
@@ -216,19 +213,53 @@ def unprivileged_convert_image(
                 'ivgen-alg': details.ivgen_algorithm,
                 'ivgen-hash-alg': details.ivgen_hash_algorithm,
             }
-            for option, value in encryption_details.items():
+            encryption_opts += [
+                '--object', f"secret,id=sec1,file={dest_secret_file.name}",
+            ]
+            prefix = 'encrypt.' if out_format == 'qcow2' else ''
+            if not skip_image_creation:
                 encryption_opts += [
-                    '-o', f'{prefix}{option}={value}',
+                    '-o', f'{prefix}key-secret=sec1',
                 ]
+                if prefix:
+                    # The encryption format is only relevant for the 'qcow2'
+                    # disk format. Otherwise, the disk format is 'luks' and the
+                    # encryption format is implied and not accepted as an
+                    # option in that case.
+                    encryption_opts += [
+                        '-o', f"{prefix}format={dest_encryption['format']}"
+                    ]
+                for option, value in encryption_details.items():
+                    encryption_opts += [
+                        '-o', f'{prefix}{option}={value}',
+                    ]
+            else:
+                # We will assume the encryption details of the precreated
+                # target image are already set (formatted) and we shouldn't
+                # specify them.
+                file_driver = 'rbd' if dest.startswith('rbd:') else 'file'
+                encryption_opts += [
+                    '--target-image-opts',
+                    f'driver={out_format},file.driver={file_driver},'
+                    f'file.filename={dest},{prefix}key-secret=sec1'
+                ]
+
+        # If the source is not encrypted, it's passed as a positional argument.
+        # NOTE(melwitt): When --image-opts or --target-image-opts are involved,
+        # the order of the positional arguments stil matters. The source always
+        # has to be before the target.
+        if not src_encryption:
+            cmd += [source]
 
         if src_encryption or dest_encryption:
             cmd += encryption_opts
 
-        # If the source is not encrypted, it's passed as a positional argument.
-        if not src_encryption:
-            cmd += [source]
+        # If target image creation is not being skipped, the target is passed
+        # as a positional argument.
+        if not skip_image_creation:
+            cmd += [dest]
 
-        processutils.execute(*cmd + [dest])
+        processutils.execute(*cmd)
 
 
 @nova.privsep.sys_admin_pctxt.entrypoint

@@ -14,6 +14,7 @@
 #    License for the specific language governing permissions and limitations
 #    under the License.
 
+import contextlib
 import re
 import tempfile
 import typing as ty
@@ -204,7 +205,6 @@ class RBDDriver(object):
 
     def get_version(self) -> str:
         """Get the Ceph version in X.Y.Z format"""
-
         args = ['ceph', '--version']
         out, _ = processutils.execute(*args)
         m = re.search(r'\d+\.\d+\.\d+', out)
@@ -231,67 +231,6 @@ class RBDDriver(object):
             except rbd.ImageNotFound:
                 return False
             return True
-
-    def load_encryption(
-        self,
-        name: str,
-        encryption: EncryptionInfo,
-        secret: str,
-        pool: ty.Optional[str] = None,
-    ) -> None:
-        encryption_format = encryption['format']
-        if encryption_format == 'luks':
-            encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
-
-        with RBDVolumeProxy(self, name, pool=pool) as vol:
-            LOG.debug(
-                f"loading encryption for image {name} with format "
-                f"{encryption['format']} ({encryption_format})")
-            #return vol.encryption_load(encryption_format, encryption['secret'])
-            return vol.encryption_load(encryption_format, secret)
-
-    def format_encryption(
-        self,
-        name: str,
-        encryption: EncryptionInfo,
-        pool: ty.Optional[str] = None,
-    ) -> None:
-        encryption_format = encryption['format']
-        if encryption_format == 'luks':
-            encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
-
-        cipher_alg_map = {
-            fields.CipherAlgorithm.AES_128:
-                rbd.RBD_ENCRYPTION_ALGORITHM_AES128,
-            fields.CipherAlgorithm.AES_256:
-                rbd.RBD_ENCRYPTION_ALGORITHM_AES256,
-        }
-        cipher_alg = cipher_alg=cipher_alg_map[
-            encryption['details'].cipher_algorithm]
-
-        with RBDVolumeProxy(self, name, pool=pool) as vol:
-            LOG.debug(
-                f"formatting encryption for image {name} with format "
-                f"{encryption['format']} "
-                f"({encryption_format}) and cipher algorithm "
-                f"{encryption['details'].cipher_algorithm} ({cipher_alg})")
-            return vol.encryption_format(
-                encryption_format, encryption['secret'], cipher_alg=cipher_alg)
-                # cipher_alg=encryption['details'].cipher_algorithm)
-
-        # with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
-        #     # Write out the passphrase secret to a temp file
-        #     f.write(encryption['secret'])
-
-        #     # Ensure the secret is written to disk, we can't .close() here as
-        #     # that removes the file when using NamedTemporaryFile
-        #     f.flush()
-
-        #     args = [
-        #         'rbd', 'encryption', 'format',
-        #         '/'.join([pool or self.pool, name]), encryption_format,
-        #         '--passphrase-file', f.name] + self.ceph_args()
-        #     processutils.execute(*args)
 
     def get_mon_addrs(self, strip_brackets=True):
         args = ['ceph', 'mon', 'dump', '--format=json'] + self.ceph_args()
@@ -360,16 +299,81 @@ class RBDDriver(object):
             return False
 
     @property
-    def clone_supports_different_encryption_key(self) -> bool:
-        """Whether this version of Ceph supports a different key from parent
+    def supports_layered_encryption(self) -> bool:
+        """Whether this version of Ceph supports layered encryption.
 
-        Prior to Ceph v18.1.0 (Reef) creating a cloned image with an encryption
-        key different from its parent is not supported.
+        If Ceph version <= 18.1.0 (Reef), creating clone images with
+        encryption keys different from the parent is not supported.
 
         https://github.com/ceph/ceph/commit/1d3de19
         """
         return (versionutils.convert_version_to_int(self.get_version()) >=
                     versionutils.convert_version_to_int('18.1.0'))
+
+    # FIXME(melwitt): Remove this
+    def load_encryption(
+        self,
+        name: str,
+        encryption: EncryptionInfo,
+        #secret: str,
+        pool: ty.Optional[str] = None,
+    ) -> None:
+        encryption_format = encryption['format']
+        if encryption_format == 'luks':
+            encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
+
+        with RBDVolumeProxy(self, name, pool=pool) as vol:
+            LOG.debug(
+                f"loading encryption for image {name} with format "
+                f"{encryption['format']} ({encryption_format})")
+            return vol.encryption_load(encryption_format, encryption['secret'])
+            #return vol.encryption_load(encryption_format, str(secret))
+
+    def format_encryption(
+        self,
+        name: str,
+        encryption: EncryptionInfo,
+        pool: ty.Optional[str] = None,
+    ) -> None:
+        """Format an image for encryption.
+
+        Make sure to consider the size of the encryption header when formatting
+        an image. Example: if you clone an unformatted (unencrypted) image and
+        then format the clone for encryption, the image *before cloning* must
+        be large enough to accommodate the parent data + encryption header.
+        This means that in cases like this, you will have to resize the image
+        larger temporarily before cloning it.
+        """
+        CIPHER_ALG_MAP = {
+            fields.CipherAlgorithm.AES_128:
+                rbd.RBD_ENCRYPTION_ALGORITHM_AES128,
+            fields.CipherAlgorithm.AES_256:
+                rbd.RBD_ENCRYPTION_ALGORITHM_AES256,
+        }
+
+        encryption_format = encryption['format']
+        if encryption_format == 'luks':
+            encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
+
+        cipher_algorithm = encryption['details'].cipher_algorithm
+        if cipher_algorithm not in CIPHER_ALG_MAP:
+            raise exception.NotSupported(
+                f'{cipher_algorithm} is not supported by RBD')
+        cipher_alg = cipher_alg=CIPHER_ALG_MAP[cipher_algorithm]
+
+        with RBDVolumeProxy(self, name, pool=pool) as vol:
+            LOG.debug(
+                f"formatting encryption for image {name} with format "
+                f"{encryption['format']} ({encryption_format}) "
+                f"and cipher algorithm "
+                f"{encryption['details'].cipher_algorithm} ({cipher_alg})")
+            return vol.encryption_format(
+                encryption_format, encryption['secret'], cipher_alg=cipher_alg)
+
+    def create(self, name, size):
+        """Create a new empty image."""
+        with RADOSClient(self, self.pool) as client:
+            RbdProxy().create(client.ioctx, name, size)
 
     def clone(self, image_location, dest_name, dest_pool=None):
         _fsid, pool, image, snapshot = self.parse_url(
@@ -405,16 +409,47 @@ class RBDDriver(object):
         with RBDVolumeProxy(self, name, pool=pool) as vol:
             vol.resize(size)
 
-    def resize_with_encryption(self, name, size, encryption, pool=None):
-        with tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8') as f:
+    def resize_with_encryption(
+        self,
+        name: str,
+        size: int,
+        encryption: EncryptionInfo,
+        pool: ty.Optional[str] = None,
+    ) -> None:
+        """Resizes an encrypted image.
+
+        When the clone image is encrypted, the encryption format and passphrase
+        must be supplied in order to perform the resizing. The Python bindings
+        don't provide a way to pass the format and passphrase, so we have to
+        use the CLI here.
+        """
+        with contextlib.ExitStack() as stack:
+            secret_file = stack.enter_context(
+                tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
             # Write out the passphrase secret to a temp file
-            f.write(encryption['secret'])
+            secret_file.write(encryption['secret'])
             # Ensure the secret is written to disk, we can't .close() here as
             # that removes the file when using NamedTemporaryFile
-            f.flush()
-            args = ['rbd', 'resize', '--size', f'{int(size / units.Mi)}M',
-                    '--allow-shrink', '--encryption-passphrase-file', f.name,
-                    '/'.join([pool or self.pool, name])] + self.ceph_args()
+            secret_file.flush()
+
+            encryption_format = encryption['format']
+            if encryption_format == 'luks':
+                encryption_format = 'luks1'
+            args = [
+                'rbd', 'resize', '--size', f'{int(size / units.Mi)}M',
+                '--allow-shrink', '--encryption-format', encryption_format,
+                '--encryption-passphrase-file', secret_file.name]
+
+            if 'backing_secret' in encryption:
+                backing_secret_file = stack.enter_context(
+                    tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
+                backing_secret_file.write(encryption['backing_secret'])
+                backing_secret_file.flush()
+                args += [
+                    '--encryption-format', encryption_format,
+                    '--encryption-passphrase-file', backing_secret_file.name]
+
+            args += ['/'.join([pool or self.pool, name])] + self.ceph_args()
             processutils.execute(*args)
 
     def parent_info(self, volume, pool=None):
@@ -442,6 +477,84 @@ class RBDDriver(object):
         LOG.debug('flattening %(pool)s/%(vol)s', dict(pool=pool, vol=volume))
         with RBDVolumeProxy(self, str(volume), pool=pool) as vol:
             vol.flatten()
+
+    def flatten_with_encryption(
+        self,
+        name: str,
+        src_encryption: EncryptionInfo,
+        dest_encryption: EncryptionInfo,
+        pool: ty.Optional[str] = None
+    ) -> None:
+        """Flattens an encrypted clone image with its parent data.
+
+        When the clone image is encrypted, the encryption format and passphrase
+        must be supplied in order to perform the flattening. The Python
+        bindings don't provide a way to pass the format and passphrase, so we
+        have to use the CLI here.
+
+        We can have up to 3 layers of encryption here (we can assume
+        a maximum of 3 layers because we flatten our snapshots before uploading
+        to Glance). Example: an instance booted by cloning  an encrypted source
+        image is being snapshotted and flattened here -- there will be
+        a passphrase for the parent encrypted source image, a passphrase for
+        the current encrypted disk, and finally a passphrase for the clone
+        we're flattening now.
+        """
+        with contextlib.ExitStack() as stack:
+            args = ['rbd', 'flatten']
+
+            # Ordering of passphrases needs to be the most recent or
+            # "outermost" clone B, the parent of clone B (clone A), and the
+            # parent of clone A:
+            # clone B passphrase, clone A passphrase, parent passphrase.
+            if dest_encryption:
+                dest_secret_file = stack.enter_context(
+                    tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
+                # Write out the passphrase secret to a temp file
+                dest_secret_file.write(dest_encryption['secret'])
+                # Ensure the secret is written to disk, we can't .close() here
+                # as that removes the file when using NamedTemporaryFile
+                dest_secret_file.flush()
+
+                encryption_format = dest_encryption['format']
+                if encryption_format == 'luks':
+                    encryption_format = 'luks1'
+
+                args += [
+                    '--encryption-format', encryption_format,
+                    '--encryption-passphrase-file', dest_secret_file.name]
+
+            if src_encryption:
+                src_secret_file = stack.enter_context(
+                    tempfile.NamedTemporaryFile(mode='tr+', encoding='utf-8'))
+                # Write out the passphrase secret to a temp file
+                src_secret_file.write(src_encryption['secret'])
+                # Ensure the secret is written to disk, we can't .close() here
+                # as that removes the file when using NamedTemporaryFile
+                src_secret_file.flush()
+
+                encryption_format = src_encryption['format']
+                if encryption_format == 'luks':
+                    encryption_format = 'luks1'
+
+                args += [
+                    '--encryption-format', encryption_format,
+                    '--encryption-passphrase-file', src_secret_file.name]
+
+                if 'backing_secret' in src_encryption:
+                    src_backing_secret_file = stack.enter_context(
+                        tempfile.NamedTemporaryFile(
+                            mode='tr+', encoding='utf-8'))
+                    src_backing_secret_file.write(
+                        src_encryption['backing_secret'])
+                    src_backing_secret_file.flush()
+                    args += [
+                        '--encryption-format', encryption_format,
+                        '--encryption-passphrase-file',
+                        src_backing_secret_file.name]
+
+            args += ['/'.join([pool or self.pool, name])] + self.ceph_args()
+            processutils.execute(*args)
 
     def exists(self, name, pool=None, snapshot=None):
         try:

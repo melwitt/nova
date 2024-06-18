@@ -264,6 +264,10 @@ LIBVIRT_PERF_EVENT_PREFIX = 'VIR_PERF_PARAM_'
 MIN_LIBVIRT_MAXPHYSADDR = (8, 7, 0)
 MIN_QEMU_MAXPHYSADDR = (2, 7, 0)
 
+# Minimum version supporting RBD layered encryption.
+# https://libvirt.org/formatstorageencryption.html
+MIN_LIBVIRT_RBD_LAYERED_ENCRYPTION = (9, 3, 0)
+
 REGISTER_IMAGE_PROPERTY_DEFAULTS = [
     'hw_machine_type',
     'hw_cdrom_bus',
@@ -3334,7 +3338,8 @@ class LibvirtDriver(driver.ComputeDriver):
         try:
             metadata['location'] = root_disk.direct_snapshot(
                 context, snapshot_name, image_format, image_id,
-                instance.image_ref)
+                instance.image_ref, src_encryption=encryption,
+                dest_encryption=dest_encryption)
             self._resume_guest_after_snapshot(
                 context, live_snapshot, original_power_state, instance, guest)
             self._image_api.update(context, image_id, metadata,
@@ -5002,7 +5007,6 @@ class LibvirtDriver(driver.ComputeDriver):
             # Create a passphrase and stash it in the key manager
             secret_uuid, secret = crypto.create_ephemeral_encryption_secret(
                 context, instance, driver_bdm, secret=secret)
-            print(f'secret = {secret}')
             # Stash the UUID of said secret in our driver BDM
             driver_bdm['encryption_secret_uuid'] = secret_uuid
             created = True
@@ -5141,6 +5145,12 @@ class LibvirtDriver(driver.ComputeDriver):
                 if self._host.find_secret('volume', secret_usage):
                     self._host.delete_secret('volume', secret_usage)
 
+    @property
+    def supports_rbd_layered_encryption(self) -> bool:
+        return (CONF.libvirt.images_type == 'rbd' and
+            self._host.has_min_version(MIN_LIBVIRT_RBD_LAYERED_ENCRYPTION) and
+                rbd_utils.RBDDriver().supports_layered_encryption)
+
     def _add_ephemeral_encryption_driver_bdm_attrs(
         self,
         context: nova_context.RequestContext,
@@ -5161,17 +5171,18 @@ class LibvirtDriver(driver.ComputeDriver):
         if driver_bdm.get('encryption_details') is None:
             driver_bdm['encryption_details'] = objects.EncryptDetails()
 
-        secret_uuid, secret, created = (
-            self._get_or_create_ephemeral_encryption_secret(
-                context, instance, driver_bdm))
-        if created:
-            created_keymgr_secrets.append(secret_uuid)
+        if (CONF.libvirt.images_type != 'rbd' or
+                    self.supports_rbd_layered_encryption):
+            secret_uuid, secret, created = (
+                self._get_or_create_ephemeral_encryption_secret(
+                    context, instance, driver_bdm))
+            if created:
+                created_keymgr_secrets.append(secret_uuid)
 
         # Swap and ephemeral disks will not have encrypted backing
         # files (and will also not have image_id set).
         backing_secret_uuid = None
         backing_secret = None
-
         if ('image_id' in driver_bdm and CONF.libvirt.images_type in
                 ('qcow2', 'default', 'rbd')):
             # RBD is included here for the clone() case to track the encryption
@@ -5182,20 +5193,17 @@ class LibvirtDriver(driver.ComputeDriver):
             if backing_secret_uuid and created:
                 created_keymgr_secrets.append(backing_secret_uuid)
 
-            # NOTE(melwitt): If our version of Ceph doesn't support a child
-            # image having a different encryption key from its parent image, we
-            # will need to use a copy of the source image secret
-            # (backing_encryption_secret_uuid) for the child image.
             if (backing_secret_uuid and CONF.libvirt.images_type == 'rbd' and
-                    not rbd_utils.RBDDriver().
-                        clone_supports_different_encryption_key):
+                    not self.supports_rbd_layered_encryption):
+                # NOTE(melwitt): If our version of Ceph doesn't support layered
+                # encryption, we will need to use a copy of the source image
+                # secret (backing_encryption_secret_uuid) for the child image.
                 version = rbd_utils.RBDDriver().get_version()
                 LOG.info(
-                    f'This version of Ceph ({version}) does not '
-                    'support a child image having a different '
-                    'encryption key from its parent image. Using a '
-                    'copy of backing_encryption_secret_uuid '
-                    f'{backing_secret_uuid} for the clone.')
+                    f'This version of Ceph ({version}) does not support '
+                    'layered encryption. Using a copy of'
+                    f'backing_encryption_secret_uuid {backing_secret_uuid} '
+                    'for the clone instead.')
                 secret_uuid, secret, created = (
                     self._get_or_create_ephemeral_encryption_secret(
                         context, instance, driver_bdm,
@@ -5283,7 +5291,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 driver_bdm = encrypted_bdms[i]
                 for key in ('encryption_format', 'encryption_secret_uuid',
                         'backing_encryption_secret_uuid'):
-                    # backing_encryption_secret_uuid is for qcow2 only.
+                    # backing_encryption_secret_uuid is for qcow2 and rbd only.
                     if key in driver_bdm:
                         driver_bdm[key] = orig_driver_bdm[key]
                 driver_bdm.save()

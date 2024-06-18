@@ -31052,7 +31052,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         driver_bdm = block_device_info['image'][0]
         self.assertEqual(expected_format, driver_bdm['encryption_format'])
         self.assertEqual(uuids.secret1, driver_bdm['encryption_secret_uuid'])
-        keymgr_call1 = mock.call(self.context, self.instance, driver_bdm)
+        keymgr_call1 = mock.call(
+            self.context, self.instance, driver_bdm, secret=None)
         libvirt_call1 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
             password=mock.sentinel.secret1, uuid=uuids.secret1,
@@ -31065,7 +31066,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         driver_bdm = block_device_info['ephemerals'][0]
         self.assertEqual(expected_format, driver_bdm['encryption_format'])
         self.assertEqual(uuids.secret2, driver_bdm['encryption_secret_uuid'])
-        keymgr_call2 = mock.call(self.context, self.instance, driver_bdm)
+        keymgr_call2 = mock.call(
+            self.context, self.instance, driver_bdm, secret=None)
         libvirt_call2 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
             password=mock.sentinel.secret2, uuid=uuids.secret2,
@@ -31078,7 +31080,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         driver_bdm = block_device_info['swap']
         self.assertEqual(expected_format, driver_bdm['encryption_format'])
         self.assertEqual(uuids.secret3, driver_bdm['encryption_secret_uuid'])
-        keymgr_call3 = mock.call(self.context, self.instance, driver_bdm)
+        keymgr_call3 = mock.call(
+            self.context, self.instance, driver_bdm, secret=None)
         libvirt_call3 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
             password=mock.sentinel.secret3, uuid=uuids.secret3,
@@ -31222,7 +31225,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         driver_bdm = block_device_info['image'][0]
         self.assertIsNone(driver_bdm['encryption_format'])
         self.assertIsNone(driver_bdm['encryption_secret_uuid'])
-        keymgr_call1 = mock.call(self.context, self.instance, driver_bdm)
+        keymgr_call1 = mock.call(
+            self.context, self.instance, driver_bdm, secret=None)
         libvirt_call1 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
             password=mock.sentinel.secret1, uuid=uuids.secret1,
@@ -31231,7 +31235,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         driver_bdm = block_device_info['ephemerals'][0]
         self.assertIsNone(driver_bdm['encryption_format'])
         self.assertIsNone(driver_bdm['encryption_secret_uuid'])
-        keymgr_call2 = mock.call(self.context, self.instance, driver_bdm)
+        keymgr_call2 = mock.call(
+            self.context, self.instance, driver_bdm, secret=None)
         libvirt_call2 = mock.call(
             'volume', f"{self.instance.uuid}_{driver_bdm['uuid']}",
             password=mock.sentinel.secret2, uuid=uuids.secret2,
@@ -31240,7 +31245,8 @@ class EphemeralEncryptionTestCase(test.NoDBTestCase):
         driver_bdm = block_device_info['swap']
         self.assertIsNone(driver_bdm['encryption_format'])
         self.assertIsNone(driver_bdm['encryption_secret_uuid'])
-        keymgr_call3 = mock.call(self.context, self.instance, driver_bdm)
+        keymgr_call3 = mock.call(
+            self.context, self.instance, driver_bdm, secret=None)
 
         self.assertEqual(
             [keymgr_call1, keymgr_call2, keymgr_call3],
