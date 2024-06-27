@@ -4922,6 +4922,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 'encrypted': True,
                 'encryption_secret_uuid': img_secret_uuid,
                 'encryption_format': img_encryption_format,
+                'encryption_details': objects.EncryptDetails(),
                 'backing_encryption_secret_uuid': img_secret_uuid,
             }
             disk_info['mapping']['disk.rescue'].update(rescue_encryption)
