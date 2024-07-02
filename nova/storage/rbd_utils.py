@@ -296,8 +296,9 @@ class RBDDriver(object):
 
         https://github.com/ceph/ceph/commit/1d3de19
         """
-        return (versionutils.convert_version_to_int(self.get_version()) >=
-                    versionutils.convert_version_to_int('18.1.0'))
+        #return (versionutils.convert_version_to_int(self.get_version()) >=
+        #            versionutils.convert_version_to_int('18.1.0'))
+        return False
 
     def load_encryption(
         self,
@@ -336,11 +337,10 @@ class RBDDriver(object):
             specs += [(dest_encryption_format, dest_secret)]
 
             if 'backing_secret' in dest_encryption:
-                dest_backing_secret: str | bytes = dest_encryption[
-                        'backing_secret']
-                if not isinstance(dest_backing_secret, bytes):
-                    dest_backing_secret = dest_backing_secret.encode('utf-8')
-                specs += [(dest_encryption_format, dest_backing_secret)]
+                dest_bsecret: str | bytes = dest_encryption['backing_secret']
+                if not isinstance(dest_bsecret, bytes):
+                    dest_bsecret = dest_bsecret.encode('utf-8')
+                specs += [(dest_encryption_format, dest_bsecret)]
 
         if src_encryption:
             src_encryption_format = src_encryption['format']

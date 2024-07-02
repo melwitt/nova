@@ -12504,7 +12504,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 'migrating instance across cells' if cross_cell_move
                 else 'unshelving instance')
             try:
-                image.flatten(encryption=image_encryption)
+                #image.flatten(encryption=image_encryption)
+                encryption = image.get_encryption(context)
+                image.flatten(encryption=encryption)
                 LOG.debug('Image %s flattened successfully while %s.',
                           image.path, action, instance=instance)
             except NotImplementedError:

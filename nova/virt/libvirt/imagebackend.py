@@ -1452,8 +1452,10 @@ class Rbd(Image):
                 "consider it already flat", {
                     'img': self.rbd_name, 'pool': self.driver.pool})
         else:
+            #self.driver.flatten(self.rbd_name, pool=self.driver.pool,
+            #                    src_encryption=encryption)
             self.driver.flatten(self.rbd_name, pool=self.driver.pool,
-                                src_encryption=encryption)
+                                dest_encryption=encryption)
 
     def get_model(self, connection):
         secret = None
