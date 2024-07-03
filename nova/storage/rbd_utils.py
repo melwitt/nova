@@ -204,7 +204,7 @@ class RBDDriver(object):
             args.extend(['--conf', self.ceph_conf])
         return args
 
-    def get_version(self) -> str:
+    def get_ceph_version(self) -> str:
         """Get the Ceph version in X.Y.Z format"""
         args = ['ceph', '--version']
         out, _ = processutils.execute(*args)
@@ -296,9 +296,8 @@ class RBDDriver(object):
 
         https://github.com/ceph/ceph/commit/1d3de19
         """
-        #return (versionutils.convert_version_to_int(self.get_version()) >=
-        #            versionutils.convert_version_to_int('18.1.0'))
-        return False
+        return (versionutils.convert_version_to_int(self.get_ceph_version()) >=
+                    versionutils.convert_version_to_int('18.1.0'))
 
     def load_encryption(
         self,
@@ -327,7 +326,7 @@ class RBDDriver(object):
                 f"loading encryption for image {image.get_name()} with format "
                 f"{dest_encryption['format']} ({dest_encryption_format}) ")
             # The librbd APIs require passphrases to be bytestrings, otherwise
-            # they are treated as wrong passphrases:
+            # they could be treated as wrong passphrases:
             #   rbd.PermissionError: [errno 1] RBD permission error
             #     (error loading encryption on image
             #      b'c18591d8-ecd4-4a08-b155-4d5dbb1cb7c7_disk')
@@ -354,6 +353,7 @@ class RBDDriver(object):
         if not self.supports_layered_encryption:
             # If layered encryption is not supported, all passphrases in the
             # chain must be the same.
+            print(f'fn({specs[0][0]}, {specs[0][1]})')
             image.encryption_load(specs[0][0], specs[0][1])
         else:
             image.encryption_load2(specs)
@@ -402,11 +402,13 @@ class RBDDriver(object):
                 f"{encryption['format']} ({encryption_format}) "
                 f"and cipher algorithm "
                 f"{encryption['details'].cipher_algorithm} ({cipher_alg})")
-            return vol.encryption_format(
-                encryption_format, encryption['secret'], cipher_alg=cipher_alg)
+            print(f'format secret = {encryption_secret}')
+            vol.encryption_format(
+                encryption_format, encryption_secret, cipher_alg=cipher_alg)
 
     def create(self, name, size):
         """Create a new empty image."""
+        LOG.debug(f'creating image {self.pool}/{name} with size {size}')
         with RADOSClient(self, self.pool) as client:
             RbdProxy().create(client.ioctx, name, size)
 
@@ -514,10 +516,23 @@ class RBDDriver(object):
         :pool: Name of pool
         """
         LOG.debug('flattening %(pool)s/%(vol)s', dict(pool=pool, vol=volume))
+        print(f'src_encryption = {src_encryption}')
+        print(f'dest_encryption = {dest_encryption}')
         with RBDVolumeProxy(self, str(volume), pool=pool) as vol:
-            self.load_encryption(
-                vol, src_encryption=src_encryption,
-                dest_encryption=dest_encryption)
+            # NOTE(melwitt): Encryption should only be loaded "if a clone of an
+            # encrypted image is explicitly formatted", which will only be the
+            # case if layered encryption is supported. That is, we are only
+            # formatting clones if layered encryption is available, otherwise
+            # we don't format them. Attempting to load encryption if the clone
+            # has *not* been explicitly formatted results in an error like:
+            #   rbd.InvalidArgument: [errno 22] RBD invalid argument (error
+            #     loading encryption on image
+            #     b'53028e8f-9484-45b8-aa45-716567a7ff33' with format luks1)
+            # https://docs.ceph.com/en/latest/rbd/rbd-encryption/#encryption-load
+            if self.supports_layered_encryption:
+                self.load_encryption(
+                    vol, src_encryption=src_encryption,
+                    dest_encryption=dest_encryption)
             vol.flatten()
 
     # TODO(melwitt): Remove this

@@ -1192,11 +1192,20 @@ class Rbd(Image):
         if not self.exists():
             if not bdm_encryption and not image_encryption:
                 self.driver.import_image(base, self.rbd_name)
-            else:
+            elif bdm_encryption:
+                base_image_size = disk.get_disk_size(base)
+                create_image_size = base_image_size
+                if not image_encryption:
+                    # The size is temporarily created larger if the source
+                    # image is not encrypted in order to accommodate the
+                    # LUKS header in the target image.
+                    # "The LUKS header size can vary (up to 136MiB in LUKS2),
+                    # but is usually up to 16MiB, depending on the version of
+                    # libcryptsetup installed."
+                    # https://docs.ceph.com/en/latest/rbd/rbd-encryption/#luks
+                    create_image_size = base_image_size + 256 * units.Mi
                 # Create the target image in RBD and format it for encryption.
-                # The size is temporarily created larger to accommodate the
-                # LUKS header + source image data.
-                self.driver.create(self.rbd_name, size + 1 * units.Gi)
+                self.driver.create(self.rbd_name, create_image_size)
                 self.driver.format_encryption(self.rbd_name, bdm_encryption)
 
                 filename = self._get_lock_name(base)
@@ -1204,6 +1213,9 @@ class Rbd(Image):
                 @utils.synchronized(
                     filename, external=True, lock_path=self.lock_path)
                 def copy_into_rbd_image():
+                    LOG.debug(
+                        f'copying data from {base} to '
+                        f'{self.driver.pool}/{self.rbd_name}')
                     src_fmt = ('raw' if not image_encryption else
                                     image_encryption.get('format'))
                     dest_fmt = ('raw' if not bdm_encryption else
@@ -1219,8 +1231,7 @@ class Rbd(Image):
                 copy_into_rbd_image()
                 # Resize the target image back down to the base image size
                 # after formatting and copying the data.
-                base_image_size = disk.get_disk_size(base)
-                self.resize_image(base_image_size, encryption=bdm_encryption)
+                #self.resize_image(base_image_size, encryption=bdm_encryption)
 
         verify_size = size
         if size and bdm_encryption:
@@ -1230,7 +1241,7 @@ class Rbd(Image):
             # usually up to 16MiB, depending on the version of libcryptsetup
             # installed."
             # https://docs.ceph.com/en/latest/rbd/rbd-encryption/#luks
-            verify_size = size + 136 * units.Mi
+            verify_size = size + 256 * units.Mi
         self.verify_base_size(base, verify_size)
 
         if size and size > self.get_disk_size(self.rbd_name):
@@ -1378,11 +1389,8 @@ class Rbd(Image):
         image_size: ty.Optional[int],
         image_pool: str,
     ) -> None:
-        if dest_encryption and (not src_encryption or
-                self.driver.supports_layered_encryption):
-            # If the source image isn't already formatted for
-            # encryption or if RBD layered encryption is supported,
-            # format the clone.
+        if dest_encryption and self.driver.supports_layered_encryption:
+            # If RBD layered encryption is supported, format the clone.
             self.driver.format_encryption(self.rbd_name, dest_encryption)
 
         if dest_encryption and not src_encryption:
@@ -1406,6 +1414,10 @@ class Rbd(Image):
         bdm_encryption = self.get_encryption(context)
         image_encryption = image_meta.get(
             'properties', {}).get('os_encrypt_key_id')
+        if (bdm_encryption and not image_encryption and
+                not self.driver.supports_layered_encryption):
+            error = _('Clones of images cannot be formatted for encryption.')
+            raise exception.RBDLayeredEncryptionNotSupported(error=error)
 
         for location in locations:
             if self.driver.is_cloneable(location, image_meta):

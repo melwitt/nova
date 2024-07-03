@@ -264,6 +264,11 @@ LIBVIRT_PERF_EVENT_PREFIX = 'VIR_PERF_PARAM_'
 MIN_LIBVIRT_MAXPHYSADDR = (8, 7, 0)
 MIN_QEMU_MAXPHYSADDR = (2, 7, 0)
 
+# Minimum versions supporting the librbd encryption engine.
+# https://libvirt.org/news.html#v7-9-0-2021-11-01
+MIN_LIBVIRT_LIBRBD_ENCRYPTION_ENGINE = (7, 9, 0)
+MIN_QEMU_LIBRBD_ENCRYPTION_ENGINE = (6, 1, 0)
+
 # Minimum version supporting RBD layered encryption.
 # https://libvirt.org/formatstorageencryption.html
 MIN_LIBVIRT_RBD_LAYERED_ENCRYPTION = (9, 3, 0)
@@ -903,8 +908,10 @@ class LibvirtDriver(driver.ComputeDriver):
                 'os_encrypt_key_id image property of the rescue image.')
 
         if CONF.libvirt.images_type == 'rbd':
-            version = rbd_utils.RBDDriver().get_version()
+            version = rbd_utils.RBDDriver().get_ceph_version()
             LOG.info(f'Detected Ceph version {version} in the environment.')
+
+        self._update_ephemeral_encryption_capabilities()
 
     def _update_host_specific_capabilities(self) -> None:
         """Update driver capabilities based on capabilities of the host."""
@@ -927,6 +934,17 @@ class LibvirtDriver(driver.ComputeDriver):
         self.capabilities.update({
             'supports_address_space_passthrough': supports_maxphysaddr,
             'supports_address_space_emulated': supports_maxphysaddr,
+        })
+
+    def _update_ephemeral_encryption_capabilities(self) -> None:
+        if (not CONF.libvirt.images_type == 'rbd' or
+                not self.image_backend.backend().SUPPORTS_LUKS):
+            return
+        # RBD encryption requires Libvirt 7.9.0 and QEMU 6.1.0.
+        supports_rbd_encryption = self.supports_rbd_encryption
+        self.capabilities.update({
+            'supports_ephemeral_encryption': supports_rbd_encryption,
+            'supports_ephemeral_encryption_luks': supports_rbd_encryption,
         })
 
     def _get_instances_on_host(self) -> 'objects.InstanceList':
@@ -5151,10 +5169,18 @@ class LibvirtDriver(driver.ComputeDriver):
                     self._host.delete_secret('volume', secret_usage)
 
     @property
+    def supports_rbd_encryption(self) -> bool:
+        return (CONF.libvirt.images_type == 'rbd' and
+            self._host.has_min_version(
+                lv_ver=MIN_LIBVIRT_LIBRBD_ENCRYPTION_ENGINE,
+                hv_ver=MIN_QEMU_LIBRBD_ENCRYPTION_ENGINE))
+
+    @property
     def supports_rbd_layered_encryption(self) -> bool:
         return (CONF.libvirt.images_type == 'rbd' and
-            self._host.has_min_version(MIN_LIBVIRT_RBD_LAYERED_ENCRYPTION) and
-                rbd_utils.RBDDriver().supports_layered_encryption)
+            self._host.has_min_version(
+                lv_ver=MIN_LIBVIRT_RBD_LAYERED_ENCRYPTION) and
+                    rbd_utils.RBDDriver().supports_layered_encryption)
 
     def _add_ephemeral_encryption_driver_bdm_attrs(
         self,
@@ -5205,11 +5231,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 # secret (backing_encryption_secret_uuid) for the child image
                 # if the source image is encrypted.
                 if backing_secret_uuid:
-                    version = rbd_utils.RBDDriver().get_version()
                     LOG.info(
-                        f'This version of Ceph ({version}) does not support '
-                        'layered encryption. Using a copy of '
-                        'backing_encryption_secret_uuid '
+                        'RBD layered encryption is not available. '
+                        'Using a copy of backing_encryption_secret_uuid '
                         f'{backing_secret_uuid} for the clone instead.')
                 secret_uuid, secret, created = (
                     self._get_or_create_ephemeral_encryption_secret(
@@ -5995,18 +6019,22 @@ class LibvirtDriver(driver.ComputeDriver):
                             context, target, image_id, trusted_certs,
                             src_encryption=src_encryption,
                             dest_encryption=dest_encryption)
-                    except NotImplementedError:
-                        # We ignore [workarounds]never_download_image_if_on_rbd
-                        # here because if the image is encrypted and if we also
-                        # never download images, we wouldn't be able to support
-                        # encryption with RBD at all.
-                        if CONF.libvirt.images_type == 'rbd':
-                            libvirt_utils.fetch_image(
-                                context, target, image_id, trusted_certs,
-                                src_encryption=src_encryption,
-                                dest_encryption=dest_encryption)
-                        else:
+                    except exception.RBDLayeredEncryptionNotSupported:
+                        if refuse_fetch:
+                            LOG.warning(
+                                'This Ceph version does not support RBD '
+                                'layered encryption and [workarounds]'
+                                'never_download_image_if_on_rbd=True; '
+                                'refusing to fetch and upload.')
                             raise
+                        LOG.info(
+                            'RBD layered encryption is not available, falling '
+                            'back to image fetch and upload.')
+                        libvirt_utils.fetch_image(
+                            context, target, image_id, trusted_certs,
+                            src_encryption=src_encryption,
+                            dest_encryption=dest_encryption)
+
                 fetch_func = clone_fallback_to_fetch
             else:
                 fetch_func = libvirt_utils.fetch_image
@@ -12506,6 +12534,8 @@ class LibvirtDriver(driver.ComputeDriver):
             try:
                 #image.flatten(encryption=image_encryption)
                 encryption = image.get_encryption(context)
+                print(f'encryption = {encryption}')
+                print(f'image_encryption = {image_encryption}')
                 image.flatten(encryption=encryption)
                 LOG.debug('Image %s flattened successfully while %s.',
                           image.path, action, instance=instance)
