@@ -3480,10 +3480,14 @@ class LibvirtDriver(driver.ComputeDriver):
         dest_encryption = None
         props: ty.Dict[str, ty.Any] = {}
         if encryption:
-            dest_encryption = copy.deepcopy(encryption)
+            dest_encryption = {
+                'format': encryption['format'],
+                'secret': encryption['secret'],
+                'details': encryption['details'],
+            }
             root_bdm = block_device.get_root_bdm(encrypted_bdms)
             if instance.task_state not in task_states.shelving_states:
-                # We are creating a new secret UUID for the shelved image with
+                # We are creating a new secret UUID for the snapshot image with
                 # the same passphrase as the root disk.
                 secret_uuid, secret = (
                     crypto.create_ephemeral_encryption_secret(
@@ -3505,8 +3509,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
             props['hw_ephemeral_encryption'] = True
             encryption_format = encryption.get('format')
-            if encryption_format:
-                props['os_encrypt_format'] = encryption_format
+            props['os_encrypt_format'] = dest_encryption['format']
             props['os_encrypt_key_id'] = secret_uuid
 
         return dest_encryption, props
