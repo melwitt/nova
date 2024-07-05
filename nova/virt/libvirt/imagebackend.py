@@ -1207,6 +1207,7 @@ class Rbd(Image):
                 # Create the target image in RBD and format it for encryption.
                 self.driver.create(self.rbd_name, create_image_size)
                 self.driver.format_encryption(self.rbd_name, bdm_encryption)
+                self.resize_image(base_image_size, encryption=bdm_encryption)
 
                 filename = self._get_lock_name(base)
 
@@ -1564,6 +1565,9 @@ class Rbd(Image):
                                 snap=snapshot_name)}
         try:
             self.driver.clone(location, image_id, dest_pool=parent_pool)
+            if dest_encryption and self.driver.supports_layered_encryption:
+                self.driver.format_encryption(image_id, dest_encryption,
+                                              pool=parent_pool)
             # Flatten the image, which detaches it from the source snapshot
             self.driver.flatten(
                 image_id, pool=parent_pool, src_encryption=src_encryption,

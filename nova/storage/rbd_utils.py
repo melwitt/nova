@@ -305,6 +305,24 @@ class RBDDriver(object):
         src_encryption: ty.Optional[EncryptionInfo] = None,
         dest_encryption: ty.Optional[EncryptionInfo] = None,
     ) -> None:
+        """Load encryption for the specified image.
+
+        "In order to safely perform encrypted IO on the formatted image, an
+        additional encryption load operation should be applied after opening
+        the image. The encryption load operation requires supplying the
+        encryption format and a secret for unlocking the encryption key.
+        Following a successful encryption load operation, all IOs for the
+        opened image will be encrypted / decrypted. For a cloned image, this
+        includes IOs for ancestor images as well. The encryption key will be
+        stored in-memory by the RBD client until the image is closed."
+
+        The ordering of the passphrases goes from outermost layer to innermost
+        layer. For example:
+
+                    snapshot image <-- VM image <-- source image
+
+        https://docs.ceph.com/en/quincy/rbd/rbd-encryption/#encryption-load
+        """
         # FIXME(melwitt): Instead of shelling out using the CLI, can _probably_
         # use the encryption_load2(self, specs) method:
         # https://github.com/ceph/ceph/blob/314e8e3c4009ffd757464ef2820ebe906d1575c3/src/pybind/rbd/rbd.pyx#L5289
@@ -350,12 +368,19 @@ class RBDDriver(object):
                 src_secret = src_secret.encode('utf-8')
             specs += [(src_encryption_format, src_secret)]
 
+            if 'backing_secret' in src_encryption:
+                src_bsecret: str | bytes = src_encryption['backing_secret']
+                if not isinstance(src_bsecret, bytes):
+                    src_bsecret = src_bsecret.encode('utf-8')
+                specs += [(src_encryption_format, src_bsecret)]
+
         if not self.supports_layered_encryption:
             # If layered encryption is not supported, all passphrases in the
             # chain must be the same.
             print(f'fn({specs[0][0]}, {specs[0][1]})')
             image.encryption_load(specs[0][0], specs[0][1])
         else:
+            print(f'specs = {specs}')
             image.encryption_load2(specs)
 
     def format_encryption(
