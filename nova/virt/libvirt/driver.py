@@ -3477,7 +3477,7 @@ class LibvirtDriver(driver.ComputeDriver):
         return it in a dict containing the encryption attributes needed to
         generate the snapshot.
         """
-        dest_encryption = None
+        dest_encryption: ty.Optional[EncryptionInfo] = None
         props: ty.Dict[str, ty.Any] = {}
         if encryption:
             dest_encryption = {

@@ -348,36 +348,29 @@ class RBDDriver(object):
             #   rbd.PermissionError: [errno 1] RBD permission error
             #     (error loading encryption on image
             #      b'c18591d8-ecd4-4a08-b155-4d5dbb1cb7c7_disk')
-            dest_secret: str | bytes = dest_encryption['secret']
-            if not isinstance(dest_secret, bytes):
-                dest_secret = dest_secret.encode('utf-8')
+            dest_secret = encodeutils.safe_encode(dest_encryption['secret'])
             specs += [(dest_encryption_format, dest_secret)]
 
             if 'backing_secret' in dest_encryption:
-                dest_bsecret: str | bytes = dest_encryption['backing_secret']
-                if not isinstance(dest_bsecret, bytes):
-                    dest_bsecret = dest_bsecret.encode('utf-8')
+                dest_bsecret = encodeutils.safe_encode(
+                    dest_encryption['backing_secret'])
                 specs += [(dest_encryption_format, dest_bsecret)]
 
         if src_encryption:
             src_encryption_format = src_encryption['format']
             if src_encryption_format == 'luks':
                 src_encryption_format = rbd.RBD_ENCRYPTION_FORMAT_LUKS1
-            src_secret: str | bytes = src_encryption['secret']
-            if not isinstance(src_secret, bytes):
-                src_secret = src_secret.encode('utf-8')
+            src_secret = encodeutils.safe_encode(src_encryption['secret'])
             specs += [(src_encryption_format, src_secret)]
 
             if 'backing_secret' in src_encryption:
-                src_bsecret: str | bytes = src_encryption['backing_secret']
-                if not isinstance(src_bsecret, bytes):
-                    src_bsecret = src_bsecret.encode('utf-8')
+                src_bsecret = encodeutils.safe_encode(
+                    src_encryption['backing_secret'])
                 specs += [(src_encryption_format, src_bsecret)]
 
         if not self.supports_layered_encryption:
             # If layered encryption is not supported, all passphrases in the
             # chain must be the same.
-            print(f'fn({specs[0][0]}, {specs[0][1]})')
             image.encryption_load(specs[0][0], specs[0][1])
         else:
             print(f'specs = {specs}')
@@ -417,9 +410,8 @@ class RBDDriver(object):
                 f'{cipher_algorithm} is not supported by RBD')
         cipher_alg = CIPHER_ALG_MAP[cipher_algorithm]
 
-        encryption_secret: str | bytes = encryption['secret']
-        if not isinstance(encryption_secret, bytes):
-            encryption_secret = encryption_secret.encode('utf-8')
+        encryption_secret: str | bytes = encodeutils.safe_encode(
+            encryption['secret'])
 
         with RBDVolumeProxy(self, name, pool=pool) as vol:
             LOG.debug(
@@ -427,7 +419,6 @@ class RBDDriver(object):
                 f"{encryption['format']} ({encryption_format}) "
                 f"and cipher algorithm "
                 f"{encryption['details'].cipher_algorithm} ({cipher_alg})")
-            print(f'format secret = {encryption_secret}')
             vol.encryption_format(
                 encryption_format, encryption_secret, cipher_alg=cipher_alg)
 

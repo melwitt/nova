@@ -1207,7 +1207,12 @@ class Rbd(Image):
                 # Create the target image in RBD and format it for encryption.
                 self.driver.create(self.rbd_name, create_image_size)
                 self.driver.format_encryption(self.rbd_name, bdm_encryption)
-                self.resize_image(base_image_size, encryption=bdm_encryption)
+                # TODO(melwitt): Should this be rbd.Image.write() loop instead?
+                # FIXME(melwitt): This can sometimes (but not all the time??)
+                # result in an error during qemu-img convert about the output
+                # file being smaller than the input file. Is it because QEMU
+                # can't realize it has a LUKS header?
+                #self.resize_image(base_image_size, encryption=bdm_encryption)
 
                 filename = self._get_lock_name(base)
 
