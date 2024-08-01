@@ -1042,6 +1042,15 @@ Requires:
 * Qemu >= 1.5 (raw format)
 * Qemu >= 1.6 (qcow2 format)
 """),
+    cfg.StrOpt('images_backend',
+               default='nova.virt.libvirt.imagebackend_legacy.Backend',
+               choices=(
+                   'nova.virt.libvirt.imagebackend_legacy.Backend',
+                   'nova.virt.libvirt.imagebackend.Backend',
+                ),
+               help="""
+Which imagebackend to use for disk images.
+"""),
 ]
 
 libvirt_lvm_opts = [

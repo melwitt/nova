@@ -119,7 +119,7 @@ from nova.virt.libvirt import designer
 from nova.virt.libvirt import event as libvirtevent
 from nova.virt.libvirt import guest as libvirt_guest
 from nova.virt.libvirt import host
-from nova.virt.libvirt import imagebackend
+from nova.virt.libvirt import imagebackend_legacy
 from nova.virt.libvirt import imagecache
 from nova.virt.libvirt import instancejobtracker
 from nova.virt.libvirt import migration as libvirt_migrate
@@ -420,7 +420,8 @@ class LibvirtDriver(driver.ComputeDriver):
                               not CONF.force_raw_images)
         requires_ploop_image = CONF.libvirt.virt_type == 'parallels'
 
-        self.image_backend = imagebackend.Backend(CONF.use_cow_images)
+        self.image_backend = importutils.import_object(
+            CONF.libvirt.images_backend, CONF.use_cow_images)
 
         self.capabilities = {
             "has_imagecache": True,
@@ -569,6 +570,10 @@ class LibvirtDriver(driver.ComputeDriver):
         # distinguish between cores on the source and destination hosts.
         # See also nova.virt.libvirt.cpu.api.API.core().
         self.cpu_api = libvirt_cpu.API()
+
+    @property
+    def use_legacy_imagebackend(self):
+        return isinstance(self.image_backend, imagebackend_legacy.Backend)
 
     def _discover_vpmems(self, vpmem_conf=None):
         """Discover vpmems on host and configuration.
@@ -5090,12 +5095,19 @@ class LibvirtDriver(driver.ComputeDriver):
                                 context=context,
                                 filename=fname,
                                 image_id=disk_images['kernel_id'])
+            if not self.use_legacy_imagebackend:
+                raw('kernel').download_and_cache(
+                    context, fname, disk_images['kernel_id'])
+
             if disk_images['ramdisk_id']:
                 fname = imagecache.get_cache_fname(disk_images['ramdisk_id'])
                 raw('ramdisk').cache(fetch_func=libvirt_utils.fetch_raw_image,
                                      context=context,
                                      filename=fname,
                                      image_id=disk_images['ramdisk_id'])
+                if not self.use_legacy_imagebackend:
+                    raw('ramdisk').download_and_cache(
+                        context, fname, disk_images['ramdisk_id'])
 
         created_disks = self._create_and_inject_local_root(
             context, instance, disk_mapping, booted_from_volume, suffix,
@@ -5130,6 +5142,9 @@ class LibvirtDriver(driver.ComputeDriver):
                              filename=fname,
                              size=size,
                              ephemeral_size=ephemeral_gb)
+            if not self.use_legacy_imagebackend:
+                disk_image.create_ephemeral(
+                    fname, ephemeral_gb, 'ephemeral0', instance.os_type)
 
         for idx, eph in enumerate(driver.block_device_info_get_ephemerals(
                 block_device_info)):
@@ -5157,6 +5172,9 @@ class LibvirtDriver(driver.ComputeDriver):
                              size=size,
                              ephemeral_size=eph['size'],
                              specified_fs=specified_fs)
+            if not self.use_legacy_imagebackend:
+                disk_image.create_ephemeral(
+                    fname, eph['size'], 'ephemeral%d' % idx, instance.os_type)
 
         if swap_mb > 0:
             size = swap_mb * units.Mi
@@ -5167,6 +5185,8 @@ class LibvirtDriver(driver.ComputeDriver):
             swap.cache(fetch_func=self._create_swap, context=context,
                        filename="swap_%s" % swap_mb,
                        size=size, swap_mb=swap_mb)
+            if not self.use_legacy_imagebackend:
+                swap.create_swap("swap_%s" % swap_mb, swap_mb)
 
         if created_disks:
             LOG.debug('Created local disks', instance=instance)
@@ -5232,6 +5252,34 @@ class LibvirtDriver(driver.ComputeDriver):
             self._try_fetch_image_cache(backend, fetch_func, context,
                                         root_fname, disk_images['image_id'],
                                         instance, size, fallback_from_host)
+            if not self.use_legacy_imagebackend:
+                create_root = True
+                if backend.SUPPORTS_CLONE:
+                    refuse_fetch = (
+                        CONF.libvirt.images_type == 'rbd' and
+                        CONF.workarounds.never_download_image_if_on_rbd)
+                    try:
+                        backend.clone(context, disk_images['image_id'])
+                        create_root = False
+                    except exception.ImageUnacceptable:
+                        if refuse_fetch:
+                            # Re-raise the exception from the failed
+                            # ceph clone.  The compute manager expects
+                            # ImageUnacceptable as a possible result
+                            # of spawn(), from which this is called.
+                            with excutils.save_and_reraise_exception():
+                                LOG.warning(
+                                    'Image %s is not on my ceph and '
+                                    '[workarounds]/'
+                                    'never_download_image_if_on_rbd=True;'
+                                    ' refusing to fetch and upload.',
+                                    disk_images['image_id'])
+                if create_root:
+                    backend.create_root(
+                        context, root_fname, size, disk_images['image_id'],
+                        trusted_certs=instance.trusted_certs,
+                        convert_to_raw=True,
+                        fallback_from_host=fallback_from_host)
 
             # During unshelve or cross cell resize on Qcow2 backend, we spawn()
             # using a snapshot image. Extra work is needed in order to rebase
@@ -5249,7 +5297,7 @@ class LibvirtDriver(driver.ComputeDriver):
         return created_disks
 
     def _needs_rebase_original_qcow2_image(self, instance, backend):
-        if not isinstance(backend, imagebackend.Qcow2):
+        if not isinstance(backend, imagebackend_legacy.Qcow2):
             return False
         if instance.vm_state == vm_states.SHELVED_OFFLOADED:
             return True
@@ -5283,6 +5331,10 @@ class LibvirtDriver(driver.ComputeDriver):
             self._try_fetch_image_cache(backend, libvirt_utils.fetch_image,
                                         context, root_fname, base_image_ref,
                                         instance, None)
+            if not self.use_legacy_imagebackend:
+                backend.create_root(
+                    context, root_fname, None, base_image_ref,
+                    convert_to_raw=True)
         except exception.ImageNotFound:
             # We must flatten here in order to remove dependency with an orphan
             # backing file (as snapshot image will be dropped once
@@ -11496,6 +11548,8 @@ class LibvirtDriver(driver.ComputeDriver):
     def _try_fetch_image_cache(self, image, fetch_func, context, filename,
                                image_id, instance, size,
                                fallback_from_host=None):
+        if not self.use_legacy_imagebackend:
+            return
         try:
             image.cache(fetch_func=fetch_func,
                         context=context,
@@ -11603,6 +11657,10 @@ class LibvirtDriver(driver.ComputeDriver):
                         filename=cache_name,
                         size=info['virt_disk_size'],
                         ephemeral_size=info['virt_disk_size'] / units.Gi)
+                    if not self.use_legacy_imagebackend:
+                        disk.create_ephemeral(
+                            context, cache_name, info['virt_disk_size'] /
+                            units.Gi, cache_name, instance.os_type)
                 elif cache_name.startswith('swap'):
                     flavor = instance.get_flavor()
                     swap_mb = flavor.swap
@@ -11610,6 +11668,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                 filename="swap_%s" % swap_mb,
                                 size=swap_mb * units.Mi,
                                 swap_mb=swap_mb)
+                    if not self.use_legacy_imagebackend:
+                        disk.create_swap(context, "swap_%s" % swap_mb, swap_mb)
                 else:
                     self._try_fetch_image_cache(disk,
                                                 libvirt_utils.fetch_image,
@@ -11618,6 +11678,11 @@ class LibvirtDriver(driver.ComputeDriver):
                                                 instance,
                                                 info['virt_disk_size'],
                                                 fallback_from_host)
+                    if not self.use_legacy_imagebackend:
+                        disk.create_root(
+                            context, cache_name, info['virt_disk_size'],
+                            instance.image_ref, convert_to_raw=True,
+                            fallback_from_host=fallback_from_host)
 
         # if disk has kernel and ramdisk, just download
         # following normal way.
