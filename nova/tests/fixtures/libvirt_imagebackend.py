@@ -23,7 +23,7 @@ import fixtures
 import nova.conf
 from nova.virt.libvirt import config
 from nova.virt.libvirt import driver
-from nova.virt.libvirt import imagebackend
+from nova.virt.libvirt import imagebackend_legacy
 from nova.virt.libvirt import utils as libvirt_utils
 
 
@@ -33,8 +33,8 @@ CONF = nova.conf.CONF
 class LibvirtImageBackendFixture(fixtures.Fixture):
 
     def __init__(self, got_files=None, imported_files=None, exists=None):
-        """This fixture mocks imagebackend.Backend.backend, which is the
-        only entry point to libvirt.imagebackend from libvirt.driver.
+        """This fixture mocks imagebackend_legacy.Backend.backend, which is the
+        only entry point to libvirt.imagebackend_legacy from libvirt.driver.
 
         :param got_files: A list of {'filename': path, 'size': size} for every
             file which was created.
@@ -80,7 +80,7 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
 
         # Backend.backend creates all Image objects
         self.useFixture(fixtures.MonkeyPatch(
-            'nova.virt.libvirt.imagebackend.Backend.backend',
+            'nova.virt.libvirt.imagebackend_legacy.Backend.backend',
             self._mock_backend))
 
     @property
@@ -111,7 +111,7 @@ class LibvirtImageBackendFixture(fixtures.Fixture):
         # it will return the same object we created here, and when the
         # caller calls cache() it will raise the requested exception.
 
-        disk = mock.create_autospec(imagebackend.Image)
+        disk = mock.create_autospec(imagebackend_legacy.Image)
 
         # NOTE(mdbooth): fake_cache and fake_import_file are for compatibility
         # with existing tests which test got_files and imported_files. They
