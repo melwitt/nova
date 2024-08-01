@@ -111,6 +111,22 @@
       tempest_test_regex: (^tempest\.api\.compute\.admin\.(test_live_migration|test_migration))
       # revert this when bug #1940425 is fixed in neutron
       tempest_exclude_regex: (test_live_migration_with_trunk)
+      devstack_services:
+        neutron-trunk: true
+        openstack-cli-server: true
+      devstack_local_conf:
+        test-config:
+          $TEMPEST_CONFIG:
+            compute-feature-enabled:
+              volume_backed_live_migration: true
+              block_migration_for_live_migration: true
+              block_migrate_cinder_iscsi: true
+    post-run: playbooks/nova-live-migration/post-run.yaml
+
+- job:
+    name: nova-live-migration-uec
+    parent: nova-live-migration
+    vars:
       devstack_localrc: &uec_image_vars
           # We are using the split kernel/initramfs image by default in an
           # effort to reduce the occurrence of guest kernel panics in the APIC
@@ -126,40 +142,18 @@
           # image will be downloaded and used for image_ref_alt instead.
           DOWNLOAD_DEFAULT_IMAGES: false
           IMAGE_URLS: http://download.cirros-cloud.net/0.6.2/cirros-0.6.2-x86_64-uec.tar.gz, http://download.cirros-cloud.net/0.6.1/cirros-0.6.1-x86_64-uec.tar.gz
-      devstack_services:
-        neutron-trunk: true
-        openstack-cli-server: true
+
+- job:
+    name: nova-live-migration-raw
+    parent: nova-live-migration
+    vars:
       devstack_local_conf:
         post-config:
           $NOVA_CPU_CONF:
-            compute:
-              # we want to test live migration of floating instances between hosts with different
-              # cpu_shared_set to ensure the xml is updated properly. This is important when migrating
-              # between hosts with different number of cpu cores even when cpu_shared_set is not defined.
-              # In the ci, we have 8 cpu cores, so we set the cpu_shared_set to 0-5 for the first compute
-              # node and 2-7 for the second compute node.
-              cpu_shared_set: "0-5"
-              cpu_dedicated_set: "6-7"
-        test-config:
-          $TEMPEST_CONFIG:
-            compute-feature-enabled:
-              volume_backed_live_migration: true
-              block_migration_for_live_migration: true
-              block_migrate_cinder_iscsi: true
-    group-vars:
-      subnode:
-        devstack_local_conf:
-          post-config:
-            $NOVA_CPU_CONF:
-              compute:
-                # we want to test live migration of floating instances between hosts with different
-                # cpu_shared_set to ensure the xml is updated properly. This is important when migrating
-                # between hosts with different number of cpu cores even when cpu_shared_set is not defined.
-                # In the ci, we have 8 cpu cores, so we set the cpu_shared_set to 0-5 for the first compute
-                # node and 2-7 for the second compute node.
-                cpu_shared_set: "2-7"
-                cpu_dedicated_set: "0-1"
-    post-run: playbooks/nova-live-migration/post-run.yaml
+            DEFAULT:
+              use_cow_images: False
+            libvirt:
+              images_type: raw
 
 - job:
     name: nova-ovs-hybrid-plug
@@ -621,6 +615,7 @@
         test-config:
           $TEMPEST_CONFIG:
             compute-feature-enabled:
+              resize: true
               # Enable cold migration for migrating across cells. Note that
               # because NOVA_ALLOW_MOVE_TO_SAME_HOST=false, all cold migrations
               # will move across cells.
@@ -808,16 +803,6 @@
         NOVA_ENFORCE_SCOPE: false
 
 - project:
-    # Please try to keep the list of job names sorted alphabetically.
-    templates:
-      - check-requirements
-      - integrated-gate-compute
-      - openstack-cover-jobs
-      - openstack-python3-jobs
-      - openstack-python3-jobs-arm64
-      - periodic-stable-jobs
-      - publish-openstack-docs-pti
-      - release-notes-jobs-python3
     check:
       jobs:
         # We define our own irrelevant-files so we don't run the job
@@ -835,6 +820,8 @@
               - ^nova/network/.*$
               - nova/virt/libvirt/vif.py
         - nova-live-migration
+        - nova-live-migration-uec
+        - nova-live-migration-raw
         - nova-live-migration-ceph
         - nova-lvm
         - nova-multi-cell
@@ -842,11 +829,6 @@
         - nova-ovs-hybrid-plug
         - nova-tox-validate-backport:
             voting: false
-        - nova-tox-functional-py39
-        - nova-tox-functional-py310
-        - nova-tox-functional-py312
-        - openstack-tox-py312:
-            voting: true
         - tempest-integrated-compute:
            # NOTE(gmann): Policies changes do not need to run all the
            # integration test jobs. Running only tempest and grenade
@@ -871,6 +853,12 @@
         - barbican-tempest-plugin-simple-crypto:
             irrelevant-files: *nova-base-irrelevant-files
             voting: false
+            vars:
+              devstack_local_conf:
+                test-config:
+                  $TEMPEST_CONFIG:
+                    auth:
+                      create_isolated_networks: True
     gate:
       jobs:
         - nova-live-migration
