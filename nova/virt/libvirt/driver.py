@@ -5144,7 +5144,8 @@ class LibvirtDriver(driver.ComputeDriver):
                              ephemeral_size=ephemeral_gb)
             if not self.use_legacy_imagebackend:
                 disk_image.create_ephemeral(
-                    fname, ephemeral_gb, 'ephemeral0', instance.os_type)
+                    context, fname, ephemeral_gb, 'ephemeral0',
+                    instance.os_type, vm_mode=vm_mode)
 
         for idx, eph in enumerate(driver.block_device_info_get_ephemerals(
                 block_device_info)):
@@ -5174,7 +5175,8 @@ class LibvirtDriver(driver.ComputeDriver):
                              specified_fs=specified_fs)
             if not self.use_legacy_imagebackend:
                 disk_image.create_ephemeral(
-                    fname, eph['size'], 'ephemeral%d' % idx, instance.os_type)
+                    context, fname, eph['size'], 'ephemeral%d' % idx,
+                    instance.os_type, vm_mode=vm_mode)
 
         if swap_mb > 0:
             size = swap_mb * units.Mi
@@ -5186,7 +5188,7 @@ class LibvirtDriver(driver.ComputeDriver):
                        filename="swap_%s" % swap_mb,
                        size=size, swap_mb=swap_mb)
             if not self.use_legacy_imagebackend:
-                swap.create_swap("swap_%s" % swap_mb, swap_mb)
+                swap.create_swap(context, "swap_%s" % swap_mb, swap_mb)
 
         if created_disks:
             LOG.debug('Created local disks', instance=instance)

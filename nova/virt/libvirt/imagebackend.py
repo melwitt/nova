@@ -129,7 +129,7 @@ class Image(metaclass=abc.ABCMeta):
         self.lock_path = os.path.join(CONF.instances_path, 'locks')
 
     @abc.abstractmethod
-    def create_image(self, prepare_template, base, size, *args, **kwargs):
+    def create_image(self, ctxt, base, size, image_id):
         """Create image from template.
 
         Contains specific behavior for each image type.
@@ -262,14 +262,14 @@ class Image(metaclass=abc.ABCMeta):
         pass
 
     @staticmethod
-    def _get_or_create_base_image_path(filename):
+    def _get_or_create_base_image_path(filename: str) -> str:
         base_dir = os.path.join(CONF.instances_path,
                                 CONF.image_cache.subdirectory_name)
         if not os.path.exists(base_dir):
             fileutils.ensure_tree(base_dir)
         return os.path.join(base_dir, filename)
 
-    def create_ephemeral(
+    def _create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
         filename: str,
@@ -278,8 +278,8 @@ class Image(metaclass=abc.ABCMeta):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-        cache: bool = True,
-    ) -> None:
+        cache: bool = False,
+    ) -> ty.Optional[str]:
         # Create a base image if we haven't already cached one.
         if cache:
             # Create a base image if we haven't already cached one.
@@ -293,15 +293,33 @@ class Image(metaclass=abc.ABCMeta):
             disk_api.mkfs(
                 os_type, fs_label, target, run_as_root=self.is_block_dev,
                 specified_fs=specified_fs)
+        elif size_gb:
+            # If the disk already exists, we can resize it in case the size is
+            # changing during a resize to a different flavor, for example.
+            self.resize_image(size_gb * units.Gi)
         return target
 
-    def create_swap(
+    def create_ephemeral(
+        self,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
+        size_gb: int,
+        fs_label: str,
+        os_type: str,
+        specified_fs: ty.Optional[str] = None,
+        vm_mode: ty.Optional[fields.VMMode] = None,
+    ) -> ty.Optional[str]:
+        return self._create_ephemeral(
+            ctxt, filename, size_gb, fs_label, os_type,
+            specified_fs=specified_fs, vm_mode=vm_mode)
+
+    def _create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
         filename: str,
         size_mb: int,
-        cache: bool = True,
-    ) -> None:
+        cache: bool = False,
+    ) -> ty.Optional[str]:
         if cache:
             # Create a base image if we haven't already cached one.
             target = self._get_or_create_base_image_path(filename)
@@ -310,7 +328,19 @@ class Image(metaclass=abc.ABCMeta):
         if not os.path.exists(target):
             libvirt_utils.create_image(target, 'raw', f'{size_mb}M')
             nova.privsep.fs.unprivileged_mkfs('swap', target)
+        elif size_mb:
+            # If the disk already exists, we can resize it in case the size is
+            # changing during a resize to a different flavor, for example.
+            self.resize_image(size_mb * units.Mi)
         return target
+
+    def create_swap(
+        self,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
+        size_mb: int,
+    ) -> ty.Optional[str]:
+        return self._create_swap(ctxt, filename, size_mb)
 
     def download_image(
         self,
@@ -318,12 +348,19 @@ class Image(metaclass=abc.ABCMeta):
         filename: str,
         image_id: str,
         trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
-        cache: bool = True,
         convert_to_raw: bool = False,
-    ) -> None:
+    ) -> str:
+        """Download an image and add it to the image cache.
+
+        This is a no-op if the specified image is already in the image cache.
+        """
         if convert_to_raw:
+            # Will convert to raw depending on the CONF.force_raw_images
+            # setting.
             fetch_func = images.fetch_to_raw
         else:
+            # Images like kernel or ramdisk images will not want to consider
+            # the CONF.force_raw_images setting.
             fetch_func = images.fetch
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -342,12 +379,8 @@ class Image(metaclass=abc.ABCMeta):
             if not os.path.exists(target):
                 fetch_func(ctxt, image_id, target, trusted_certs=trusted_certs)
 
-        if cache:
-            target = self._get_or_create_base_image_path(filename)
-        else:
-            target = self.path
-
-        fetch_func_sync(ctxt, target, image_id, trusted_certs=trusted_certs)
+        target = self._get_or_create_base_image_path(filename)
+        fetch_func_sync(target, image_id, trusted_certs=trusted_certs)
 
         return target
 
@@ -358,14 +391,14 @@ class Image(metaclass=abc.ABCMeta):
         size: int,
         image_id: str,
         trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
-        cache: bool = True,
         convert_to_raw: bool = False,
         fallback_from_host: ty.Optional[str] = None,
     ) -> None:
+        # Download the image to the image cache.
         try:
             target = self.download_image(
                 ctxt, filename, image_id, trusted_certs=trusted_certs,
-                cache=cache, convert_to_raw=convert_to_raw)
+                convert_to_raw=convert_to_raw)
         except exception.ImageNotFound:
             if not fallback_from_host:
                 raise
@@ -373,13 +406,12 @@ class Image(metaclass=abc.ABCMeta):
                       "on image service, attempting to copy "
                       "image from %(host)s",
                       {'image_id': image_id, 'host': fallback_from_host})
-            if cache:
-                target = self._get_or_create_base_image_path(filename)
-            else:
-                target = self.path
-
+            target = self._get_or_create_base_image_path(filename)
             libvirt_utils.copy_image(
                 src=target, dest=target, host=fallback_from_host, receive=True)
+
+        # Create the disk image for the instance.
+        self.create_image(ctxt, target, size, image_id)
 
         if size:
             # create_image() only creates the base image if needed, so
@@ -661,39 +693,22 @@ class Flat(Image):
         if os.path.exists(self.path):
             self.driver_format = self.resolve_driver_format()
 
-    def create_image(self, ctxt, fetch_func, base, size, cache=True):
+    def create_image(self, ctxt, base, size, image_id):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
             libvirt_utils.copy_image(base, target)
-            if size:
-                self.resize_image(size)
+            # if size:
+            #    self.resize_image(size)
 
-        # generating = 'image_id' not in kwargs
-        # if generating:
-        if cache:
-            if not os.path.exists(base):
-                fetch_func(target=base)  # , *args, **kwargs)
-
-            # NOTE(mikal): Update the mtime of the base file so the image
-            # cache manager knows it is in use.
-            _update_utime_ignore_eacces(base)
-            self.verify_base_size(base, size)
-            if not os.path.exists(self.path):
-                with fileutils.remove_path_on_error(self.path):
-                    copy_raw_image(base, self.path, size)
-        else:
-            if not self.exists():
-                # Generating image in place
-                fetch_func(target=self.path)  # , *args, **kwargs)
-
-            # NOTE(plibeau): extend the disk in the case of image is not
-            # accessible anymore by the customer and the base image is
-            # available on source compute during the resize of the
-            # instance.
-            elif size:
-                self.resize_image(size)
+        # NOTE(mikal): Update the mtime of the base file so the image
+        # cache manager knows it is in use.
+        _update_utime_ignore_eacces(base)
+        self.verify_base_size(base, size)
+        if not os.path.exists(self.path):
+            with fileutils.remove_path_on_error(self.path):
+                copy_raw_image(base, self.path, size)
 
         self.correct_format()
 
@@ -740,41 +755,28 @@ class Qcow2(Image):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-        cache: bool = True,
-    ) -> None:
-        base_image = super().create_ephemeral(
+    ) -> ty.Optional[str]:
+        # Create base image if needed.
+        base_image = super()._create_ephemeral(
             ctxt, filename, size_gb, fs_label, os_type,
-            specified_fs=specified_fs, cache=cache)
+            specified_fs=specified_fs, cache=True)
+        # Create delta.
         self.create_image(ctxt, base_image, size_gb * units.Gi)
+        return self.path
 
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
         filename: str,
         size_mb: int,
-        cache: bool = True,
-    ) -> None:
-        base_image = super().create_swap(ctxt, filename, size_mb, cache=cache)
+    ) -> ty.Optional[str]:
+        # Create base image if needed.
+        base_image = super()._create_swap(ctxt, filename, size_mb, cache=True)
+        # Create delta.
         self.create_image(ctxt, base_image, size_mb * units.Mi)
+        return self.path
 
-    def create_root(
-        self,
-        ctxt: 'nova.context.RequestContext',
-        filename: str,
-        size: int,
-        image_id: str,
-        trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
-        cache: bool = True,
-        convert_to_raw: bool = False,
-        fallback_from_host: ty.Optional[str] = None,
-    ) -> None:
-        base_image = super().create_root(
-            ctxt, filename, size, image_id, trusted_certs=trusted_certs,
-            cache=cache, convert_to_raw=convert_to_raw,
-            fallback_from_host=fallback_from_host)
-        self.create_image(ctxt, base_image, size)
-
-    def create_image(self, ctxt, base, size):
+    def create_image(self, ctxt, base, size, image_id):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -902,14 +904,42 @@ class Lvm(Image):
     def _can_fallocate(self):
         return False
 
-    def create_image(self, prepare_template, base, size, *args, **kwargs):
-        def encrypt_lvm_image():
-            dmcrypt.create_volume(self.path.rpartition('/')[2],
-                                  self.lv_path,
-                                  CONF.ephemeral_storage_encryption.cipher,
-                                  CONF.ephemeral_storage_encryption.key_size,
-                                  key)
+    def _encrypt_lvm_image(self, ctxt):
+        try:
+            # NOTE(dgenin): Key manager corresponding to the
+            # specific backend catches and reraises an
+            # an exception if key retrieval fails.
+            key = self.key_manager.get(
+                ctxt, self.ephemeral_key_uuid).get_encoded()
+        except Exception:
+            with excutils.save_and_reraise_exception():
+                LOG.error("Failed to retrieve ephemeral encryption key")
+        dmcrypt.create_volume(self.path.rpartition('/')[2],
+                              self.lv_path,
+                              CONF.ephemeral_storage_encryption.cipher,
+                              CONF.ephemeral_storage_encryption.key_size,
+                              key)
 
+    def create_ephemeral(
+        self,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
+        size_gb: int,
+        fs_label: str,
+        os_type: str,
+        specified_fs: ty.Optional[str] = None,
+        vm_mode: ty.Optional[fields.VMMode] = None,
+    ) -> ty.Optional[str]:
+        lvm.create_volume(
+            self.vg, self.lv, size_gb * units.Gi, sparse=self.sparse)
+        with self.remove_volume_on_error(self.path):
+            if self.ephemeral_key_uuid is not None:
+                self._encrypt_lvm_image(ctxt)
+            return super().create_ephemeral(
+                ctxt, filename, size_gb, fs_label, os_type,
+                specified_fs=specified_fs)
+
+    def create_image(self, ctxt, base, size, image_id):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -918,10 +948,10 @@ class Lvm(Image):
             self.verify_base_size(base, size, base_size=base_size)
             resize = size > base_size if size else False
             size = size if resize else base_size
-            lvm.create_volume(self.vg, self.lv,
-                                         size, sparse=self.sparse)
+            lvm.create_volume(self.vg, self.lv, size, sparse=self.sparse)
+
             if self.ephemeral_key_uuid is not None:
-                encrypt_lvm_image()
+                self._encrypt_lvm_image(ctxt)
             # NOTE: by calling convert_image_unsafe here we're
             # telling qemu-img convert to do format detection on the input,
             # because we don't know what the format is. For example,
@@ -935,35 +965,8 @@ class Lvm(Image):
             if resize:
                 disk_api.resize2fs(self.path, run_as_root=True)
 
-        generated = 'ephemeral_size' in kwargs
-        if self.ephemeral_key_uuid is not None:
-            if 'context' in kwargs:
-                try:
-                    # NOTE(dgenin): Key manager corresponding to the
-                    # specific backend catches and reraises an
-                    # an exception if key retrieval fails.
-                    key = self.key_manager.get(kwargs['context'],
-                            self.ephemeral_key_uuid).get_encoded()
-                except Exception:
-                    with excutils.save_and_reraise_exception():
-                        LOG.error("Failed to retrieve ephemeral "
-                                  "encryption key")
-            else:
-                raise exception.InternalError(
-                    _("Instance disk to be encrypted but no context provided"))
-        # Generate images with specified size right on volume
-        if generated and size:
-            lvm.create_volume(self.vg, self.lv,
-                                         size, sparse=self.sparse)
-            with self.remove_volume_on_error(self.path):
-                if self.ephemeral_key_uuid is not None:
-                    encrypt_lvm_image()
-                prepare_template(target=self.path, *args, **kwargs)
-        else:
-            if not os.path.exists(base):
-                prepare_template(target=base, *args, **kwargs)
-            with self.remove_volume_on_error(self.path):
-                create_lvm_image(base, size)
+        with self.remove_volume_on_error(self.path):
+            create_lvm_image(base, size)
 
     # NOTE(nic): Resizing the image is already handled in create_image(),
     # and migrate/resize is not supported with LVM yet, so this is a no-op
@@ -1099,14 +1102,27 @@ class Rbd(Image):
                 LOG.warning("Ignoring failure to remove %(path)s: "
                             "%(error)s", {'path': base, 'error': e})
 
-    def create_image(self, prepare_template, base, size, *args, **kwargs):
-
+    def create_root(
+        self,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
+        size: int,
+        image_id: str,
+        trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
+        convert_to_raw: bool = False,
+        fallback_from_host: ty.Optional[str] = None,
+    ) -> None:
         if not self.exists():
-            self._remove_non_raw_cache_image(base)
-            prepare_template(target=base, *args, **kwargs)
+            base_image = self._get_or_create_base_image_path(filename)
+            self._remove_non_raw_cache_image(base_image)
+        return super().create_root(
+            ctxt, filename, size, image_id, trusted_certs=trusted_certs,
+            convert_to_raw=convert_to_raw,
+            fallback_from_host=fallback_from_host)
 
-        # prepare_template() may have cloned the image into a new rbd
-        # image already instead of downloading it locally
+    def create_image(self, ctxt, base, size, image_id):
+        # The image may have been cloned into a new rbd image already instead
+        # of downloading it locally
         if not self.exists():
             self.driver.import_image(base, self.rbd_name)
         self.verify_base_size(base, size)
@@ -1359,6 +1375,7 @@ class Rbd(Image):
                 self.driver.destroy_volume(_im, pool=_pool)
 
 
+# FIXME(melwitt): Remove ploop entirely?
 class Ploop(Image):
     def __init__(
         self, instance=None, disk_name=None, path=None, disk_info_mapping=None
@@ -1380,14 +1397,18 @@ class Ploop(Image):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-    ) -> None:
+    ) -> ty.Optional[str]:
+        remove_func = functools.partial(fileutils.delete_if_exists,
+                                        remove=shutil.rmtree)
         if vm_mode == fields.VMMode.EXE:
-            libvirt_utils.create_ploop_image(
-                'expanded', target, '%dG' % size_gb, specified_fs)
+            with fileutils.remove_path_on_error(target, remove=remove_func):
+                libvirt_utils.create_ploop_image(
+                    'expanded', target, '%dG' % size_gb, specified_fs)
+                return target
 
     # Create new ploop disk (in case of epehemeral) or
     # copy ploop disk from glance image
-    def create_image(self, prepare_template, base, size, *args, **kwargs):
+    def create_image(self, ctxt, base, size, image_id):
         filename = os.path.basename(base)
 
         # Copy main file of ploop disk, restore DiskDescriptor.xml for it
@@ -1405,46 +1426,33 @@ class Ploop(Image):
             if size:
                 self.resize_image(size)
 
-        # Generating means that we create empty ploop disk
-        generating = 'image_id' not in kwargs
         remove_func = functools.partial(fileutils.delete_if_exists,
                                         remove=shutil.rmtree)
-        if generating:
-            if os.path.exists(self.path):
-                return
-            with fileutils.remove_path_on_error(self.path, remove=remove_func):
-                prepare_template(target=self.path, *args, **kwargs)
+        # Create ploop disk from glance image
+        # Disk already exists in cache, just update time
+        _update_utime_ignore_eacces(base)
+        self.verify_base_size(base, size)
+
+        if os.path.exists(self.path):
+            return
+
+        # Get format for ploop disk
+        if CONF.force_raw_images:
+            self.pcs_format = "raw"
         else:
-            # Create ploop disk from glance image
-            if not os.path.exists(base):
-                prepare_template(target=base, *args, **kwargs)
-            else:
-                # Disk already exists in cache, just update time
-                _update_utime_ignore_eacces(base)
-            self.verify_base_size(base, size)
-
-            if os.path.exists(self.path):
-                return
-
-            # Get format for ploop disk
-            if CONF.force_raw_images:
+            image_meta = IMAGE_API.get(ctxt, image_id),
+            format = image_meta.get("disk_format")
+            if format == "ploop":
+                self.pcs_format = "expanded"
+            elif format == "raw":
                 self.pcs_format = "raw"
             else:
-                image_meta = IMAGE_API.get(kwargs["context"],
-                                           kwargs["image_id"])
-                format = image_meta.get("disk_format")
-                if format == "ploop":
-                    self.pcs_format = "expanded"
-                elif format == "raw":
-                    self.pcs_format = "raw"
-                else:
-                    reason = _("Ploop image backend doesn't support images in"
-                               " %s format. You should either set"
-                               " force_raw_images=True in config or upload an"
-                               " image in ploop or raw format.") % format
-                    raise exception.ImageUnacceptable(
-                                        image_id=kwargs["image_id"],
-                                        reason=reason)
+                reason = _("Ploop image backend doesn't support images in"
+                           " %s format. You should either set"
+                           " force_raw_images=True in config or upload an"
+                           " image in ploop or raw format.") % format
+                raise exception.ImageUnacceptable(
+                    image_id=image_id, reason=reason)
 
             with fileutils.remove_path_on_error(self.path, remove=remove_func):
                 _copy_ploop_image(base, self.path, size)
