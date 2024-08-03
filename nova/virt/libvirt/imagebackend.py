@@ -129,7 +129,7 @@ class Image(metaclass=abc.ABCMeta):
         self.lock_path = os.path.join(CONF.instances_path, 'locks')
 
     @abc.abstractmethod
-    def create_image(self, ctxt, base, size, image_id):
+    def create_image(self, ctxt, base, size, image_id=None):
         """Create image from template.
 
         Contains specific behavior for each image type.
@@ -377,7 +377,7 @@ class Image(metaclass=abc.ABCMeta):
             # call fetch_func. The lock we're holding is also unnecessary in
             # that case, but it will not result in incorrect behaviour.
             if not os.path.exists(target):
-                fetch_func(ctxt, image_id, target, trusted_certs=trusted_certs)
+                fetch_func(ctxt, target, image_id, trusted_certs=trusted_certs)
 
         target = self._get_or_create_base_image_path(filename)
         fetch_func_sync(target, image_id, trusted_certs=trusted_certs)
@@ -411,7 +411,7 @@ class Image(metaclass=abc.ABCMeta):
                 src=target, dest=target, host=fallback_from_host, receive=True)
 
         # Create the disk image for the instance.
-        self.create_image(ctxt, target, size, image_id)
+        self.create_image(ctxt, target, size, image_id=image_id)
 
         if size:
             # create_image() only creates the base image if needed, so
@@ -693,7 +693,7 @@ class Flat(Image):
         if os.path.exists(self.path):
             self.driver_format = self.resolve_driver_format()
 
-    def create_image(self, ctxt, base, size, image_id):
+    def create_image(self, ctxt, base, size, image_id=None):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -776,7 +776,7 @@ class Qcow2(Image):
         self.create_image(ctxt, base_image, size_mb * units.Mi)
         return self.path
 
-    def create_image(self, ctxt, base, size, image_id):
+    def create_image(self, ctxt, base, size, image_id=None):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -939,7 +939,7 @@ class Lvm(Image):
                 ctxt, filename, size_gb, fs_label, os_type,
                 specified_fs=specified_fs)
 
-    def create_image(self, ctxt, base, size, image_id):
+    def create_image(self, ctxt, base, size, image_id=None):
         filename = self._get_lock_name(base)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -1120,7 +1120,7 @@ class Rbd(Image):
             convert_to_raw=convert_to_raw,
             fallback_from_host=fallback_from_host)
 
-    def create_image(self, ctxt, base, size, image_id):
+    def create_image(self, ctxt, base, size, image_id=None):
         # The image may have been cloned into a new rbd image already instead
         # of downloading it locally
         if not self.exists():
@@ -1408,7 +1408,10 @@ class Ploop(Image):
 
     # Create new ploop disk (in case of epehemeral) or
     # copy ploop disk from glance image
-    def create_image(self, ctxt, base, size, image_id):
+    def create_image(self, ctxt, base, size, image_id=None):
+        if image_id is None:
+            raise RuntimeError('image_id is required for ploop create_image()')
+
         filename = os.path.basename(base)
 
         # Copy main file of ploop disk, restore DiskDescriptor.xml for it

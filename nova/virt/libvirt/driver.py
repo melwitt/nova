@@ -5096,7 +5096,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                 filename=fname,
                                 image_id=disk_images['kernel_id'])
             if not self.use_legacy_imagebackend:
-                raw('kernel').download_and_cache(
+                raw('kernel').download_image(
                     context, fname, disk_images['kernel_id'])
 
             if disk_images['ramdisk_id']:
@@ -5106,7 +5106,7 @@ class LibvirtDriver(driver.ComputeDriver):
                                      filename=fname,
                                      image_id=disk_images['ramdisk_id'])
                 if not self.use_legacy_imagebackend:
-                    raw('ramdisk').download_and_cache(
+                    raw('ramdisk').download_image(
                         context, fname, disk_images['ramdisk_id'])
 
         created_disks = self._create_and_inject_local_root(
@@ -11683,7 +11683,9 @@ class LibvirtDriver(driver.ComputeDriver):
                     if not self.use_legacy_imagebackend:
                         disk.create_root(
                             context, cache_name, info['virt_disk_size'],
-                            instance.image_ref, convert_to_raw=True,
+                            instance.image_ref,
+                            trusted_certs=instance.trusted_certs,
+                            convert_to_raw=True,
                             fallback_from_host=fallback_from_host)
 
         # if disk has kernel and ramdisk, just download
