@@ -377,7 +377,7 @@ class Image(metaclass=abc.ABCMeta):
             # call fetch_func. The lock we're holding is also unnecessary in
             # that case, but it will not result in incorrect behaviour.
             if not os.path.exists(target):
-                fetch_func(ctxt, target, image_id, trusted_certs=trusted_certs)
+                fetch_func(ctxt, image_id, target, trusted_certs=trusted_certs)
 
         target = self._get_or_create_base_image_path(filename)
         fetch_func_sync(target, image_id, trusted_certs=trusted_certs)
@@ -1115,10 +1115,28 @@ class Rbd(Image):
         if not self.exists():
             base_image = self._get_or_create_base_image_path(filename)
             self._remove_non_raw_cache_image(base_image)
-        return super().create_root(
-            ctxt, filename, size, image_id, trusted_certs=trusted_certs,
-            convert_to_raw=convert_to_raw,
-            fallback_from_host=fallback_from_host)
+
+            refuse_fetch = (
+                CONF.libvirt.images_type == 'rbd' and
+                CONF.workarounds.never_download_image_if_on_rbd)
+            try:
+                self.clone(ctxt, image_id)
+            except exception.ImageUnacceptable:
+                if refuse_fetch:
+                    # Re-raise the exception from the failed
+                    # ceph clone.  The compute manager expects
+                    # ImageUnacceptable as a possible result
+                    # of spawn(), from which this is called.
+                    with excutils.save_and_reraise_exception():
+                        LOG.warning(
+                            'Image %s is not on my ceph and '
+                            '[workarounds]/'
+                            'never_download_image_if_on_rbd=True;'
+                            ' refusing to fetch and upload.', image_id)
+                libvirt_utils.fetch_image(
+                    ctxt, base_image, image_id, trusted_certs)
+
+        self.create_image(ctxt, base_image, size)
 
     def create_image(self, ctxt, base, size, image_id=None):
         # The image may have been cloned into a new rbd image already instead

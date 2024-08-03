@@ -5096,8 +5096,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                 filename=fname,
                                 image_id=disk_images['kernel_id'])
             if not self.use_legacy_imagebackend:
-                raw('kernel').download_image(
-                    context, fname, disk_images['kernel_id'])
+                raw('kernel').create_root(
+                    context, fname, None, disk_images['kernel_id'])
 
             if disk_images['ramdisk_id']:
                 fname = imagecache.get_cache_fname(disk_images['ramdisk_id'])
@@ -5106,8 +5106,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                      filename=fname,
                                      image_id=disk_images['ramdisk_id'])
                 if not self.use_legacy_imagebackend:
-                    raw('ramdisk').download_image(
-                        context, fname, disk_images['ramdisk_id'])
+                    raw('ramdisk').create_root(
+                        context, fname, None, disk_images['ramdisk_id'])
 
         created_disks = self._create_and_inject_local_root(
             context, instance, disk_mapping, booted_from_volume, suffix,
@@ -5255,33 +5255,10 @@ class LibvirtDriver(driver.ComputeDriver):
                                         root_fname, disk_images['image_id'],
                                         instance, size, fallback_from_host)
             if not self.use_legacy_imagebackend:
-                create_root = True
-                if backend.SUPPORTS_CLONE:
-                    refuse_fetch = (
-                        CONF.libvirt.images_type == 'rbd' and
-                        CONF.workarounds.never_download_image_if_on_rbd)
-                    try:
-                        backend.clone(context, disk_images['image_id'])
-                        create_root = False
-                    except exception.ImageUnacceptable:
-                        if refuse_fetch:
-                            # Re-raise the exception from the failed
-                            # ceph clone.  The compute manager expects
-                            # ImageUnacceptable as a possible result
-                            # of spawn(), from which this is called.
-                            with excutils.save_and_reraise_exception():
-                                LOG.warning(
-                                    'Image %s is not on my ceph and '
-                                    '[workarounds]/'
-                                    'never_download_image_if_on_rbd=True;'
-                                    ' refusing to fetch and upload.',
-                                    disk_images['image_id'])
-                if create_root:
-                    backend.create_root(
-                        context, root_fname, size, disk_images['image_id'],
-                        trusted_certs=instance.trusted_certs,
-                        convert_to_raw=True,
-                        fallback_from_host=fallback_from_host)
+                backend.create_root(
+                    context, root_fname, size, disk_images['image_id'],
+                    trusted_certs=instance.trusted_certs, convert_to_raw=True,
+                    fallback_from_host=fallback_from_host)
 
             # During unshelve or cross cell resize on Qcow2 backend, we spawn()
             # using a snapshot image. Extra work is needed in order to rebase
@@ -5334,9 +5311,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                         context, root_fname, base_image_ref,
                                         instance, None)
             if not self.use_legacy_imagebackend:
-                backend.create_root(
-                    context, root_fname, None, base_image_ref,
-                    convert_to_raw=True)
+                backend.download_image(
+                    context, root_fname, base_image_ref, convert_to_raw=True)
         except exception.ImageNotFound:
             # We must flatten here in order to remove dependency with an orphan
             # backing file (as snapshot image will be dropped once
