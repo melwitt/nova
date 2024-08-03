@@ -5259,6 +5259,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     context, root_fname, size, disk_images['image_id'],
                     trusted_certs=instance.trusted_certs, convert_to_raw=True,
                     fallback_from_host=fallback_from_host)
+                self._flatten_image_after_migration(instance, backend)
 
             # During unshelve or cross cell resize on Qcow2 backend, we spawn()
             # using a snapshot image. Extra work is needed in order to rebase
@@ -5274,6 +5275,38 @@ class LibvirtDriver(driver.ComputeDriver):
                         'instance is not supported', instance=instance)
 
         return created_disks
+
+    @staticmethod
+    def _flatten_image_after_migration(instance, image):
+        # NOTE(lyarwood): If the instance vm_state is shelved offloaded then we
+        # must be unshelving for _try_fetch_image_cache to be called.
+        # NOTE(mriedem): Alternatively if we are doing a cross-cell move of a
+        # non-volume-backed server and finishing (spawning) on the dest host,
+        # we have to flatten the rbd image so we can delete the temporary
+        # snapshot in the compute manager.
+        mig_context = instance.migration_context
+        cross_cell_move = (
+                mig_context and mig_context.is_cross_cell_move() or False)
+        if instance.vm_state == vm_states.SHELVED_OFFLOADED or cross_cell_move:
+            # NOTE(lyarwood): When using the rbd imagebackend the call to cache
+            # above will attempt to clone from the shelved snapshot in Glance
+            # if available from this compute. We then need to flatten the
+            # resulting image to avoid it still referencing and ultimately
+            # blocking the removal of the shelved snapshot at the end of the
+            # unshelve. This is a no-op for all but the rbd imagebackend.
+            action = (
+                'migrating instance across cells' if cross_cell_move
+                else 'unshelving instance')
+            try:
+                image.flatten()
+                LOG.debug('Image %s flattened successfully while %s.',
+                          image.path, action, instance=instance)
+            except NotImplementedError:
+                # NOTE(lyarwood): There's an argument to be made for logging
+                # our inability to call flatten here, however given this isn't
+                # implemented for most of the backends it may do more harm than
+                # good, concerning operators etc so for now just pass.
+                pass
 
     def _needs_rebase_original_qcow2_image(self, instance, backend):
         if not isinstance(backend, imagebackend_legacy.Qcow2):

@@ -352,6 +352,7 @@ class Image(metaclass=abc.ABCMeta):
     ) -> str:
         """Download an image and add it to the image cache.
 
+        The filename should be the cache filename.
         This is a no-op if the specified image is already in the image cache.
         """
         if convert_to_raw:
@@ -411,7 +412,8 @@ class Image(metaclass=abc.ABCMeta):
                 src=target, dest=target, host=fallback_from_host, receive=True)
 
         # Create the disk image for the instance.
-        self.create_image(ctxt, target, size, image_id=image_id)
+        if not self.exists():
+            self.create_image(ctxt, target, size, image_id=image_id)
 
         if size:
             # create_image() only creates the base image if needed, so
@@ -1112,27 +1114,21 @@ class Rbd(Image):
         convert_to_raw: bool = False,
         fallback_from_host: ty.Optional[str] = None,
     ) -> None:
+        base_image = self._get_or_create_base_image_path(filename)
         if not self.exists():
-            base_image = self._get_or_create_base_image_path(filename)
             self._remove_non_raw_cache_image(base_image)
-
-            refuse_fetch = (
-                CONF.libvirt.images_type == 'rbd' and
-                CONF.workarounds.never_download_image_if_on_rbd)
             try:
                 self.clone(ctxt, image_id)
             except exception.ImageUnacceptable:
-                if refuse_fetch:
-                    # Re-raise the exception from the failed
-                    # ceph clone.  The compute manager expects
-                    # ImageUnacceptable as a possible result
-                    # of spawn(), from which this is called.
-                    with excutils.save_and_reraise_exception():
-                        LOG.warning(
-                            'Image %s is not on my ceph and '
-                            '[workarounds]/'
-                            'never_download_image_if_on_rbd=True;'
-                            ' refusing to fetch and upload.', image_id)
+                if CONF.workarounds.never_download_image_if_on_rbd:
+                    # Re-raise the exception from the failed ceph clone. The
+                    # compute manager expects ImageUnacceptable as a possible
+                    # result of spawn(), from which this is called.
+                    LOG.warning(
+                        'Image %s is not on my ceph and [workarounds]/'
+                        'never_download_image_if_on_rbd=True; refusing to '
+                        'fetch and upload.', image_id)
+                    raise
                 libvirt_utils.fetch_image(
                     ctxt, base_image, image_id, trusted_certs)
 
