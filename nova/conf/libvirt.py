@@ -1043,7 +1043,7 @@ Requires:
 * Qemu >= 1.6 (qcow2 format)
 """),
     cfg.StrOpt('images_backend',
-               default='nova.virt.libvirt.imagebackend_legacy.Backend',
+               default='nova.virt.libvirt.imagebackend.Backend',
                choices=(
                    'nova.virt.libvirt.imagebackend_legacy.Backend',
                    'nova.virt.libvirt.imagebackend.Backend',
