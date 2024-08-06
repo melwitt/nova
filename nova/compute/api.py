@@ -274,7 +274,8 @@ def reject_legacy_vtpm_live_migration(function):
         confirmed = instance.system_metadata.get(
             'tpm_secret_security_confirmed')
         if vtpm:
-            if not (security == 'host' and confirmed == 'True'):
+            if not (security in ('host', 'deployment') and
+                        confirmed == 'True'):
                 raise exception.OperationNotSupportedForVTPM(
                     instance_uuid=instance.uuid,
                     operation=instance_actions.LIVE_MIGRATION)
