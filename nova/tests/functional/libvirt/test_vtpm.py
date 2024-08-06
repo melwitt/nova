@@ -16,6 +16,7 @@
 import ddt
 from unittest import mock
 
+from castellan.common import exception as castellan_exc
 from castellan.common.objects import passphrase
 from castellan.key_manager import key_manager
 from oslo_log import log as logging
@@ -499,6 +500,21 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertInstanceHasSecret(server)
 
     def test_live_migrate_server(self):
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(host='src')
+        self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_had_secret(self.src, self.server['id'])
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        self._live_migrate(self.server)
+        self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_had_secret(self.dest, self.server['id'])
+
+    def test_live_migrate_server_inaccessible_secret(self):
         for host in ('test_compute0', 'test_compute1'):
             self.start_compute(host)
 
@@ -509,10 +525,38 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # ensure our instance's system_metadata field is correct
         self.assertInstanceHasSecret(server)
 
-        # live migrate the server
-        self.assertRaises(
-            client.OpenStackApiException,
-            self._live_migrate_server, server)
+        with mock.patch.object(self.key_mgr, 'get',
+                               side_effect=castellan_exc.KeyManagerError):
+            # live migrate the server
+            self.assertRaises(
+                client.OpenStackApiException,
+                self._live_migrate_server, server)
+
+    def test_live_migrate_server_rollback(self):
+
+        def _migrate_stub(domain, destination, params, flags):
+            self.dest.driver._host.get_connection().createXML(
+                params['destination_xml'],
+                'fake-createXML-doesnt-care-about-flags')
+            conn = self.src.driver._host.get_connection()
+            dom = conn.lookupByUUIDString(self.server['id'])
+            dom.fail_job()
+
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(host='src')
+        self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_had_secret(self.src, self.server['id'])
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        with mock.patch('nova.tests.fixtures.libvirt.Domain.migrateToURI3',
+                        _migrate_stub):
+            self._live_migrate(self.server, migration_expected_state='failed')
+            self.assertInstanceHasSecret(self.server)
+            self._assert_libvirt_had_secret(self.dest, self.server['id'])
 
     def test_shelve_server(self):
         for host in ('test_compute0', 'test_compute1'):
