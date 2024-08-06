@@ -8307,6 +8307,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     destroy_vifs=True,
                     cleanup_instance_dir=cleanup_instance_dir,
                     cleanup_instance_disks=cleanup_instance_disks)
+                self._delete_secret_for_vtpm(context, instance)
                 raise exception.VirtualInterfaceCreateException()
         except Exception:
             # Any other error, be sure to clean up
@@ -8317,6 +8318,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     destroy_vifs=True,
                     cleanup_instance_dir=cleanup_instance_dir,
                     cleanup_instance_disks=cleanup_instance_disks)
+                self._delete_secret_for_vtpm(context, instance)
 
         # Resume only if domain has been paused
         if pause:
@@ -11722,6 +11724,9 @@ class LibvirtDriver(driver.ComputeDriver):
                                                destroy_disks=True,
                                                migrate_data=None):
         """Clean up destination node after a failed live migration."""
+        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
+        if secret_uuid:
+            self._host.delete_secret('vtpm', instance.uuid)
         try:
             self.destroy(context, instance, network_info, block_device_info,
                          destroy_disks)
@@ -11929,6 +11934,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 password=migrate_data.vtpm_secret_value.encode(),
                 uuid=migrate_data.vtpm_secret_uuid, ephemeral=False,
                 private=False)
+        elif self._get_instance_tpm_secret_security(
+                context, instance) == 'deployment':
+            self._create_secret_for_vtpm(context, instance)
 
         return migrate_data
 
@@ -12072,6 +12080,7 @@ class LibvirtDriver(driver.ComputeDriver):
             'vtpm_secret_value' in migrate_data
         ):
             self._host.delete_secret('vtpm', instance.uuid)
+
         # NOTE(mdbooth): The block_device_info we were passed was initialized
         # with BDMs from the source host before they were updated to point to
         # the destination. We can safely use this to disconnect the source
@@ -12101,6 +12110,9 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         self.unplug_vifs(instance, network_info)
         self.cpu_api.power_down_for_instance(instance)
+        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
+        if secret_uuid:
+            self._host.delete_secret('vtpm', instance.uuid)
 
     def _qemu_monitor_announce_self(self, instance):
         """Send announce_self command to QEMU monitor.
@@ -12143,6 +12155,11 @@ class LibvirtDriver(driver.ComputeDriver):
                      'max_attempts': max_attempts}, instance=instance)
                 LOG.exception()
 
+    def _post_live_migration_at_destination_vtpm(self, instance):
+        security = instance.system_metadata.get('image_hw_tpm_secret_security')
+        if security == 'deployment':
+            self._host.delete_secret('vtpm', instance.uuid)
+
     def post_live_migration_at_destination(self, context,
                                            instance,
                                            network_info,
@@ -12165,6 +12182,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # to the domain XML so we can remove the reserved values.
             LOG.debug("Unclaiming mdevs %s from instance %s",
                 mdevs, instance.uuid)
+        self._post_live_migration_at_destination_vtpm(instance)
 
     def _get_instance_disk_info_from_config(self, guest_config,
                                             block_device_info):
