@@ -12749,8 +12749,9 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase,
         compute = manager.ComputeManager()
         dest_node = objects.ComputeNode(host='foo', uuid=uuids.dest_node)
         mock_get_node.return_value = dest_node
-        instance = fake_instance.fake_instance_obj(self.context,
-                                                   uuid=uuids.instance)
+        instance = fake_instance.fake_instance_obj(
+            self.context, uuid=uuids.instance,
+            expected_attrs=['system_metadata'])
         volume_id = uuids.volume
         orig_attachment_id = uuids.attachment1
         new_attachment_id = uuids.attachment2
