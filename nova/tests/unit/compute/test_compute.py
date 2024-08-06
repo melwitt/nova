@@ -7211,7 +7211,8 @@ class ComputeTestCase(BaseTestCase,
         is still set to 'error' before re-raising the error.
         """
         ctxt = context.get_admin_context()
-        instance = fake_instance.fake_instance_obj(ctxt)
+        instance = fake_instance.fake_instance_obj(
+            ctxt, expected_attrs=['system_metadata'])
         migration = objects.Migration(ctxt, uuid=uuids.migration)
         migrate_data = objects.LibvirtLiveMigrateData(migration=migration)
         source_bdms = objects.BlockDeviceMappingList()
