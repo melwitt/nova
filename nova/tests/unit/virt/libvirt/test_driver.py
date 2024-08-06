@@ -14010,7 +14010,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         mock_get_instance_path.return_value = fake_instance_path
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
 
-        instance = objects.Instance(id=1, uuid=uuids.instance)
+        instance = objects.Instance(
+            id=1, uuid=uuids.instance, system_metadata={})
         migrate_data = objects.LibvirtLiveMigrateData(
             is_shared_instance_path=False,
             instance_relative_path=False)
@@ -14031,7 +14032,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                                                     ):
 
         def fake_destroy(ctxt, instance, network_info,
-                         block_device_info=None, destroy_disks=True):
+                         block_device_info=None, destroy_disks=True,
+                         destroy_secrets=True):
             # This is just here to test the signature. Seems there should
             # be a better way to do this with mock and autospec.
             pass
@@ -14040,7 +14042,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         self.assertEqual({}, drvr.instance_claimed_mdevs)
 
-        instance = objects.Instance(id=1, uuid=uuids.instance)
+        instance = objects.Instance(
+            id=1, uuid=uuids.instance, system_metadata={})
         migrate_data = objects.LibvirtLiveMigrateData(
             is_shared_instance_path=True,
             instance_relative_path=False)
@@ -14049,7 +14052,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         drvr.rollback_live_migration_at_destination("context", instance, [],
                                                     None, True, migrate_data)
         mock_destroy.assert_called_once_with("context", instance, [],
-                                             None, True)
+                                             None, True, destroy_secrets=False)
         self.assertFalse(mock_get_instance_path.called)
         self.assertFalse(mock_exist.called)
         self.assertFalse(mock_shutil.called)
@@ -17704,7 +17707,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         instance = fake_instance.fake_instance_obj(
             None, name='instancename', id=1,
             uuid='875a8070-d0b9-4949-8b31-104d125c9a64',
-            expected_attrs=['resources'])
+            expected_attrs=['resources', 'system_metadata'])
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         drvr.destroy(self.context, instance, [], None, False)
@@ -21162,7 +21165,8 @@ class LibvirtConnTestCase(test.NoDBTestCase,
     def test_post_live_migration_at_destination(
             self, mock_get_guest, mock_write_instance_config,
             mock_get_interfaces, mock_attach, mock_image_meta):
-        instance = objects.Instance(id=1, uuid=uuids.instance)
+        instance = objects.Instance(
+            id=1, uuid=uuids.instance, system_metadata={})
         dom = mock.MagicMock()
         guest = libvirt_guest.Guest(dom)
 
@@ -21194,6 +21198,46 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         mock_attach.assert_called_once_with(mock.ANY, instance,
                                             mock.sentinel.image_meta,
                                             vif_direct)
+
+    @ddt.unpack
+    @ddt.data(
+            (None, None),
+            ('user', False), ('user', True),
+            ('host', False), ('host', True),
+            ('deployment', False), ('deployment', True))
+    def test_post_live_migration_at_destination_vtpm(self, secret_security,
+                                                     confirmed):
+        """Test the behavior of libvirt secret cleanup with vTPM
+
+        For 'deployment' secret security the last step of live migration with
+        regard to libvirt secret is to undefine (delete) the secret after the
+        guest is running.
+        """
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        key = ('image_hw_tpm_secret_security' if confirmed else
+               'provisional_tpm_secret_security')
+        system_metadata = {
+            'vtpm_secret_uuid': uuids.secret,
+            key: secret_security,
+        }
+        instance = objects.Instance(uuid=uuids.instance,
+                                    system_metadata=system_metadata)
+        network_info = mock.Mock()
+
+        @mock.patch.object(drvr, '_reattach_instance_vifs', new=mock.Mock())
+        @mock.patch.object(drvr, '_qemu_monitor_announce_self',
+                           new=mock.Mock())
+        @mock.patch.object(drvr._host, 'delete_secret')
+        def _test(mock_delete_secret):
+            drvr.post_live_migration_at_destination(
+                self.context, instance, network_info)
+            if secret_security == 'deployment' and confirmed:
+                mock_delete_secret.assert_called_once_with('vtpm',
+                                                           uuids.instance)
+            else:
+                mock_delete_secret.assert_not_called()
+
+        _test()
 
     def test_create_guest_with_network__propagates_exceptions(self):
         self.flags(virt_type='lxc', group='libvirt')
@@ -21543,15 +21587,13 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             unplug.assert_called_once_with(fake_inst, 'netinfo', True)
 
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
-    @mock.patch('nova.crypto.delete_vtpm_secret')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.delete_instance_files')
     @mock.patch('nova.virt.driver.block_device_info_get_mapping')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._unplug_vifs')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._get_vpmems',
                 new=mock.Mock(return_value=None))
     def test_cleanup_pass(
-        self, mock_unplug, mock_get_mapping, mock_delete_files,
-        mock_delete_vtpm, mock_undefine,
+        self, mock_unplug, mock_get_mapping, mock_delete_files, mock_undefine,
     ):
         """Test with default parameters."""
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
@@ -21565,19 +21607,16 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         mock_unplug.assert_called_once_with(fake_inst, 'netinfo', True)
         mock_get_mapping.assert_called_once_with(None)
         mock_delete_files.assert_called_once_with(fake_inst)
-        mock_delete_vtpm.assert_called_once_with('ctxt', fake_inst)
         mock_undefine.assert_called_once_with(fake_inst)
 
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._undefine_domain')
-    @mock.patch('nova.crypto.delete_vtpm_secret')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.delete_instance_files')
     @mock.patch('nova.virt.driver.block_device_info_get_mapping')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._unplug_vifs')
     @mock.patch('nova.virt.libvirt.driver.LibvirtDriver._get_vpmems',
                 new=mock.Mock(return_value=None))
     def test_cleanup_instance_marked_deleted(
-        self, mock_unplug, mock_get_mapping, mock_delete_files,
-        mock_delete_vtpm, mock_undefine,
+        self, mock_unplug, mock_get_mapping, mock_delete_files, mock_undefine,
     ):
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI())
         fake_inst = objects.Instance(**self.test_instance)
@@ -21589,7 +21628,6 @@ class LibvirtConnTestCase(test.NoDBTestCase,
             instance_save.side_effect = exception.InstanceNotFound(
                 instance_id=uuids.instance)
             drvr.cleanup('ctxt', fake_inst, 'netinfo')
-        mock_delete_vtpm.assert_called_once_with('ctxt', fake_inst)
         mock_undefine.assert_called_once_with(fake_inst)
 
     @mock.patch.object(libvirt_driver.LibvirtDriver, 'delete_instance_files',
