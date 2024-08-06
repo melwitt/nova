@@ -1673,6 +1673,8 @@ class LibvirtDriver(driver.ComputeDriver):
         self._device_event_handler.cleanup_waiters(instance.uuid)
         self.cleanup(context, instance, network_info, block_device_info,
                      destroy_disks, destroy_secrets=destroy_secrets)
+        if destroy_secrets:
+            crypto.delete_vtpm_secret(context, instance)
 
     def _undefine_domain(self, instance):
         try:
@@ -1831,7 +1833,6 @@ class LibvirtDriver(driver.ComputeDriver):
                 pass
 
         if cleanup_instance_disks:
-            crypto.delete_vtpm_secret(context, instance)
             # Make sure that the instance directory files were successfully
             # deleted before destroying the encryption secrets in the case of
             # image backends that are not 'lvm' or 'rbd'. We don't want to
@@ -8283,6 +8284,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     destroy_vifs=True,
                     cleanup_instance_dir=cleanup_instance_dir,
                     cleanup_instance_disks=cleanup_instance_disks)
+                crypto.delete_vtpm_secret(context, instance)
                 raise exception.VirtualInterfaceCreateException()
         except Exception:
             # Any other error, be sure to clean up
@@ -8293,6 +8295,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     destroy_vifs=True,
                     cleanup_instance_dir=cleanup_instance_dir,
                     cleanup_instance_disks=cleanup_instance_disks)
+                crypto.delete_vtpm_secret(context, instance)
 
         # Resume only if domain has been paused
         if pause:
@@ -11488,9 +11491,12 @@ class LibvirtDriver(driver.ComputeDriver):
                                                destroy_disks=True,
                                                migrate_data=None):
         """Clean up destination node after a failed live migration."""
+        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
+        if secret_uuid:
+            self._host.delete_secret('vtpm', instance.uuid)
         try:
             self.destroy(context, instance, network_info, block_device_info,
-                         destroy_disks)
+                         destroy_disks, destroy_secrets=False)
             if (
                 'vtpm_secret_uuid' in migrate_data and
                 'vtpm_secret_value' in migrate_data
@@ -11704,6 +11710,12 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('vTPM secret read back on dest has value %s',
                       str(secret.value()))
 
+        # TODO(artom) gate this on the instance actually being `deployment`
+        secret_uuid, passphrase = crypto.ensure_vtpm_secret(context, instance)
+        if secret_uuid:
+            self._host.create_secret('vtpm', instance.uuid,
+                                     password=passphrase, uuid=secret_uuid)
+
         return migrate_data
 
     def _try_fetch_image_cache(self, image, fetch_func, context, filename,
@@ -11846,6 +11858,7 @@ class LibvirtDriver(driver.ComputeDriver):
             'vtpm_secret_value' in migrate_data
         ):
             self._host.delete_secret('vtpm', instance.uuid)
+
         # NOTE(mdbooth): The block_device_info we were passed was initialized
         # with BDMs from the source host before they were updated to point to
         # the destination. We can safely use this to disconnect the source
@@ -11931,6 +11944,9 @@ class LibvirtDriver(driver.ComputeDriver):
         :param network_info: instance network information
         :param block_migration: if true, post operation of block_migration.
         """
+        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
+        if secret_uuid:
+            self._host.delete_secret('vtpm', instance.uuid)
         self._reattach_instance_vifs(context, instance, network_info)
         self._qemu_monitor_announce_self(instance)
         mdevs = self.instance_claimed_mdevs.pop(instance.uuid, None)

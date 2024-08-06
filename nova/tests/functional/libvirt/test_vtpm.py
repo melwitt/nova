@@ -16,6 +16,7 @@
 import ddt
 from unittest import mock
 
+from castellan.common import exception as castellan_exc
 from castellan.common.objects import passphrase
 from castellan.key_manager import key_manager
 from oslo_log import log as logging
@@ -508,9 +509,79 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertInstanceHasSecret(server)
 
         # live migrate the server
-        self.assertRaises(
+        e = self.assertRaises(
             client.OpenStackApiException,
             self._live_migrate_server, server)
+        self.assertEqual(403, e.response.status_code)
+
+    def test_live_migrate_server_secret_security_deployment(self):
+        self.flags(
+            supported_tpm_secret_security=['deployment'], group='libvirt')
+
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(
+            secret_security='deployment', host='src')
+        secret_uuid = self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_had_secret(self.src, secret_uuid)
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        self._live_migrate(self.server)
+        self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_has_secret(self.dest, self.server['id'])
+
+    def test_live_migrate_server_inaccessible_secret(self):
+        self.flags(
+            supported_tpm_secret_security=['deployment'], group='libvirt')
+
+        for host in ('test_compute0', 'test_compute1'):
+            self.start_compute(host)
+
+        # create a server with vTPM
+        server = self._create_server_with_vtpm()
+        self.addCleanup(self._delete_server, server)
+
+        # ensure our instance's system_metadata field is correct
+        self.assertInstanceHasSecret(server)
+
+        with mock.patch.object(self.key_mgr, 'get',
+                               side_effect=castellan_exc.KeyManagerError):
+            # live migrate the server
+            e = self.assertRaises(
+                client.OpenStackApiException,
+                self._live_migrate_server, server)
+            self.assertEqual(403, e.response.status_code)
+
+    def test_live_migrate_server_rollback_secret_security_deployment(self):
+        self.flags(
+            supported_tpm_secret_security=['deployment'], group='libvirt')
+
+        def _migrate_stub(domain, destination, params, flags):
+            self.dest.driver._host.get_connection().createXML(
+                params['destination_xml'],
+                'fake-createXML-doesnt-care-about-flags')
+            conn = self.src.driver._host.get_connection()
+            dom = conn.lookupByUUIDString(self.server['id'])
+            dom.fail_job()
+
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(host='src')
+        self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        with mock.patch('nova.tests.fixtures.libvirt.Domain.migrateToURI3',
+                        _migrate_stub):
+            self._live_migrate(self.server, migration_expected_state='failed')
+            self.assertInstanceHasSecret(self.server)
+            self._assert_libvirt_has_secret(self.dest, self.server['id'])
 
     def test_shelve_server(self):
         for host in ('test_compute0', 'test_compute1'):
