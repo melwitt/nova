@@ -279,7 +279,7 @@ def reject_legacy_vtpm_live_migration(function):
                 nova_context.get_admin_context(), ['nova-compute'])
             if min_ver < MIN_COMPUTE_VTPM_LIVE_MIGRATION:
                 raise exception.VTPMOldCompute()
-            if security != 'host':
+            if security not in ('host', 'deployment'):
                 raise exception.OperationNotSupportedForVTPM(
                     instance_uuid=instance.uuid,
                     operation=instance_actions.LIVE_MIGRATION)
