@@ -8326,6 +8326,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     destroy_vifs=True,
                     cleanup_instance_dir=cleanup_instance_dir,
                     cleanup_instance_disks=cleanup_instance_disks)
+                self._delete_secret_for_vtpm(context, instance)
                 raise exception.VirtualInterfaceCreateException()
         except Exception:
             # Any other error, be sure to clean up
@@ -8336,6 +8337,7 @@ class LibvirtDriver(driver.ComputeDriver):
                     destroy_vifs=True,
                     cleanup_instance_dir=cleanup_instance_dir,
                     cleanup_instance_disks=cleanup_instance_disks)
+                self._delete_secret_for_vtpm(context, instance)
 
         # Resume only if domain has been paused
         if pause:
@@ -11764,6 +11766,17 @@ class LibvirtDriver(driver.ComputeDriver):
             self.destroy(context, instance, network_info, block_device_info,
                          destroy_disks)
             if migrate_data and migrate_data.has_vtpm:
+                # We need to do this for both 'host' and 'deployment' secret
+                # security modes. For 'host' mode, the libvirt secret is
+                # expected to exist and if we're rolling back, we need to
+                # delete it from the destination. For 'deployment' mode, in
+                # general the libvirt secret is not expected to exist but live
+                # migration rollback is a special case. In order to start the
+                # guest on the destination, we need to have created the libvirt
+                # secret there and if the live migration is successful, we
+                # undefine it during post_live_migration. So, if live migration
+                # fails and we won't reach post_live_migration, we need to
+                # undefine it here.
                 self._host.delete_secret('vtpm', instance.uuid)
         finally:
             # NOTE(gcb): Failed block live migration may leave instance
@@ -11961,6 +11974,11 @@ class LibvirtDriver(driver.ComputeDriver):
                 password=migrate_data.vtpm_secret_value.encode(),
                 uuid=migrate_data.vtpm_secret_uuid, ephemeral=False,
                 private=False)
+        elif self._get_instance_tpm_secret_security(
+                context, instance) == 'deployment':
+            # For 'deployment' secret security mode, we need to create the
+            # libvirt secret on the destination ahead of the live migration.
+            self._get_or_create_secret_for_vtpm(context, instance)
 
         return migrate_data
 
@@ -12130,6 +12148,9 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         self.unplug_vifs(instance, network_info)
         self.cpu_api.power_down_for_instance(instance)
+        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
+        if secret_uuid:
+            self._host.delete_secret('vtpm', instance.uuid)
 
     def _qemu_monitor_announce_self(self, instance):
         """Send announce_self command to QEMU monitor.
@@ -12172,6 +12193,12 @@ class LibvirtDriver(driver.ComputeDriver):
                      'max_attempts': max_attempts}, instance=instance)
                 LOG.exception()
 
+    def _post_live_migration_at_destination_vtpm(self, instance):
+        security = hardware.get_tpm_secret_security_constraint(
+                instance.flavor) or 'user'
+        if security == 'deployment':
+            self._host.delete_secret('vtpm', instance.uuid)
+
     def post_live_migration_at_destination(self, context,
                                            instance,
                                            network_info,
@@ -12194,6 +12221,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # to the domain XML so we can remove the reserved values.
             LOG.debug("Unclaiming mdevs %s from instance %s",
                 mdevs, instance.uuid)
+        self._post_live_migration_at_destination_vtpm(instance)
 
     def _get_instance_disk_info_from_config(self, guest_config,
                                             block_device_info):
