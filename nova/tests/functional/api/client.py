@@ -523,12 +523,15 @@ class TestOpenStackClient(object):
         return self.api_get('/servers/%s/migrations' %
                             server_id).body['migrations']
 
-    def get_migrations(self, user_id=None, project_id=None):
+    def get_migrations(
+            self, user_id=None, project_id=None, instance_uuid=None):
         url = '/os-migrations?'
         if user_id:
             url += 'user_id=%s&' % user_id
         if project_id:
             url += 'project_id=%s&' % project_id
+        if instance_uuid:
+            url += 'instance_uuid=%s&' % instance_uuid
         return self.api_get(url).body['migrations']
 
     def force_complete_migration(self, server_id, migration_id):

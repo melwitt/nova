@@ -10442,6 +10442,9 @@ class ComputeManager(manager.Manager):
 
         do_cleanup, destroy_disks = self._live_migration_cleanup_flags(
                 migrate_data, migr_ctxt=instance.migration_context)
+        do_cleanup = (
+            do_cleanup or 'vtpm_secret_uuid' in instance.system_metadata
+        )
 
         if do_cleanup:
             self.compute_rpcapi.rollback_live_migration_at_destination(
