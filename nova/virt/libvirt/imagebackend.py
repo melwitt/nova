@@ -261,11 +261,6 @@ class Image(metaclass=abc.ABCMeta):
     def exists(self):
         return os.path.exists(self.path)
 
-    def cache(self, fetch_func, filename, size=None, safe=False, *args,
-              **kwargs):
-        # No-op legacy method
-        pass
-
     @staticmethod
     def _get_or_create_base_image_path(filename: str) -> str:
         base_dir = os.path.join(CONF.instances_path,
@@ -374,14 +369,14 @@ class Image(metaclass=abc.ABCMeta):
         if convert_to_raw:
             # Will convert to raw depending on the CONF.force_raw_images
             # setting.
-            fetch_func = images.fetch_to_raw
+            download_func = images.fetch_to_raw
         else:
             # Images like kernel or ramdisk images will not want to consider
             # the CONF.force_raw_images setting.
-            fetch_func = images.fetch
+            download_func = images.fetch
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
-        def fetch_func_sync(target, image_id, trusted_certs=None):
+        def download_func_sync(target, image_id, trusted_certs=None):
             # NOTE(mdbooth): This method is called as a callback by the
             # create_image() method of a specific backend. It assumes that
             # target will be in the image cache, which is why it holds a
@@ -394,10 +389,11 @@ class Image(metaclass=abc.ABCMeta):
             # call fetch_func. The lock we're holding is also unnecessary in
             # that case, but it will not result in incorrect behaviour.
             if not os.path.exists(target):
-                fetch_func(ctxt, image_id, target, trusted_certs=trusted_certs)
+                download_func(
+                    ctxt, image_id, target, trusted_certs=trusted_certs)
 
         target = self._get_or_create_base_image_path(filename)
-        fetch_func_sync(target, image_id, trusted_certs=trusted_certs)
+        download_func_sync(target, image_id, trusted_certs=trusted_certs)
 
         return target
 
