@@ -255,7 +255,7 @@ class Image(metaclass=abc.ABCMeta):
         return info
 
     def exists(self):
-        return os.path.exists(self.path)
+        return self.exists()
 
     def cache(self, *args, **kwargs):
         # No-op legacy method
@@ -285,6 +285,7 @@ class Image(metaclass=abc.ABCMeta):
             # Create a base image if we haven't already cached one.
             target = self._get_or_create_base_image_path(filename)
         else:
+            # Create image in-place.
             target = self.path
         if not os.path.exists(target):
             if not self.is_block_dev:
@@ -692,7 +693,7 @@ class Flat(Image):
             return 'raw'
 
     def correct_format(self):
-        if os.path.exists(self.path):
+        if self.exists():
             self.driver_format = self.resolve_driver_format()
 
     def create_image(self, ctxt, base, size, image_id=None):
@@ -708,7 +709,7 @@ class Flat(Image):
         # cache manager knows it is in use.
         _update_utime_ignore_eacces(base)
         self.verify_base_size(base, size)
-        if not os.path.exists(self.path):
+        if not self.exists():
             with fileutils.remove_path_on_error(self.path):
                 copy_raw_image(base, self.path, size)
 
@@ -811,7 +812,7 @@ class Qcow2(Image):
         # Determine whether an existing qcow2 disk uses a legacy backing by
         # actually looking at the image itself and parsing the output of the
         # backing file it expects to be using.
-        if os.path.exists(self.path):
+        if self.exists():
             backing_path = libvirt_utils.get_disk_backing_file(self.path)
             if backing_path is not None:
                 backing_file = os.path.basename(backing_path)
@@ -831,7 +832,7 @@ class Qcow2(Image):
                                                     imgmodel.FORMAT_QCOW2)
                     disk_api.extend(image, legacy_backing_size)
 
-        if not os.path.exists(self.path):
+        if not self.exists():
             with fileutils.remove_path_on_error(self.path):
                 create_qcow2_image(base, self.path, size)
 
@@ -1103,6 +1104,36 @@ class Rbd(Image):
             except OSError as e:
                 LOG.warning("Ignoring failure to remove %(path)s: "
                             "%(error)s", {'path': base, 'error': e})
+
+    def create_ephemeral(
+        self,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
+        size_gb: int,
+        fs_label: str,
+        os_type: str,
+        specified_fs: ty.Optional[str] = None,
+        vm_mode: ty.Optional[fields.VMMode] = None,
+    ) -> ty.Optional[str]:
+        # Create base image if needed.
+        base_image = super()._create_ephemeral(
+            ctxt, filename, size_gb, fs_label, os_type,
+            specified_fs=specified_fs, cache=True)
+        # Import image.
+        self.create_image(ctxt, base_image, size_gb * units.Gi)
+        return self.path
+
+    def create_swap(
+        self,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
+        size_mb: int,
+    ) -> ty.Optional[str]:
+        # Create base image if needed.
+        base_image = super()._create_swap(ctxt, filename, size_mb, cache=True)
+        # Import image.
+        self.create_image(ctxt, base_image, size_mb * units.Mi)
+        return self.path
 
     def create_root(
         self,
@@ -1450,7 +1481,7 @@ class Ploop(Image):
         _update_utime_ignore_eacces(base)
         self.verify_base_size(base, size)
 
-        if os.path.exists(self.path):
+        if self.exists():
             return
 
         # Get format for ploop disk
