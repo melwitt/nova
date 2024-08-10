@@ -279,7 +279,7 @@ class Image(metaclass=abc.ABCMeta):
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
         cache: bool = False,
-    ) -> ty.Optional[str]:
+    ) -> None:
         # Create a base image if we haven't already cached one.
         if cache:
             # Create a base image if we haven't already cached one.
@@ -287,6 +287,7 @@ class Image(metaclass=abc.ABCMeta):
         else:
             # Create image in-place.
             target = self.path
+
         if not os.path.exists(target):
             if not self.is_block_dev:
                 libvirt_utils.create_image(target, 'raw', f'{size_gb}G')
@@ -298,7 +299,11 @@ class Image(metaclass=abc.ABCMeta):
             # If the disk already exists, we can resize it in case the size is
             # changing during a resize to a different flavor, for example.
             self.resize_image(size_gb * units.Gi)
-        return target
+
+        # If we are caching, the above created the base image and now we need
+        # to create the instance's disk image.
+        if cache:
+            self.create_image(ctxt, target, size_gb * units.Gi)
 
     def create_ephemeral(
         self,
@@ -309,8 +314,8 @@ class Image(metaclass=abc.ABCMeta):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-    ) -> ty.Optional[str]:
-        return self._create_ephemeral(
+    ) -> None:
+        self._create_ephemeral(
             ctxt, filename, size_gb, fs_label, os_type,
             specified_fs=specified_fs, vm_mode=vm_mode)
 
@@ -320,11 +325,12 @@ class Image(metaclass=abc.ABCMeta):
         filename: str,
         size_mb: int,
         cache: bool = False,
-    ) -> ty.Optional[str]:
+    ) -> None:
         if cache:
             # Create a base image if we haven't already cached one.
             target = self._get_or_create_base_image_path(filename)
         else:
+            # Create image in-place.
             target = self.path
         if not os.path.exists(target):
             libvirt_utils.create_image(target, 'raw', f'{size_mb}M')
@@ -333,15 +339,19 @@ class Image(metaclass=abc.ABCMeta):
             # If the disk already exists, we can resize it in case the size is
             # changing during a resize to a different flavor, for example.
             self.resize_image(size_mb * units.Mi)
-        return target
+
+        # If we are caching, the above created the base image and now we need
+        # to create the instance's disk image.
+        if cache:
+            self.create_image(ctxt, target, size_mb * units.Mi)
 
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
         filename: str,
         size_mb: int,
-    ) -> ty.Optional[str]:
-        return self._create_swap(ctxt, filename, size_mb)
+    ) -> None:
+        self._create_swap(ctxt, filename, size_mb)
 
     def download_image(
         self,
@@ -702,8 +712,8 @@ class Flat(Image):
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
         def copy_raw_image(base, target, size):
             libvirt_utils.copy_image(base, target)
-            # if size:
-            #    self.resize_image(size)
+            if size:
+                self.resize_image(size)
 
         # NOTE(mikal): Update the mtime of the base file so the image
         # cache manager knows it is in use.
@@ -758,26 +768,20 @@ class Qcow2(Image):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-    ) -> ty.Optional[str]:
-        # Create base image if needed.
-        base_image = super()._create_ephemeral(
+    ) -> None:
+        # Create base image if needed, then create the delta.
+        self._create_ephemeral(
             ctxt, filename, size_gb, fs_label, os_type,
             specified_fs=specified_fs, cache=True)
-        # Create delta.
-        self.create_image(ctxt, base_image, size_gb * units.Gi)
-        return self.path
 
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
         filename: str,
         size_mb: int,
-    ) -> ty.Optional[str]:
-        # Create base image if needed.
-        base_image = super()._create_swap(ctxt, filename, size_mb, cache=True)
-        # Create delta.
-        self.create_image(ctxt, base_image, size_mb * units.Mi)
-        return self.path
+    ) -> None:
+        # Create base image if needed, then create the delta.
+        self._create_swap(ctxt, filename, size_mb, cache=True)
 
     def create_image(self, ctxt, base, size, image_id=None):
         filename = self._get_lock_name(base)
@@ -932,13 +936,13 @@ class Lvm(Image):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-    ) -> ty.Optional[str]:
+    ) -> None:
         lvm.create_volume(
             self.vg, self.lv, size_gb * units.Gi, sparse=self.sparse)
         with self.remove_volume_on_error(self.path):
             if self.ephemeral_key_uuid is not None:
                 self._encrypt_lvm_image(ctxt)
-            return super().create_ephemeral(
+            self._create_ephemeral(
                 ctxt, filename, size_gb, fs_label, os_type,
                 specified_fs=specified_fs)
 
@@ -1114,26 +1118,20 @@ class Rbd(Image):
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-    ) -> ty.Optional[str]:
-        # Create base image if needed.
-        base_image = super()._create_ephemeral(
+    ) -> None:
+        # Create base image if needed, then import it.
+        self._create_ephemeral(
             ctxt, filename, size_gb, fs_label, os_type,
             specified_fs=specified_fs, cache=True)
-        # Import image.
-        self.create_image(ctxt, base_image, size_gb * units.Gi)
-        return self.path
 
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
         filename: str,
         size_mb: int,
-    ) -> ty.Optional[str]:
-        # Create base image if needed.
-        base_image = super()._create_swap(ctxt, filename, size_mb, cache=True)
-        # Import image.
-        self.create_image(ctxt, base_image, size_mb * units.Mi)
-        return self.path
+    ) -> None:
+        # Create base image if needed, then import it.
+        self._create_swap(ctxt, filename, size_mb, cache=True)
 
     def create_root(
         self,
@@ -1436,20 +1434,20 @@ class Ploop(Image):
 
     def create_ephemeral(
         self,
-        target: str,
+        ctxt: 'nova.context.RequestContext',
+        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
         specified_fs: ty.Optional[str] = None,
         vm_mode: ty.Optional[fields.VMMode] = None,
-    ) -> ty.Optional[str]:
+    ) -> None:
         remove_func = functools.partial(fileutils.delete_if_exists,
                                         remove=shutil.rmtree)
         if vm_mode == fields.VMMode.EXE:
-            with fileutils.remove_path_on_error(target, remove=remove_func):
+            with fileutils.remove_path_on_error(self.path, remove=remove_func):
                 libvirt_utils.create_ploop_image(
-                    'expanded', target, '%dG' % size_gb, specified_fs)
-                return target
+                    'expanded', self.path, '%dG' % size_gb, specified_fs)
 
     # Create new ploop disk (in case of epehemeral) or
     # copy ploop disk from glance image
