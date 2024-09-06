@@ -5060,26 +5060,16 @@ class LibvirtDriver(driver.ComputeDriver):
         # instance directory. We must not consider them for created_disks,
         # which may not be using the instance directory.
         if disk_images['kernel_id']:
-            fname = imagecache.get_cache_fname(disk_images['kernel_id'])
             raw('kernel').create_root(
-                context, fname, None, disk_images['kernel_id'])
+                context, None, disk_images['kernel_id'])
 
             if disk_images['ramdisk_id']:
-                fname = imagecache.get_cache_fname(disk_images['ramdisk_id'])
                 raw('ramdisk').create_root(
-                    context, fname, None, disk_images['ramdisk_id'])
+                    context, None, disk_images['ramdisk_id'])
 
         created_disks = self._create_and_inject_local_root(
             context, instance, disk_mapping, booted_from_volume, suffix,
             disk_images, injection_info, fallback_from_host)
-
-        # Lookup the filesystem type if required
-        os_type_with_default = nova.privsep.fs.get_fs_type_for_os_type(
-            instance.os_type)
-        # Generate a file extension based on the file system
-        # type and the mkfs commands configured if any
-        file_extension = nova.privsep.fs.get_file_extension_for_os_type(
-            os_type_with_default, CONF.default_ephemeral_format)
 
         vm_mode = fields.VMMode.get_from_instance(instance)
         ephemeral_gb = instance.flavor.ephemeral_gb
@@ -5090,9 +5080,8 @@ class LibvirtDriver(driver.ComputeDriver):
             # Short circuit the exists() tests if we already created a disk
             created_disks = created_disks or not disk_image.exists()
 
-            fname = "ephemeral_%s_%s" % (ephemeral_gb, file_extension)
             disk_image.create_ephemeral(
-                context, fname, ephemeral_gb, 'ephemeral0', instance.os_type,
+                context, ephemeral_gb, 'ephemeral0', instance.os_type,
                 vm_mode=vm_mode)
 
         for idx, eph in enumerate(driver.block_device_info_get_ephemerals(
@@ -5108,9 +5097,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 msg = _("%s format is not supported") % specified_fs
                 raise exception.InvalidBDMFormat(details=msg)
 
-            fname = "ephemeral_%s_%s" % (eph['size'], file_extension)
             disk_image.create_ephemeral(
-                context, fname, eph['size'], 'ephemeral%d' % idx,
+                context, eph['size'], 'ephemeral%d' % idx,
                 instance.os_type, vm_mode=vm_mode)
 
         if swap_mb > 0:
@@ -5118,7 +5106,7 @@ class LibvirtDriver(driver.ComputeDriver):
             swap = image('disk.swap', disk_info_mapping=disk_info_mapping)
             # Short circuit the exists() tests if we already created a disk
             created_disks = created_disks or not swap.exists()
-            swap.create_swap(context, "swap_%s" % swap_mb, swap_mb)
+            swap.create_swap(context, swap_mb)
 
         if created_disks:
             LOG.debug('Created local disks', instance=instance)
@@ -5138,7 +5126,6 @@ class LibvirtDriver(driver.ComputeDriver):
                        CONF.libvirt.inject_partition != -2)
 
         if not booted_from_volume:
-            root_fname = imagecache.get_cache_fname(disk_images['image_id'])
             size = instance.flavor.root_gb * units.Gi
 
             if size == 0 or suffix == '.rescue':
@@ -5154,7 +5141,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 backend.create_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
 
             backend.create_root(
-                context, root_fname, size, disk_images['image_id'],
+                context, size, disk_images['image_id'],
                 trusted_certs=instance.trusted_certs, convert_to_raw=True,
                 fallback_from_host=fallback_from_host)
             self._flatten_image_after_migration(instance, backend)
@@ -5232,14 +5219,12 @@ class LibvirtDriver(driver.ComputeDriver):
         if not self._needs_rebase_original_qcow2_image(instance, backend):
             return
 
-        base_dir = self.image_cache_manager.cache_dir
         base_image_ref = instance.system_metadata.get('image_base_image_ref')
-        root_fname = imagecache.get_cache_fname(base_image_ref)
-        base_backing_fname = os.path.join(base_dir, root_fname)
+        base_backing_fname = None
 
         try:
-            backend.download_image(
-                context, root_fname, base_image_ref, convert_to_raw=True)
+            base_backing_fname = backend.download_image(
+                context, base_image_ref, convert_to_raw=True)
         except exception.ImageNotFound:
             # We must flatten here in order to remove dependency with an orphan
             # backing file (as snapshot image will be dropped once
@@ -5249,7 +5234,6 @@ class LibvirtDriver(driver.ComputeDriver):
                         'because it is no longer available in the image '
                         'service, disk will be consequently flattened.',
                         instance=instance)
-            base_backing_fname = None
 
         LOG.info('Rebasing disk image.', instance=instance)
         self._rebase_with_qemu_img(backend.path, base_backing_fname)
@@ -11497,12 +11481,12 @@ class LibvirtDriver(driver.ComputeDriver):
                     # to build the image if the disk is not already
                     # cached.
                     disk.create_ephemeral(
-                        context, cache_name, info['virt_disk_size'] / units.Gi,
-                        cache_name, instance.os_type)
+                        context, info['virt_disk_size'] / units.Gi, cache_name,
+                        instance.os_type)
                 elif cache_name.startswith('swap'):
                     flavor = instance.get_flavor()
                     swap_mb = flavor.swap
-                    disk.create_swap(context, "swap_%s" % swap_mb, swap_mb)
+                    disk.create_swap(context, swap_mb)
                 else:
                     disk.create_root(
                         context, cache_name, info['virt_disk_size'],
