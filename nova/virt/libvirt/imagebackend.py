@@ -46,6 +46,7 @@ from nova.virt.disk import api as disk_api
 from nova.virt.image import model as imgmodel
 from nova.virt import images
 from nova.virt.libvirt import config as vconfig
+from nova.virt.libvirt import imagecache
 from nova.virt.libvirt.storage import dmcrypt
 from nova.virt.libvirt.storage import lvm
 from nova.virt.libvirt import utils as libvirt_utils
@@ -272,7 +273,6 @@ class Image(metaclass=abc.ABCMeta):
     def _create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
@@ -280,6 +280,14 @@ class Image(metaclass=abc.ABCMeta):
         vm_mode: ty.Optional[fields.VMMode] = None,
         cache: bool = False,
     ) -> None:
+        # Lookup the filesystem type if required
+        os_type_with_default = nova.privsep.fs.get_fs_type_for_os_type(os_type)
+        # Generate a file extension based on the file system
+        # type and the mkfs commands configured if any
+        file_extension = nova.privsep.fs.get_file_extension_for_os_type(
+            os_type_with_default, CONF.default_ephemeral_format)
+        filename = "ephemeral_%s_%s" % (size_gb, file_extension)
+
         # Create a base image if we haven't already cached one.
         if cache:
             # Create a base image if we haven't already cached one.
@@ -308,7 +316,6 @@ class Image(metaclass=abc.ABCMeta):
     def create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
@@ -316,16 +323,16 @@ class Image(metaclass=abc.ABCMeta):
         vm_mode: ty.Optional[fields.VMMode] = None,
     ) -> None:
         self._create_ephemeral(
-            ctxt, filename, size_gb, fs_label, os_type,
-            specified_fs=specified_fs, vm_mode=vm_mode)
+            ctxt, size_gb, fs_label, os_type, specified_fs=specified_fs,
+            vm_mode=vm_mode)
 
     def _create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_mb: int,
         cache: bool = False,
     ) -> None:
+        filename = "swap_%s" % size_mb
         if cache:
             # Create a base image if we haven't already cached one.
             target = self._get_or_create_base_image_path(filename)
@@ -348,24 +355,22 @@ class Image(metaclass=abc.ABCMeta):
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_mb: int,
     ) -> None:
-        self._create_swap(ctxt, filename, size_mb)
+        self._create_swap(ctxt, size_mb)
 
     def download_image(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         image_id: str,
         trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
         convert_to_raw: bool = False,
     ) -> str:
         """Download an image and add it to the image cache.
 
-        The filename should be the cache filename.
         This is a no-op if the specified image is already in the image cache.
         """
+        filename = imagecache.get_cache_fname(image_id)
         if convert_to_raw:
             # Will convert to raw depending on the CONF.force_raw_images
             # setting.
@@ -400,7 +405,6 @@ class Image(metaclass=abc.ABCMeta):
     def create_root(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size: int,
         image_id: str,
         trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
@@ -408,9 +412,10 @@ class Image(metaclass=abc.ABCMeta):
         fallback_from_host: ty.Optional[str] = None,
     ) -> None:
         # Download the image to the image cache.
+        filename = imagecache.get_cache_fname(image_id)
         try:
             target = self.download_image(
-                ctxt, filename, image_id, trusted_certs=trusted_certs,
+                ctxt, image_id, trusted_certs=trusted_certs,
                 convert_to_raw=convert_to_raw)
         except exception.ImageNotFound:
             if not fallback_from_host:
@@ -763,7 +768,6 @@ class Qcow2(Image):
     def create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
@@ -772,17 +776,16 @@ class Qcow2(Image):
     ) -> None:
         # Create base image if needed, then create the delta.
         self._create_ephemeral(
-            ctxt, filename, size_gb, fs_label, os_type,
-            specified_fs=specified_fs, cache=True)
+            ctxt, size_gb, fs_label, os_type, specified_fs=specified_fs,
+            cache=True)
 
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_mb: int,
     ) -> None:
         # Create base image if needed, then create the delta.
-        self._create_swap(ctxt, filename, size_mb, cache=True)
+        self._create_swap(ctxt, size_mb, cache=True)
 
     def create_image(self, ctxt, base, size, image_id=None):
         filename = self._get_lock_name(base)
@@ -935,7 +938,6 @@ class Lvm(Image):
     def create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
@@ -948,8 +950,7 @@ class Lvm(Image):
             if self.ephemeral_key_uuid is not None:
                 self._encrypt_lvm_image(ctxt)
             self._create_ephemeral(
-                ctxt, filename, size_gb, fs_label, os_type,
-                specified_fs=specified_fs)
+                ctxt, size_gb, fs_label, os_type, specified_fs=specified_fs)
 
     def create_image(self, ctxt, base, size, image_id=None):
         filename = self._get_lock_name(base)
@@ -1117,7 +1118,6 @@ class Rbd(Image):
     def create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
@@ -1126,28 +1126,27 @@ class Rbd(Image):
     ) -> None:
         # Create base image if needed, then import it.
         self._create_ephemeral(
-            ctxt, filename, size_gb, fs_label, os_type,
-            specified_fs=specified_fs, cache=True)
+            ctxt, size_gb, fs_label, os_type, specified_fs=specified_fs,
+            cache=True)
 
     def create_swap(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_mb: int,
     ) -> None:
         # Create base image if needed, then import it.
-        self._create_swap(ctxt, filename, size_mb, cache=True)
+        self._create_swap(ctxt, size_mb, cache=True)
 
     def create_root(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size: int,
         image_id: str,
         trusted_certs: ty.Optional['nova.objects.TrustedCerts'] = None,
         convert_to_raw: bool = False,
         fallback_from_host: ty.Optional[str] = None,
     ) -> None:
+        filename = imagecache.get_cache_fname(image_id)
         base_image = self._get_or_create_base_image_path(filename)
 
         @utils.synchronized(filename, external=True, lock_path=self.lock_path)
@@ -1445,7 +1444,6 @@ class Ploop(Image):
     def create_ephemeral(
         self,
         ctxt: 'nova.context.RequestContext',
-        filename: str,
         size_gb: int,
         fs_label: str,
         os_type: str,
