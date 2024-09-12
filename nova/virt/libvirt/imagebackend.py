@@ -410,7 +410,7 @@ class Image(metaclass=abc.ABCMeta):
                     disk_format = download_func(
                         ctxt, image_id, target_with_format,
                         trusted_certs=trusted_certs)
-                    if disk_format:
+                    if disk_format in format_inspector.ALL_FORMATS:
                         # If deep image inspection is enabled and a disk format
                         # was determined for the image, append the disk format
                         # name to the base image name as a file extension. It
@@ -424,7 +424,13 @@ class Image(metaclass=abc.ABCMeta):
                             f'"{disk_format}" file extension to '
                             f'{target_with_format}.')
                         final_target = target_with_format + disk_format
-                        os.rename(target_with_format, final_target)
+                    else:
+                        # If there is not a disk format to validate but the
+                        # image is acceptable (for example: ami, aki, ari), get
+                        # the file extension from Glance metadata.
+                        img = IMAGE_API.get(ctxt, image_id)
+                        final_target = target_with_format + img['disk_format']
+                    os.rename(target_with_format, final_target)
                 else:
                     # We found the image in the cache, so inspect the already
                     # downloaded image.
@@ -439,14 +445,18 @@ class Image(metaclass=abc.ABCMeta):
                     # extension, use it to validate the expected format against
                     # the detected format.
                     disk_format = path_ext[1:]
-                    LOG.debug(
-                        f'Image {image_id} was found in the cache: '
-                        f'{final_target}. Validating the image against '
-                        f'expected disk format: {disk_format}.')
-                    # This performs image inspection only. It does not download
-                    # the image from Glance.
-                    images.do_image_deep_inspection(
-                        disk_format, image_id, final_target)
+                    if disk_format in format_inspector.ALL_FORMATS:
+                        LOG.debug(
+                            f'Image {image_id} was found in the cache: '
+                            f'{final_target}. Validating the image against '
+                            f'expected disk format: {disk_format}.')
+                        images.do_image_deep_inspection(
+                            disk_format, image_id, final_target)
+                    else:
+                        LOG.debug(
+                            f'Image {image_id} was found in the cache: '
+                            f'{final_target}. Not validating the disk image '
+                            f'format: {disk_format}.')
             elif not os.path.exists(target):
                 download_func(
                     ctxt, image_id, target, trusted_certs=trusted_certs)
