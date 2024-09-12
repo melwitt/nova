@@ -226,8 +226,9 @@ class DriverSwapBlockDevice(DriverBlockDevice):
         'encryption_secret_uuid',
         'encryption_format',
         'encryption_options',
+        'image_type',
     ])
-    _readonly_fields = set(['encrypted'])
+    _readonly_fields = set(['encrypted', 'image_type'])
     _update_on_save = {
         'disk_bus': None,
         'device_name': None,
@@ -237,6 +238,8 @@ class DriverSwapBlockDevice(DriverBlockDevice):
         'encryption_secret_uuid': None,
         'encryption_format': None,
         'encryption_options': None,
+        # 'image_type' will not be updated on save because we will not migrate
+        # a disk to another image backend by save()
     }
 
     def _transform(self):
@@ -249,7 +252,8 @@ class DriverSwapBlockDevice(DriverBlockDevice):
             'encrypted': self._bdm_obj.encrypted,
             'encryption_secret_uuid': self._bdm_obj.encryption_secret_uuid,
             'encryption_format': self._bdm_obj.encryption_format,
-            'encryption_options': self._bdm_obj.encryption_options
+            'encryption_options': self._bdm_obj.encryption_options,
+            'image_type': self._bdm_obj.image_type,
         })
 
 
@@ -264,12 +268,13 @@ class DriverImageBlockDevice(DriverBlockDevice):
         'encrypted',
         'encryption_secret_uuid',
         'encryption_format',
-        'encryption_options'
+        'encryption_options',
+        'image_type',
     ])
     _fields = set([
         'device_name',
         'size']) | _new_only_fields
-    _readonly_fields = set(['encrypted'])
+    _readonly_fields = set(['encrypted', 'image_type'])
     _legacy_fields = (
         _fields - _new_only_fields | set(['num', 'virtual_name']))
     _update_on_save = {
@@ -282,6 +287,8 @@ class DriverImageBlockDevice(DriverBlockDevice):
         'encryption_secret_uuid': None,
         'encryption_format': None,
         'encryption_options': None,
+        # 'image_type' will not be updated on save because we will not migrate
+        # a disk to another image backend by save()
     }
 
     def _transform(self):
@@ -299,7 +306,8 @@ class DriverImageBlockDevice(DriverBlockDevice):
             'encrypted': self._bdm_obj.encrypted,
             'encryption_secret_uuid': self._bdm_obj.encryption_secret_uuid,
             'encryption_format': self._bdm_obj.encryption_format,
-            'encryption_options': self._bdm_obj.encryption_options
+            'encryption_options': self._bdm_obj.encryption_options,
+            'image_type': self._bdm_obj.image_type,
         })
 
 
@@ -311,9 +319,11 @@ class DriverEphemeralBlockDevice(DriverBlockDevice):
         'encrypted',
         'encryption_secret_uuid',
         'encryption_format',
-        'encryption_options'])
+        'encryption_options',
+        'image_type',
+    ])
     _fields = set(['device_name', 'size']) | _new_only_fields
-    _readonly_fields = set(['encrypted'])
+    _readonly_fields = set(['encrypted', 'image_type'])
     _update_on_save = {
         'disk_bus': None,
         'device_name': None,
@@ -324,6 +334,8 @@ class DriverEphemeralBlockDevice(DriverBlockDevice):
         'encryption_secret_uuid': None,
         'encryption_format': None,
         'encryption_options': None,
+        # 'image_type' will not be updated on save because we will not migrate
+        # a disk to another image backend by save()
     }
 
     def _transform(self):
@@ -338,7 +350,8 @@ class DriverEphemeralBlockDevice(DriverBlockDevice):
             'encrypted': self._bdm_obj.encrypted,
             'encryption_secret_uuid': self._bdm_obj.encryption_secret_uuid,
             'encryption_format': self._bdm_obj.encryption_format,
-            'encryption_options': self._bdm_obj.encryption_options
+            'encryption_options': self._bdm_obj.encryption_options,
+            'image_type': self._bdm_obj.image_type,
         })
 
 
