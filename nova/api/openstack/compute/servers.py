@@ -680,7 +680,8 @@ class ServersController(wsgi.Controller):
     @validation.schema(schema_servers.create_v267, '2.67', '2.73')
     @validation.schema(schema_servers.create_v274, '2.74', '2.89')
     @validation.schema(schema_servers.create_v290, '2.90', '2.93')
-    @validation.schema(schema_servers.create_v294, '2.94')
+    @validation.schema(schema_servers.create_v294, '2.94', '2.96')
+    @validation.schema(schema_servers.create_v297, '2.97')
     def create(self, req, body):
         """Creates a new server for a given user."""
         context = req.environ['nova.context']

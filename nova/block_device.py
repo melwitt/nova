@@ -54,7 +54,7 @@ bdm_new_fields = set(['source_type', 'destination_type',
                      'volume_id', 'volume_size', 'image_id', 'no_device',
                      'connection_info', 'tag', 'volume_type', 'encrypted',
                      'encryption_secret_uuid', 'encryption_format',
-                     'encryption_options'])
+                     'encryption_options', 'image_type'])
 
 
 bdm_db_only_fields = set(['id', 'instance_uuid', 'attachment_id', 'uuid'])
@@ -183,6 +183,7 @@ class BlockDeviceDict(dict):
             device_uuid = api_dict.get('uuid')
             destination_type = api_dict.get('destination_type')
             volume_type = api_dict.get('volume_type')
+            image_type = api_dict.get('image_type')
 
             if source_type == 'blank' and device_uuid:
                 raise exception.InvalidBDMFormat(
