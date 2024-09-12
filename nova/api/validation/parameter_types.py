@@ -520,3 +520,8 @@ trusted_certs = {
         "minLength": 1,
     }
 }
+
+image_type = {
+    # database column is a String(length=128)
+    'type': ['string', 'null'], 'minLength': 0, 'maxLength': 127
+}
