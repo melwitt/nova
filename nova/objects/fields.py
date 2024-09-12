@@ -268,6 +268,17 @@ class BlockDeviceEncryptionFormatType(BaseNovaEnum):
     ALL = (PLAIN, LUKS, LUKSv2)
 
 
+class BlockDeviceImageType(BaseNovaEnum):
+    RAW = 'raw'
+    FLAT = 'flat'
+    QCOW2 = 'qcow2'
+    LVM = 'lvm'
+    RBD = 'rbd'
+    PLOOP = 'ploop'
+
+    ALL = (RAW, FLAT, QCOW2, LVM, RBD, PLOOP)
+
+
 class ConfigDrivePolicy(BaseNovaEnum):
     OPTIONAL = "optional"
     MANDATORY = "mandatory"
@@ -1244,6 +1255,9 @@ class BlockDeviceTypeField(BaseEnumField):
 class BlockDeviceEncryptionFormatTypeField(BaseEnumField):
     AUTO_TYPE = BlockDeviceEncryptionFormatType()
 
+
+class BlockDeviceImageTypeField(BaseEnumField):
+    AUTO_TYPE = BlockDeviceImageType()
 
 class ConfigDrivePolicyField(BaseEnumField):
     AUTO_TYPE = ConfigDrivePolicy()
