@@ -753,6 +753,8 @@ class BlockDeviceMapping(BASE, NovaBase, models.SoftDeleteMixin):
     encryption_format = sa.Column(sa.String(128))
     encryption_options = sa.Column(sa.String(4096))
 
+    image_type = sa.Column(sa.String(128))
+
 
 class ShareMapping(BASE, NovaBase):
     """Represents share / instance mapping."""
