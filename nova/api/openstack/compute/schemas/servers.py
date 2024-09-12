@@ -367,6 +367,12 @@ create_v294 = copy.deepcopy(create_v290)
 create_v294['properties']['server'][
     'properties']['hostname'] = parameter_types.fqdn
 
+# Add image_type in block_device_mapping_v2
+create_v297 = copy.deepcopy(create_v294)
+create_v297['properties']['server']['properties'][
+    'block_device_mapping_v2']['items'][
+        'properties']['image_type'] = parameter_types.image_type
+
 update = {
     'type': 'object',
     'properties': {
