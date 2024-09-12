@@ -18,6 +18,7 @@ import base64
 import contextlib
 import errno
 import functools
+import glob
 import os
 import shutil
 import typing as ty
@@ -372,7 +373,9 @@ class Image(metaclass=abc.ABCMeta):
         filename = imagecache.get_cache_fname(image_id)
         if convert_to_raw:
             # Will convert to raw depending on the CONF.force_raw_images
-            # setting.
+            # setting. Also performs deep image inspection and returns the
+            # validated disk format or None if deep image inspection is
+            # disabled.
             download_func = images.fetch_to_raw
         else:
             # Images like kernel or ramdisk images will not want to consider
@@ -390,16 +393,71 @@ class Image(metaclass=abc.ABCMeta):
             # and additionally it creates the target in advance.
             # This guard is only relevant in the context of the lock if the
             # target is in the image cache. If it isn't, we should
-            # call fetch_func. The lock we're holding is also unnecessary in
+            # call download_func. The lock we're holding is also unnecessary in
             # that case, but it will not result in incorrect behaviour.
-            if not os.path.exists(target):
+            final_target = target
+            if not CONF.workarounds.disable_deep_image_inspection:
+                # Look for any cached images that have file extensions appended
+                # to them.
+                target_with_format = target + '.'
+                matching_targets = glob.glob(target_with_format + '[a-z]*')
+                if not matching_targets:
+                    # No cached image with a file extension was found, so we
+                    # need to download it. We download using a target with a
+                    # trailing period so as not to potentially collide with
+                    # existing "legacy" cached images.
+                    LOG.debug(
+                        'No image with a file extension was found for '
+                        f'"{filename}" in the cache. Proceeding to download '
+                        f'image {image_id} ...')
+                    disk_format = download_func(
+                        ctxt, image_id, target_with_format,
+                        trusted_certs=trusted_certs)
+                    if disk_format:
+                        # If deep image inspection is enabled and a disk format
+                        # was determined for the image, append the disk format
+                        # name to the base image name as a file extension. It
+                        # can be used to identify the disk image format without
+                        # needing to inspect the image again.
+                        LOG.debug(
+                            f'Disk image format for image {image_id} was '
+                            f'validated against the format reported by the '
+                            'image service. We may have converted the image '
+                            'to raw/gpt after validation. Appending '
+                            f'"{disk_format}" file extension to '
+                            f'{target_with_format}.')
+                        final_target = target_with_format + disk_format
+                        os.rename(target_with_format, final_target)
+                else:
+                    # We found the image in the cache, so inspect the already
+                    # downloaded image.
+                    final_target = matching_targets[0]
+                    if len(matching_targets) > 1:
+                        LOG.warning(
+                            'Found multiple versions of format-tracked base '
+                            f'image: {matching_targets}. Using '
+                            f'{final_target} ...')
+                    path_root, path_ext = os.path.splitext(final_target)
+                    # If the cached image name has a disk format file
+                    # extension, use it to validate the expected format against
+                    # the detected format.
+                    disk_format = path_ext[1:]
+                    LOG.debug(
+                        f'Image {image_id} was found in the cache: '
+                        f'{final_target}. Validating the image against '
+                        f'expected disk format: {disk_format}.')
+                    # This performs image inspection only. It does not download
+                    # the image from Glance.
+                    images.do_image_deep_inspection(
+                        disk_format, image_id, final_target)
+            elif not os.path.exists(target):
                 download_func(
                     ctxt, image_id, target, trusted_certs=trusted_certs)
+            return final_target
 
         target = self._get_or_create_base_image_path(filename)
-        download_func_sync(target, image_id, trusted_certs=trusted_certs)
-
-        return target
+        return download_func_sync(
+            target, image_id, trusted_certs=trusted_certs)
 
     def create_root(
         self,
