@@ -515,6 +515,18 @@ class ServersController(wsgi.Controller):
             # Have to check whether --image is given, see bug 1433609
             image_href = server_dict.get('imageRef')
             image_uuid_specified = image_href is not None
+
+            # NOTE(melwitt): Use BDM uuid as image_href if source is image and
+            # dest is local. Currently, the disk create code paths only support
+            # using image_href -- the BDM image_id is not considered.
+            if not image_href:
+                for bdm_dict in block_device_mapping_v2:
+                    bdm_uuid = bdm_dict.get('uuid')
+                    if (bdm_dict.get('source_type') == 'image' and
+                            bdm_dict.get('destination_type') == 'local' and
+                            bdm_dict.get('boot_index') == 0 and bdm_uuid):
+                        image_uuid_specified = True
+                        server_dict['imageRef'] = bdm_uuid
             try:
                 block_device_mapping = [
                     block_device.BlockDeviceDict.from_api(bdm_dict,
@@ -680,7 +692,8 @@ class ServersController(wsgi.Controller):
     @validation.schema(schema_servers.create_v267, '2.67', '2.73')
     @validation.schema(schema_servers.create_v274, '2.74', '2.89')
     @validation.schema(schema_servers.create_v290, '2.90', '2.93')
-    @validation.schema(schema_servers.create_v294, '2.94')
+    @validation.schema(schema_servers.create_v294, '2.94', '2.96')
+    @validation.schema(schema_servers.create_v297, '2.97')
     def create(self, req, body):
         """Creates a new server for a given user."""
         context = req.environ['nova.context']

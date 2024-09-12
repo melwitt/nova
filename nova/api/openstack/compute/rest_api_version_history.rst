@@ -1255,3 +1255,12 @@ behavior.
 
 The ``server show`` and ``server list --long`` responses now include the
 pinned availability zone as well.
+
+.. _microversion 2.97:
+
+2.97
+----
+
+The ``POST /servers`` (create server) API now accepts an ``image_type``
+parameter in ``block_device_mapping_v2``. When specified, this will indicate
+which image type (raw, qcow2, rbd, etc) should be used for the block device.
