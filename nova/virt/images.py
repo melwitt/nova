@@ -108,6 +108,12 @@ def fetch(context, image_href, path, trusted_certs=None):
         with compute_utils.disk_ops_semaphore:
             IMAGE_API.download(context, image_href, dest_path=path,
                                trusted_certs=trusted_certs)
+    # TODO(melwitt): A direct download like this is not format inspected.
+    # This function is used to download kernel (AKI) and ramdisk (ARI) images.
+    # Should AKI and ARI image downloads go through fetch_to_raw() instead? Or
+    # should this function do deep inspection? Or should this function return
+    # "raw"?
+    return 'raw'
 
 
 def get_info(context, image_href):
@@ -142,9 +148,8 @@ def check_vmdk_image(image_id, data):
         raise exception.ImageUnacceptable(image_id=image_id, reason=msg)
 
 
-def do_image_deep_inspection(img, image_href, path):
+def do_image_deep_inspection(disk_format, image_href, path):
     ami_formats = ('ami', 'aki', 'ari')
-    disk_format = img['disk_format']
     try:
         # NOTE(danms): Use our own cautious inspector module to make sure
         # the image file passes safety checks.
@@ -208,9 +213,12 @@ def fetch_to_raw(context, image_href, path, trusted_certs=None):
             # If we're doing deep inspection, we take the determined format
             # from it.
             img = IMAGE_API.get(context, image_href)
-            force_format = do_image_deep_inspection(img, image_href, path_tmp)
+            force_format = do_image_deep_inspection(
+                img['disk_format'], image_href, path_tmp)
         else:
             force_format = None
+
+        final_format = force_format
 
         # Only run qemu-img after we have done deep inspection (if enabled).
         # If it was not enabled, we will let it detect the format.
@@ -270,5 +278,12 @@ def fetch_to_raw(context, image_href, path, trusted_certs=None):
                         data.file_format)
 
                 os.rename(staged, path)
+                # TODO(melwitt): We converted the image to 'raw', so should we
+                # return the format for future validation as 'raw' or 'gpt'?
+                # What are the valid original formats (like qcow2) that if we
+                # converted them to 'raw', we know that the format is now
+                # really GPT? Should this be "if fmt in (valid_formats):"?
+                final_format = 'gpt'
         else:
             os.rename(path_tmp, path)
+        return final_format
