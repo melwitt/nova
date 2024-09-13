@@ -309,10 +309,13 @@ class Image(metaclass=abc.ABCMeta):
             # changing during a resize to a different flavor, for example.
             self.resize_image(size_gb * units.Gi)
 
-        # If we are caching, the above created the base image and now we need
-        # to create the instance's disk image.
+        size = size_gb * units.Gi
         if cache:
-            self.create_image(ctxt, target, size_gb * units.Gi)
+            # If we are caching, the above created the base image and now we
+            # need to create the instance's disk image.
+            self.create_image(ctxt, target, size)
+            if size and size > self.get_disk_size(self.path):
+                self.resize_image(size)
 
     def create_ephemeral(
         self,
@@ -348,10 +351,13 @@ class Image(metaclass=abc.ABCMeta):
             # changing during a resize to a different flavor, for example.
             self.resize_image(size_mb * units.Mi)
 
-        # If we are caching, the above created the base image and now we need
-        # to create the instance's disk image.
+        size = size_mb * units.Mi
         if cache:
-            self.create_image(ctxt, target, size_mb * units.Mi)
+            # If we are caching, the above created the base image and now we
+            # need to create the instance's disk image.
+            self.create_image(ctxt, target, size)
+            if size and size > self.get_disk_size(self.path):
+                self.resize_image(size)
 
     def create_swap(
         self,
@@ -501,8 +507,6 @@ class Image(metaclass=abc.ABCMeta):
             self.create_image(ctxt, target, size, image_id=image_id)
 
         if size:
-            # create_image() only creates the base image if needed, so
-            # we cannot rely on it to exist here
             if size > self.get_disk_size(target):
                 self.resize_image(size)
 
