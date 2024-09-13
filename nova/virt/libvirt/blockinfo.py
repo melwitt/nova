@@ -413,6 +413,10 @@ def get_info_from_bdm(instance, virt_type, image_meta, bdm,
             bdm_info['encryption_options'] = jsonutils.loads(
                 encryption_options)
 
+    # Pass through the image_type that indicates which image backend this disk
+    # should use (raw, qcow2, rbd, etc).
+    bdm_info['image_type'] = bdm.get('image_type')
+
     return bdm_info
 
 
