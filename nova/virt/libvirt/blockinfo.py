@@ -413,6 +413,12 @@ def get_info_from_bdm(instance, virt_type, image_meta, bdm,
             bdm_info['encryption_options'] = jsonutils.loads(
                 encryption_options)
 
+    # Pass through the image_type that indicates which image backend this disk
+    # should use (raw, qcow2, rbd, etc). We need to check if it is set first
+    # because it will not be in the case of Cinder volumes, for example.
+    bdm_info['image_type'] = (
+        bdm.get('image_type') if 'image_type' in bdm else None)
+
     return bdm_info
 
 
@@ -508,7 +514,7 @@ def get_disk_mapping(virt_type, instance, disk_bus, cdrom_bus, image_meta,
     # the rescue disk, original root disk and optional config drive.
     if rescue and rescue_image_meta is None:
         return _get_rescue_disk_mapping(
-            virt_type, instance, disk_bus, image_meta)
+            virt_type, instance, disk_bus, image_meta, block_device_info)
 
     # NOTE(lyarwood): This is a new stable rescue attempt so provide a mapping
     # with the original mapping *and* rescue disk appended to the end.
@@ -523,7 +529,8 @@ def get_disk_mapping(virt_type, instance, disk_bus, cdrom_bus, image_meta,
         block_device_info)
 
 
-def _get_rescue_disk_mapping(virt_type, instance, disk_bus, image_meta):
+def _get_rescue_disk_mapping(
+        virt_type, instance, disk_bus, image_meta, block_device_info):
     """Build disk mapping for a legacy instance rescue
 
     This legacy method of rescue requires that the rescue device is attached
@@ -533,17 +540,27 @@ def _get_rescue_disk_mapping(virt_type, instance, disk_bus, image_meta):
     :param instance: nova.objects.instance.Instance object
     :param disk_bus: Disk bus to use within the mapping
     :param image_meta: objects.image_meta.ImageMeta for the instance
+    :param block_device_info: dict detailing disks and volumes attached
 
     :returns: Disk mapping for the given instance
     """
     mapping = {}
     rescue_info = get_next_disk_info(mapping,
                                      disk_bus, boot_index=1)
+
+    # Set the image_type from the original block_device_info so that we can
+    # support multiple image backends.
+    disk_info_mapping = get_disk_info(
+        virt_type, instance, image_meta, block_device_info)['mapping']
+    root_image_type = disk_info_mapping['root']['image_type']
+
+    rescue_info['image_type'] = root_image_type
     mapping['disk.rescue'] = rescue_info
     mapping['root'] = rescue_info
 
     os_info = get_next_disk_info(mapping,
                                  disk_bus)
+    os_info['image_type'] = root_image_type
     mapping['disk'] = os_info
 
     if configdrive.required_by(instance):
@@ -691,6 +708,13 @@ def _get_stable_device_rescue_mapping(virt_type, instance, disk_bus, cdrom_bus,
                                 rescue_device)
     rescue_info = get_next_disk_info(mapping, rescue_bus,
                                      device_type=rescue_device)
+
+    # Set the image_type from the original block_device_info so that we can
+    # support multiple image backends.
+    disk_info_mapping = get_disk_info(
+        virt_type, instance, image_meta, block_device_info)['mapping']
+    rescue_info['image_type'] = disk_info_mapping['root']['image_type']
+
     mapping['disk.rescue'] = rescue_info
     return mapping
 
