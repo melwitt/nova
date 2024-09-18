@@ -4169,7 +4169,7 @@ class LibvirtDriver(driver.ComputeDriver):
             backing_disk_info = self._get_instance_disk_info_from_config(
                 config, block_device_info)
             self._create_images_and_backing(context, instance, instance_dir,
-                                            backing_disk_info)
+                                            backing_disk_info, disk_info)
 
         # Initialize all the necessary networking, block devices and
         # start the instance.
@@ -4516,11 +4516,9 @@ class LibvirtDriver(driver.ComputeDriver):
                 image_meta = instance.image_meta
 
         else:
-            LOG.info("Attempting rescue", instance=instance)
             # NOTE(lyarwood): A legacy rescue only provides the rescue device
-            # and the original root device so we don't need to provide
-            # block_device_info to the get_disk_info call.
-            block_device_info = None
+            # and the original root device.
+            LOG.info("Attempting rescue", instance=instance)
 
         disk_info = blockinfo.get_disk_info(virt_type, instance, image_meta,
             rescue=True, block_device_info=block_device_info,
@@ -5148,7 +5146,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 raise exception.InvalidBDMFormat(details=msg)
 
             disk_image.create_ephemeral(
-                context, eph['size'], 'ephemeral%d' % idx,
+                context, ephemeral_gb, 'ephemeral%d' % idx,
                 instance.os_type, vm_mode=vm_mode)
 
         if swap_mb > 0:
@@ -11499,7 +11497,8 @@ class LibvirtDriver(driver.ComputeDriver):
         return migrate_data
 
     def _create_images_and_backing(self, context, instance, instance_dir,
-                                   disk_info, fallback_from_host=None):
+                                   backing_disk_info, disk_info,
+                                   fallback_from_host=None):
         """:param context: security context
            :param instance:
                nova.db.main.models.Instance object
@@ -11507,9 +11506,11 @@ class LibvirtDriver(driver.ComputeDriver):
            :param instance_dir:
                instance path to use, calculated externally to handle block
                migrating an instance with an old style instance path
+           :param backing_disk_info:
+               disk info about backing disks as specified in
+               _get_instance_disk_info_from_config (list of dicts)
            :param disk_info:
-               disk info specified in _get_instance_disk_info_from_config
-               (list of dicts)
+                traditional disk_info with disk mapping in it (dict)
            :param fallback_from_host:
                host where we can retrieve images if the glance images are
                not available.
@@ -11521,10 +11522,10 @@ class LibvirtDriver(driver.ComputeDriver):
                 instance.vm_mode == fields.VMMode.EXE):
             return
 
-        if not disk_info:
-            disk_info = []
+        if not backing_disk_info:
+            backing_disk_info = []
 
-        for info in disk_info:
+        for info in backing_disk_info:
             base = os.path.basename(info['path'])
             # Get image type and create empty disk image, and
             # create backing file in case of qcow2.
@@ -11537,7 +11538,8 @@ class LibvirtDriver(driver.ComputeDriver):
                 cache_name = os.path.basename(info['backing_file'])
 
                 disk = self.image_backend.by_name(
-                    instance, instance_disk, image_type=info['image_type'])
+                    instance, instance_disk,
+                    image_type=disk_info['mapping'][base]['image_type'])
                 if cache_name.startswith('ephemeral'):
                     # The argument 'size' is used by image.cache to
                     # validate disk size retrieved from cache against
@@ -11676,6 +11678,7 @@ class LibvirtDriver(driver.ComputeDriver):
           * 'backing_file': backing file of a disk image (str)
           * 'disk_size': physical disk size (int)
           * 'over_committed_disk_size': virt_disk_size - disk_size or 0
+          * 'image_type': the image backend type (str) or None
         """
         block_device_mapping = driver.block_device_info_get_mapping(
             block_device_info)
@@ -12243,8 +12246,14 @@ class LibvirtDriver(driver.ComputeDriver):
             # Config disks are hard-coded to be raw even when
             # use_cow_images=True (see _get_disk_config_image_type),so don't
             # need to be converted.
+            image_type = block_disk_info['mapping'][disk_name]['image_type']
             if (disk_name != 'disk.config' and
-                        info['type'] == 'raw' and CONF.use_cow_images):
+                        info['type'] == 'raw' and CONF.use_cow_images and
+                        not image_type):
+                LOG.debug(
+                    'Migration from raw image backend to qcow2 image backend '
+                    'detected and disk image_type has not been specified. '
+                    'Converting disk from raw to qcow2 ...', instance=instance)
                 self._disk_raw_to_qcow2(info['path'])
 
         # Does the guest need to be assigned some vGPU mediated devices ?
@@ -12344,7 +12353,8 @@ class LibvirtDriver(driver.ComputeDriver):
                                             block_device_info)
 
         root_disk = self.image_backend.by_name(
-            instance, 'disk', image_type=disk_info['mapping']['disk'])
+            instance, 'disk',
+            image_type=disk_info['mapping']['disk']['image_type'])
         # Once we rollback, the snapshot is no longer needed, so remove it
         if root_disk.exists():
             root_disk.rollback_to_snap(libvirt_utils.RESIZE_SNAPSHOT_NAME)
