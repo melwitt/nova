@@ -4529,9 +4529,11 @@ class LibvirtDriver(driver.ComputeDriver):
         injection_info = InjectionInfo(network_info=network_info,
                                        admin_pass=rescue_password,
                                        files=None)
+        root_image_type = disk_info['mapping']['root']['image_type']
         gen_confdrive = functools.partial(self._create_configdrive,
                                           context, instance, injection_info,
-                                          rescue=True)
+                                          rescue=True,
+                                          image_type=root_image_type)
         # NOTE(sbauza): Since rescue recreates the guest XML, we need to
         # remember the existing mdevs for reusing them.
         mdevs = self._get_all_assigned_mediated_devices(instance)
@@ -4727,9 +4729,11 @@ class LibvirtDriver(driver.ComputeDriver):
         injection_info = InjectionInfo(network_info=network_info,
                                        files=injected_files,
                                        admin_pass=admin_password)
+        root_image_type = disk_info['mapping']['root']['image_type']
         gen_confdrive = functools.partial(self._create_configdrive,
                                           context, instance,
-                                          injection_info)
+                                          injection_info,
+                                          image_type=root_image_type)
         created_instance_dir, created_disks = self._create_image(
                 context, instance, disk_info['mapping'],
                 injection_info=injection_info,
@@ -4950,11 +4954,12 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('Console file already exists: %s.', console_file)
 
     @staticmethod
-    def _get_disk_config_image_type():
+    def _get_disk_config_image_type(image_type=None):
+        image_type = image_type or CONF.libvirt.images_type
         # TODO(mikal): there is a bug here if images_type has
         # changed since creation of the instance, but I am pretty
         # sure that this bug already exists.
-        return 'rbd' if CONF.libvirt.images_type == 'rbd' else 'raw'
+        return 'rbd' if image_type == 'rbd' else 'raw'
 
     @staticmethod
     def _is_booted_from_volume(block_device_info):
@@ -5293,7 +5298,7 @@ class LibvirtDriver(driver.ComputeDriver):
         self._rebase_with_qemu_img(backend.path, base_backing_fname)
 
     def _create_configdrive(self, context, instance, injection_info,
-                            rescue=False):
+                            rescue=False, image_type=None):
         # As this method being called right after the definition of a
         # domain, but before its actual launch, device metadata will be built
         # and saved in the instance for it to be used by the config drive and
@@ -5311,8 +5316,11 @@ class LibvirtDriver(driver.ComputeDriver):
             # this relate the multi-backend for images? Should config drive
             # ever be anything other than CONF.libvirt.images_type? Maybe base
             # it on the root disk image type?
+            # Currently, this is accepting an image_type kwarg which is being
+            # passed in as the image_type of the root disk.
             config_disk = self.image_backend.by_name(
-                instance, name, self._get_disk_config_image_type())
+                instance, name,
+                self._get_disk_config_image_type(image_type=image_type))
 
             # Don't overwrite an existing config drive
             if not config_disk.exists():
@@ -5954,7 +5962,8 @@ class LibvirtDriver(driver.ComputeDriver):
             if config_name in disk_mapping:
                 diskconfig = self._get_guest_disk_config(
                     instance, config_name, disk_mapping, flavor,
-                    self._get_disk_config_image_type())
+                    self._get_disk_config_image_type(
+                        image_type=disk_mapping['root']['image_type']))
                 devices.append(diskconfig)
 
         for vol in block_device.get_bdms_to_connect(block_device_mapping,
@@ -12202,10 +12211,11 @@ class LibvirtDriver(driver.ComputeDriver):
         # Required by Quobyte CI
         self._ensure_console_log_for_instance(instance)
 
+        root_image_type = block_disk_info['mapping']['root']['image_type']
         gen_confdrive = functools.partial(
             self._create_configdrive, context, instance,
             InjectionInfo(admin_pass=None, network_info=network_info,
-                          files=None))
+                          files=None), image_type=root_image_type)
 
         # Convert raw disks to qcow2 if migrating to host which uses
         # qcow2 from host which uses raw.
@@ -12248,10 +12258,8 @@ class LibvirtDriver(driver.ComputeDriver):
             # Config disks are hard-coded to be raw even when
             # use_cow_images=True (see _get_disk_config_image_type),so don't
             # need to be converted.
-            image_type = block_disk_info['mapping'][disk_name]['image_type']
             if (disk_name != 'disk.config' and
-                        info['type'] == 'raw' and CONF.use_cow_images and
-                        not image_type):
+                        info['type'] == 'raw' and CONF.use_cow_images):
                 LOG.debug(
                     'Migration from raw image backend to qcow2 image backend '
                     'detected and disk image_type has not been specified. '
