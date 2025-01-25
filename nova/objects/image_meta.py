@@ -201,15 +201,18 @@ class ImageMetaProps(base.NovaObject):
     # Version 1.40: Added 'hw_sound_model' field
     # Version 1.41: Added 'hw_usb_model' and 'hw_redirected_usb_ports' fields
     # Version 1.42: Added 'hw_mem_encryption_model' field
+    # Version 1.43: Added 'hw_tpm_secret_security' field
 
     # NOTE(efried): When bumping this version, the version of
     # ImageMetaPropsPayload must also be bumped. See its docstring for details.
-    VERSION = '1.42'
+    VERSION = '1.43'
 
     def obj_make_compatible(self, primitive, target_version):  # noqa: C901
         super(ImageMetaProps, self).obj_make_compatible(primitive,
                                                         target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (1, 43):
+            primitive.pop('hw_tpm_secret_security', None)
         if target_version < (1, 42):
             primitive.pop('hw_mem_encryption_model', None)
         if target_version < (1, 41):
@@ -491,6 +494,8 @@ class ImageMetaProps(base.NovaObject):
         'hw_tpm_model': fields.TPMModelField(),
         # version of emulated TPM to use.
         'hw_tpm_version': fields.TPMVersionField(),
+        # TPM secret security policy to use.
+        'hw_tpm_secret_security': fields.TPMSecretSecurityField(),
 
         # boolean - if true will enable ephemeral encryption for instance
         'hw_ephemeral_encryption': fields.FlexibleBooleanField(),
