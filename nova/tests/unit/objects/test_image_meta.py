@@ -549,11 +549,14 @@ class TestImageMetaProps(test.NoDBTestCase):
         """Test that checks if we pop hw_tpm_model and hw_tpm_version."""
         obj = objects.ImageMetaProps(
             hw_tpm_model='tpm-tis', hw_tpm_version='1.2',
+            hw_tpm_secret_security='user',
         )
-        primitive = obj.obj_to_primitive()
-        self.assertIn('hw_tpm_model', primitive['nova_object.data'])
-        self.assertIn('hw_tpm_version', primitive['nova_object.data'])
-
+        primitive = obj.obj_to_primitive('1.42')
+        self.assertIn(
+            'hw_tpm_secret_security', primitive['nova_object.data'])
+        primitive = obj.obj_to_primitive('1.41')
+        self.assertNotIn(
+            'hw_tpm_secret_security', primitive['nova_object.data'])
         primitive = obj.obj_to_primitive('1.26')
         self.assertNotIn('hw_tpm_model', primitive['nova_object.data'])
         self.assertNotIn('hw_tpm_version', primitive['nova_object.data'])
