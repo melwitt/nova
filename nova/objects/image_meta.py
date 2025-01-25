@@ -199,15 +199,18 @@ class ImageMetaProps(base.NovaObject):
     # Version 1.38: Added 'hw_firmware_stateless' field
     # Version 1.39: Added igb value to 'hw_vif_model' enum
     # Version 1.40: Added 'hw_sound_model' field
+    # Version 1.41: Added 'hw_tpm_secret_security' field
 
     # NOTE(efried): When bumping this version, the version of
     # ImageMetaPropsPayload must also be bumped. See its docstring for details.
-    VERSION = '1.40'
+    VERSION = '1.41'
 
     def obj_make_compatible(self, primitive, target_version):
         super(ImageMetaProps, self).obj_make_compatible(primitive,
                                                         target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if target_version < (1, 41):
+            primitive.pop('hw_tpm_secret_security', None)
         if target_version < (1, 40):
             primitive.pop('hw_sound_model', None)
         if target_version < (1, 39):
@@ -480,6 +483,8 @@ class ImageMetaProps(base.NovaObject):
         'hw_tpm_model': fields.TPMModelField(),
         # version of emulated TPM to use.
         'hw_tpm_version': fields.TPMVersionField(),
+        # TPM secret security policy to use.
+        'hw_tpm_secret_security': fields.TPMSecretSecurityField(),
 
         # boolean - if true will enable ephemeral encryption for instance
         'hw_ephemeral_encryption': fields.FlexibleBooleanField(),
