@@ -562,6 +562,14 @@ class TPMVersion(BaseNovaEnum):
     ALL = (v1_2, v2_0)
 
 
+class TPMSecretSecurity(BaseNovaEnum):
+    USER = 'user'
+    HOST = 'host'
+    DEPLOYMENT = 'deployment'
+
+    ALL = (USER, HOST, DEPLOYMENT)
+
+
 class MaxPhyAddrMode(BaseNovaEnum):
     PASSTHROUGH = "passthrough"
     EMULATE = "emulate"
@@ -1335,6 +1343,10 @@ class TPMModelField(BaseEnumField):
 
 class TPMVersionField(BaseEnumField):
     AUTO_TYPE = TPMVersion()
+
+
+class TPMSecretSecurityField(BaseEnumField):
+    AUTO_TYPE = TPMSecretSecurity()
 
 
 class SCSIModelField(BaseEnumField):

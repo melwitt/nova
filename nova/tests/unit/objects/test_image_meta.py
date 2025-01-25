@@ -545,15 +545,18 @@ class TestImageMetaProps(test.NoDBTestCase):
         self.assertIn('hw_pmu', primitive['nova_object.data'])
         self.assertNotIn('hw_pmu', old_primitive['nova_object.data'])
 
-    def test_obj_make_compatible_vtpm(self):
-        """Test that checks if we pop hw_tpm_model and hw_tpm_version."""
+    def test_obj_make_compatible_vtpm_v139(self):
+        obj = objects.ImageMetaProps(
+            hw_tpm_model='tpm-tis', hw_tpm_version='1.2',
+            hw_tpm_secret_security='user',
+        )
+        self.assertRaises(exception.ObjectActionError,
+                          obj.obj_to_primitive, '1.39')
+
+    def test_obj_make_compatible_vtpm_v126(self):
         obj = objects.ImageMetaProps(
             hw_tpm_model='tpm-tis', hw_tpm_version='1.2',
         )
-        primitive = obj.obj_to_primitive()
-        self.assertIn('hw_tpm_model', primitive['nova_object.data'])
-        self.assertIn('hw_tpm_version', primitive['nova_object.data'])
-
         primitive = obj.obj_to_primitive('1.26')
         self.assertNotIn('hw_tpm_model', primitive['nova_object.data'])
         self.assertNotIn('hw_tpm_version', primitive['nova_object.data'])
