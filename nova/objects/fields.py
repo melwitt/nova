@@ -562,6 +562,14 @@ class TPMVersion(BaseNovaEnum):
     ALL = (v1_2, v2_0)
 
 
+class TPMSecretSecurity(BaseNovaEnum):
+    USER = 'user'
+    HOST = 'host'
+    DEPLOYMENT = 'deployment'
+
+    ALL = (USER, HOST, DEPLOYMENT)
+
+
 class MemEncryptionModel(BaseNovaEnum):
     AMD_SEV = "amd-sev"
     AMD_SEV_ES = "amd-sev-es"
@@ -1371,6 +1379,10 @@ class TPMModelField(BaseEnumField):
 
 class TPMVersionField(BaseEnumField):
     AUTO_TYPE = TPMVersion()
+
+
+class TPMSecretSecurityField(BaseEnumField):
+    AUTO_TYPE = TPMSecretSecurity()
 
 
 class MemEncryptionModelField(BaseEnumField):
