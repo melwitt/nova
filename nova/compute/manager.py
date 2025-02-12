@@ -9864,13 +9864,17 @@ class ComputeManager(manager.Manager):
             power_management_possible = (
                 'dst_numa_info' in migrate_data and
                 migrate_data.dst_numa_info is not None)
+            tpm_secret_security_host = ('vtpm_secret_uuid' in migrate_data and
+                                        'vtpm_secret_value' in migrate_data)
             # No instance booting at source host, but instance dir
             # must be deleted for preparing next block migration
             # must be deleted for preparing next live migration w/o shared
             # storage
             # vpmem must be cleaned
             do_cleanup = (not migrate_data.is_shared_instance_path or
-                          has_vpmem or has_mdevs or power_management_possible)
+                          has_vpmem or has_mdevs or
+                          power_management_possible or
+                          tpm_secret_security_host)
             destroy_disks = not (
                     migrate_data.is_shared_block_storage or
                     migrate_data.is_shared_instance_path)
