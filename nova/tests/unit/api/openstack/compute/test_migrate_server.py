@@ -156,9 +156,10 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
                 self.context, instance, False, self.disk_over_commit,
                 'hostname', self.force, self.async_)
 
-        self.mock_get.assert_called_once_with(self.context, instance.uuid,
-                                              expected_attrs=['numa_topology'],
-                                              cell_down_support=False)
+        self.mock_get.assert_called_once_with(
+            self.context, instance.uuid,
+            expected_attrs=['numa_topology', 'system_metadata'],
+            cell_down_support=False)
 
     def test_migrate_live_enabled(self):
         param = self._get_params(host='hostname')
@@ -234,9 +235,10 @@ class MigrateServerTests(admin_only_action_common.CommonTests):
             mock_live_migrate.assert_called_once_with(
                 self.context, instance, False, self.disk_over_commit,
                 'hostname', self.force, self.async_)
-        self.mock_get.assert_called_once_with(self.context, instance.uuid,
-                                              expected_attrs=['numa_topology'],
-                                              cell_down_support=False)
+        self.mock_get.assert_called_once_with(
+            self.context, instance.uuid,
+            expected_attrs=['numa_topology', 'system_metadata'],
+            cell_down_support=False)
 
     def test_migrate_live_compute_service_unavailable(self):
         self._test_migrate_live_failed_with_exception(
@@ -482,9 +484,10 @@ class MigrateServerTestsV234(MigrateServerTestsV230):
             mock_live_migrate.assert_called_once_with(
                 self.context, instance, None, self.disk_over_commit,
                 'hostname', self.force, self.async_)
-        self.mock_get.assert_called_once_with(self.context, instance.uuid,
-                                              expected_attrs=['numa_topology'],
-                                              cell_down_support=False)
+        self.mock_get.assert_called_once_with(
+            self.context, instance.uuid,
+            expected_attrs=['numa_topology', 'system_metadata'],
+            cell_down_support=False)
 
     def test_migrate_live_unexpected_error(self):
         body = {'os-migrateLive':
@@ -501,9 +504,10 @@ class MigrateServerTestsV234(MigrateServerTestsV230):
             mock_live_migrate.assert_called_once_with(
                 self.context, instance, None, self.disk_over_commit,
                 'hostname', self.force, self.async_)
-        self.mock_get.assert_called_once_with(self.context, instance.uuid,
-                                              expected_attrs=['numa_topology'],
-                                              cell_down_support=False)
+        self.mock_get.assert_called_once_with(
+            self.context, instance.uuid,
+            expected_attrs=['numa_topology', 'system_metadata'],
+            cell_down_support=False)
 
 
 class MigrateServerTestsV256(MigrateServerTestsV234):

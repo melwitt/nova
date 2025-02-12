@@ -52,7 +52,7 @@ class CommonMixin(object):
 
         expected_attrs = None
         if action == '_migrate_live':
-            expected_attrs = ['numa_topology']
+            expected_attrs = ['numa_topology', 'system_metadata']
         elif action == '_migrate':
             expected_attrs = ['flavor', 'services']
 
@@ -75,7 +75,7 @@ class CommonMixin(object):
 
         expected_attrs = None
         if action == '_migrate_live':
-            expected_attrs = ['numa_topology']
+            expected_attrs = ['numa_topology', 'system_metadata']
         elif action == '_migrate':
             expected_attrs = ['flavor', 'services']
 
@@ -103,7 +103,7 @@ class CommonMixin(object):
 
         expected_attrs = None
         if action == '_migrate_live':
-            expected_attrs = ['numa_topology']
+            expected_attrs = ['numa_topology', 'system_metadata']
 
         if method is None:
             method = action.replace('_', '')
@@ -133,7 +133,7 @@ class CommonMixin(object):
 
         expected_attrs = None
         if action == '_migrate_live':
-            expected_attrs = ['numa_topology']
+            expected_attrs = ['numa_topology', 'system_metadata']
         elif action == '_migrate':
             expected_attrs = ['flavor', 'services']
 
@@ -174,7 +174,7 @@ class CommonMixin(object):
 
         expected_attrs = None
         if action == '_migrate_live':
-            expected_attrs = ['numa_topology']
+            expected_attrs = ['numa_topology', 'system_metadata']
         elif action == '_migrate':
             expected_attrs = ['flavor', 'services']
 
@@ -207,7 +207,7 @@ class CommonMixin(object):
 
         expected_attrs = None
         if action == '_migrate_live':
-            expected_attrs = ['numa_topology']
+            expected_attrs = ['numa_topology', 'system_metadata']
 
         if method is None:
             method = action.replace('_', '')
