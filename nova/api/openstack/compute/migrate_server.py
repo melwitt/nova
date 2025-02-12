@@ -106,7 +106,8 @@ class MigrateServerController(wsgi.Controller):
         # 'LiveMigrationTask._check_instance_has_no_numa' check in the
         # conductor
         instance = common.get_instance(self.compute_api, context, id,
-                                       expected_attrs=['numa_topology'])
+                                       expected_attrs=['numa_topology',
+                                                       'system_metadata'])
 
         context.can(ms_policies.POLICY_ROOT % 'migrate_live',
                     target={'project_id': instance.project_id})
