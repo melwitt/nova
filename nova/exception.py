@@ -2661,3 +2661,8 @@ class EphemeralEncryptionCleanupFailed(NovaException):
 
 class HostConflict(Exception):
     pass
+
+
+class VTPMSecretNotFound(NovaException):
+    msg_fmt = _('TPM encryption secret for instance %(instance_uuid)s was not '
+                'found.')
