@@ -264,6 +264,23 @@ def reject_sev_instances(operation):
     return outer
 
 
+def reject_legacy_vtpm_live_migration(function):
+
+    @functools.wraps(function)
+    def inner(self, context, instance, *args, **kwargs):
+        vtpm = instance.system_metadata.get('vtpm_secret_uuid')
+        security = instance.system_metadata.get('image_hw_tpm_secret_security')
+        confirmed = instance.system_metadata.get(
+            'tpm_secret_security_confirmed')
+        if vtpm:
+            if not (security == 'host' and confirmed):
+                raise exception.OperationNotSupportedForVTPM(
+                    instance_uuid=instance.uuid,
+                    operation=instance_actions.LIVE_MIGRATION)
+        return function(self, context, instance, *args, **kwargs)
+    return inner
+
+
 def reject_vtpm_instances(operation):
     """Reject requests to decorated function if instance has vTPM enabled.
 
@@ -5560,12 +5577,12 @@ class API:
     @block_shares_not_supported()
     @block_extended_resource_request
     @block_port_accelerators()
+    @reject_legacy_vtpm_live_migration
     @reject_vdpa_instances(
         instance_actions.LIVE_MIGRATION,
         until=MIN_COMPUTE_VDPA_HOTPLUG_LIVE_MIGRATION
     )
     @block_accelerators()
-    @reject_vtpm_instances(instance_actions.LIVE_MIGRATION)
     @reject_sev_instances(instance_actions.LIVE_MIGRATION)
     @check_instance_lock
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.PAUSED])
