@@ -10554,6 +10554,23 @@ class LibvirtDriver(driver.ComputeDriver):
             mdev_types = self._get_mdev_types_from_uuids(instance_mdevs.keys())
             dest_check_data.source_mdev_types = mdev_types
 
+        security = instance.system_metadata.get('image_tpm_secret_security')
+        confirmed = instance.system_metadata.get(
+            'tpm_secret_security_confirmed')
+        if (
+            instance.system_metadata.get('vtpm_secret_uuid') and
+            security == 'host' and confirmed
+        ):
+            secret = self._host.find_secret('vtpm', instance.uuid)
+            # FIXME(artom) Remove this loggig once we've figured out why the
+            # live migration is failing with a vTPM encryption error
+            LOG.debug('vTPM secret value read from source host is %s',
+                      str(secret.value()))
+            LOG.debug('vTPM secret UUID read from source host is %s',
+                      str(secret.UUIDString()))
+            dest_check_data.vtpm_secret_uuid = secret.UUIDString()
+            dest_check_data.vtpm_secret_value = secret.value().decode()
+
         return dest_check_data
 
     def _host_can_support_mdev_live_migration(self):
@@ -11463,6 +11480,11 @@ class LibvirtDriver(driver.ComputeDriver):
         try:
             self.destroy(context, instance, network_info, block_device_info,
                          destroy_disks)
+            if (
+                'vtpm_secret_uuid' in migrate_data and
+                'vtpm_secret_value' in migrate_data
+            ):
+                self._host.delete_secret('vtpm', instance.uuid)
         finally:
             # NOTE(gcb): Failed block live migration may leave instance
             # directory at destination node, ensure it is always deleted.
@@ -11651,6 +11673,23 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('No dst_numa_info in migrate_data, '
                       'no cores to power up in pre_live_migration.')
 
+        if (
+            'vtpm_secret_uuid' in migrate_data and
+            'vtpm_secret_value' in migrate_data
+        ):
+            self._host.create_secret('vtpm', instance.uuid,
+                                     password=migrate_data.vtpm_secret_value,
+                                     uuid=migrate_data.vtpm_secret_uuid,
+                                     ephemeral=False, private=False)
+            LOG.debug('vTPM secret created on dest has UUID %s and value %s',
+                      str(migrate_data.vtpm_secret_uuid),
+                      str(migrate_data.vtpm_secret_value))
+            # FIXME(artom) Read the secret back to understand why the live
+            # migraiton is failing with a TPM encryption error.
+            secret = self._host.find_secret('vtpm', instance.uuid)
+            LOG.debug('vTPM secret read back on dest has value %s',
+                      secret.value())
+
         return migrate_data
 
     def _try_fetch_image_cache(self, image, fetch_func, context, filename,
@@ -11788,6 +11827,11 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def post_live_migration(self, context, instance, block_device_info,
                             migrate_data=None):
+        if (
+            'vtpm_secret_uuid' in migrate_data and
+            'vtpm_secret_value' in migrate_data
+        ):
+            self._host.delete_secret('vtpm', instance.uuid)
         # NOTE(mdbooth): The block_device_info we were passed was initialized
         # with BDMs from the source host before they were updated to point to
         # the destination. We can safely use this to disconnect the source

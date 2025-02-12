@@ -1076,6 +1076,8 @@ class Host(object):
             usage_type_const = libvirt.VIR_SECRET_USAGE_TYPE_CEPH
         elif usage_type == 'volume':
             usage_type_const = libvirt.VIR_SECRET_USAGE_TYPE_VOLUME
+        elif usage_type == 'vtpm':
+            usage_type_const = libvirt.VIR_SECRET_USAGE_TYPE_VTPM
         else:
             msg = _("Invalid usage_type: %s")
             raise exception.InternalError(msg % usage_type)
