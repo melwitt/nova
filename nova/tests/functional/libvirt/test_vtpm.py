@@ -136,15 +136,17 @@ class FakeKeyManager(key_manager.KeyManager):
 
 
 @ddt.ddt
-class VTPMServersTest(base.ServersTestBase):
+class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
     # NOTE: ADMIN_API is intentionally not set to True in order to catch key
     # manager service secret ownership issues.
 
     # Reflect reality more for async API requests like migration
     CAST_AS_CALL = False
-    # Enables block_migration='auto' which is in the _live_migrate() helper.
-    microversion = '2.25'
+    # Microversion 2.25 Enables block_migration='auto' which is in the
+    # _live_migrate() helper.
+    # Microversion 2.34 enables asynchronous pre-live-migration checks.
+    microversion = '2.34'
 
     def setUp(self):
         # enable vTPM and use our own fake key service
@@ -400,6 +402,131 @@ class VTPMServersTest(base.ServersTestBase):
                 'vTPM live migration is not supported by old nova-compute '
                 'services. Upgrade your nova-compute services to '
                 'Gazpacho (33.0.0) or later.', str(ex))
+
+    def test_live_migrate_server_secret_security_host(self):
+        """Test a successful live migration of a server with 'host' security
+
+        Because we have two computes that support the 'host' secret security
+        policy, we expect the live migration to be successful.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.src = self.computes['src']
+
+        self.server = self._create_server_with_vtpm(secret_security='host')
+
+        self.start_compute(hostname='dest')
+        self.dest = self.computes['dest']
+
+        # We should have a secret in the key manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should also have a libvirt secret on the source host.
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        # And no libvirt secret on the destination host.
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        self._live_migrate(self.server, api=self.admin_api)
+
+        # After the live migration, we should still have a secret in the key
+        # manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should have removed the libvirt secret from the source host.
+        self._assert_libvirt_secret_missing(self.src, self.server['id'])
+        # And we should have a libvirt secret on the destination host.
+        self._assert_libvirt_has_secret(self.dest, self.server['id'])
+
+    def test_live_migrate_server_secret_security_host_missing(self):
+        """Test behavior when the instance libvirt secret is missing
+
+        This should not be able to happen but in case it does, fail gracefully.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.src = self.computes['src']
+
+        self.server = self._create_server_with_vtpm(secret_security='host')
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+
+        self.start_compute(hostname='dest')
+        self.dest = self.computes['dest']
+
+        # Delete the libvirt secret ourselves to fake the missing secret.
+        self.src.driver._host.delete_secret('vtpm', self.server['id'])
+        self._assert_libvirt_secret_missing(self.src, self.server['id'])
+
+        # The missing secret error will make the migration precheck fail and we
+        # will get NoValidHost and the instance will remain ACTIVE.
+        self._live_migrate(
+            self.server, migration_expected_state='error',
+            server_expected_state='ACTIVE', api=self.admin_api)
+
+        # Live migration attempt should have failed with VTPMSecretNotFound.
+        # Need microversion 2.84 to get events.details field.
+        with utils.temporary_mutation(self.admin_api, microversion='2.84'):
+            event = self._wait_for_instance_action_event(
+                self.server, 'live-migration',
+                'compute_check_can_live_migrate_source', 'Error')
+            msg = ('TPM secret was not found. Try hard-rebooting the '
+                   'instance to recover')
+            self.assertIn(msg, event['details'])
+
+        # Try to recover the instance by hard-rebooting it.
+        self._reboot_server(self.server, hard=True)
+
+        # This time the live migration should work because the libvirt secret
+        # should have been re-created by the hard reboot.
+        self._live_migrate(self.server, migration_expected_state='completed',
+                           api=self.admin_api)
+
+    def test_live_migrate_server_secret_security_host_rollback(self):
+        """Test a failed live migration of a server with 'host' security
+
+        Simulate a failure and verify that secrets are correctly handled during
+        the rollback process.
+        """
+
+        def _migrate_stub(domain, destination, params, flags):
+            self.dest.driver._host.get_connection().createXML(
+                params['destination_xml'],
+                'fake-createXML-doesnt-care-about-flags')
+            conn = self.src.driver._host.get_connection()
+            dom = conn.lookupByUUIDString(self.server['id'])
+            dom.fail_job()
+
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.src = self.computes['src']
+
+        self.server = self._create_server_with_vtpm(secret_security='host')
+
+        self.start_compute(hostname='dest')
+        self.dest = self.computes['dest']
+
+        # We should have a secret in the key manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should also have a libvirt secret on the source host.
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        # And no libvirt secret on the destination host.
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        with mock.patch('nova.tests.fixtures.libvirt.Domain.migrateToURI3',
+                        _migrate_stub):
+            self._live_migrate(self.server, migration_expected_state='failed',
+                               api=self.admin_api)
+            # Waiting for the migration status isn't enough -- part of the
+            # rollback process is an async RPC call, so if we don't wait for
+            # the end of the rollback, the secret cleanup may not be completed
+            # yet when we want to verify it below.
+            self.notifier.wait_for_versioned_notifications(
+                'instance.live_migration_rollback_dest.end')
+
+        # After the live migration fails, we should still have a secret in the
+        # key manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should have a libvirt secret on the source host.
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        # And no libvirt secret on the destination host.
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
     def test_suspend_resume_server(self):
         self.start_compute()

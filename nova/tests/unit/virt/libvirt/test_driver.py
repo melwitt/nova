@@ -13009,6 +13009,82 @@ class LibvirtConnTestCase(test.NoDBTestCase,
 
         self.assertFalse(mock_disk_check.called)
 
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_is_shared_block_storage', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_check_shared_storage_test_file', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.host.Host.find_secret')
+    @ddt.data('user', 'host', 'deployment')
+    def test_check_can_live_migrate_source_vtpm(self, security, mock_find):
+        """Verify vTPM fields in migrate data are set correctly
+
+        For the 'host' security mode, vTPM fields should be populated with the
+        secret UUID and the secret value. For the 'user' and 'deployment'
+        security modes, the fields should be set to None.
+        """
+        instance = objects.Instance(**self.test_instance)
+        instance.flavor.extra_specs = {
+            'hw:tpm_version': '1.2',
+            'hw:tpm_secret_security': security,
+        }
+        dest_check_data = objects.LibvirtLiveMigrateData(filename='file')
+        mock_find.return_value.UUIDString.return_value = uuids.secret
+        mock_find.return_value.value.return_value.decode.return_value = 'foo'
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        drvr.check_can_live_migrate_source(self.context, instance,
+                                           dest_check_data)
+
+        if security == 'host':
+            mock_find.assert_called_once_with('vtpm', instance.uuid)
+            self.assertEqual(uuids.secret, dest_check_data.vtpm_secret_uuid)
+            self.assertEqual('foo', dest_check_data.vtpm_secret_value)
+        else:
+            mock_find.assert_not_called()
+            self.assertIsNone(dest_check_data.vtpm_secret_uuid)
+            self.assertIsNone(dest_check_data.vtpm_secret_value)
+
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_is_shared_block_storage', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_check_shared_storage_test_file', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.host.Host.find_secret')
+    def test_check_can_live_migrate_source_vtpm_legacy(self, mock_find):
+        """Verify legacy vTPM instances would not set migrate data
+
+        This really shouldn't be possible given that vTPM live migration is
+        blocked at the API for legacy vTPM instances, but test it anyway.
+        """
+        instance = objects.Instance(**self.test_instance)
+        instance.flavor.extra_specs = {'hw:tpm_version': '1.2'}
+        dest_check_data = objects.LibvirtLiveMigrateData(filename='file')
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        drvr.check_can_live_migrate_source(self.context, instance,
+                                           dest_check_data)
+
+        mock_find.assert_not_called()
+        self.assertIsNone(dest_check_data.vtpm_secret_uuid)
+        self.assertIsNone(dest_check_data.vtpm_secret_value)
+
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_is_shared_block_storage', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.driver.LibvirtDriver.'
+                '_check_shared_storage_test_file', new=mock.Mock())
+    @mock.patch('nova.virt.libvirt.host.Host.find_secret')
+    def test_check_can_live_migrate_source_no_vtpm(self, mock_find):
+        """Verify non-vTPM instances would not set migrate data"""
+        instance = objects.Instance(**self.test_instance)
+        dest_check_data = objects.LibvirtLiveMigrateData(filename='file')
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        drvr.check_can_live_migrate_source(self.context, instance,
+                                           dest_check_data)
+
+        mock_find.assert_not_called()
+        self.assertFalse(dest_check_data.obj_attr_is_set('vtpm_secret_uuid'))
+        self.assertFalse(dest_check_data.obj_attr_is_set('vtpm_secret_value'))
+
     def _is_shared_block_storage_test_create_mocks(self, disks):
         # Test data
         instance_xml = ("<domain type='kvm'><name>instance-0000000a</name>"
@@ -16307,6 +16383,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
 
         inst_ref = {'id': 'foo'}
+        mig_data = objects.LibvirtLiveMigrateData()
         cntx = context.get_admin_context()
 
         # Set up the mock expectations
@@ -16314,7 +16391,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                            return_value=bdi['block_device_mapping'])
         @mock.patch.object(drvr, '_disconnect_volume')
         def _test(_disconnect_volume, block_device_info_get_mapping):
-            drvr.post_live_migration(cntx, inst_ref, bdi)
+            drvr.post_live_migration(cntx, inst_ref, bdi, mig_data)
 
             block_device_info_get_mapping.assert_called_once_with(bdi)
             _disconnect_volume.assert_has_calls([
@@ -16331,13 +16408,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         vol_2_conn_info = {'data': {'volume_id': uuids.vol_2_id}}
         mock_get_bdm.return_value = [{'connection_info': vol_1_conn_info},
                                      {'connection_info': vol_2_conn_info}]
+        mig_data = objects.LibvirtLiveMigrateData()
 
         # Raise an exception with the first call to disconnect_volume
         mock_disconnect_volume.side_effect = [test.TestingException, None]
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         drvr.post_live_migration(mock.sentinel.ctxt, mock.sentinel.instance,
-                                 mock.sentinel.bdi)
+                                 mock.sentinel.bdi, mig_data)
 
         # Assert disconnect_volume is called twice despite the exception
         mock_disconnect_volume.assert_has_calls([

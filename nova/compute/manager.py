@@ -9876,7 +9876,9 @@ class ComputeManager(manager.Manager):
             # storage
             # vpmem must be cleaned
             do_cleanup = (not migrate_data.is_shared_instance_path or
-                          has_vpmem or has_mdevs or power_management_possible)
+                          has_vpmem or has_mdevs or
+                          power_management_possible or
+                          migrate_data.has_vtpm)
             destroy_disks = not (
                     migrate_data.is_shared_block_storage or
                     migrate_data.is_shared_instance_path)
