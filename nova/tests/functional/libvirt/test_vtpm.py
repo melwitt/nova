@@ -27,6 +27,7 @@ from nova import exception
 from nova import objects
 from nova.tests.functional.api import client
 from nova.tests.functional.libvirt import base
+from nova import utils
 
 CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
@@ -120,19 +121,23 @@ class FakeKeyManager(key_manager.KeyManager):
         )
 
 
-class VTPMServersTest(base.ServersTestBase):
+class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
     # many move operations are admin-only
     ADMIN_API = True
+    # Enables passing host when creating a server
+    microversion = '2.74'
+    # Reflect reality more for async API requests like live migration
+    CAST_AS_CALL = False
 
     def setUp(self):
+        super().setUp()
+
         # enable vTPM and use our own fake key service
         self.flags(swtpm_enabled=True, group='libvirt')
         self.flags(
             backend='nova.tests.functional.libvirt.test_vtpm.FakeKeyManager',
             group='key_manager')
-
-        super().setUp()
 
         # mock the '_check_vtpm_support' function which validates things like
         # the presence of users on the host, none of which makes sense here
@@ -143,14 +148,15 @@ class VTPMServersTest(base.ServersTestBase):
 
         self.key_mgr = crypto._get_key_manager()
 
-    def _create_server_with_vtpm(self, secret_security=None,
+    def _create_server_with_vtpm(self, secret_security=None, host=None,
                                  expected_state='ACTIVE'):
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
         if secret_security:
             extra_specs.update({'hw:tpm_secret_security': secret_security})
         flavor_id = self._create_flavor(extra_spec=extra_specs)
-        server = self._create_server(flavor_id=flavor_id,
-                                     expected_state=expected_state)
+        server = self._create_server(flavor_id=flavor_id, host=host,
+                                     expected_state=expected_state,
+                                     networks='none')
 
         return server
 
@@ -167,7 +173,7 @@ class VTPMServersTest(base.ServersTestBase):
 
     def _create_server_without_vtpm(self):
         # use the default flavor (i.e. one without vTPM extra specs)
-        return self._create_server()
+        return self._create_server(networks='none')
 
     def assertInstanceHasSecret(self, server, secret_security=None,
                                 confirmed=False):
@@ -368,6 +374,199 @@ class VTPMServersTest(base.ServersTestBase):
             instance.system_metadata['vtpm_secret_uuid']]
         self.assertTrue(secret._ephemeral)
         self.assertTrue(secret._private)
+
+    def test_live_migrate_legacy_server_secret_security_host_rejected(self):
+        """Test the behavior of the API when a legacy server is unconfirmed
+
+        A legacy server that has had a default secret security policy set in
+        its system metadata but is still unconfirmed by the user should not be
+        allowed to live migrate.
+        """
+        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.start_compute(hostname='tpm-host')
+
+        # Mock out _set_tpm_secret_security() to fake a legacy instance that
+        # we'll then migrate by restarting nova-compute.
+        compute = self.computes['tpm-host']
+        server = self._create_legacy_server_with_vtpm(compute)
+
+        # Now restart nova-compute without the mock, testing that we migrate
+        # the instance correctly.
+        self.restart_compute_service(hostname='tpm-host')
+
+        self._assert_legacy_server_migrated_secret_security(server)
+
+        ex = self.assertRaises(
+            client.OpenStackApiException, self._live_migrate, server)
+        self.assertEqual(400, ex.response.status_code)
+        self.assertIn(
+            "Operation 'live-migration' not supported for vTPM-enabled "
+            "instance", str(ex))
+
+    def test_live_migrate_server_secret_security_host_to_old(self):
+        """Test behavior when a new server tries to migrate to an old compute
+
+        We will simulate this by starting one compute without any
+        supported_tpm_secret_security to represent an old compute node and try
+        to live migrate to it.
+
+        The attempt should fail with NoValidHost.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.flags(supported_tpm_secret_security=[], group='libvirt')
+        self.start_compute(hostname='dest')
+
+        server = self._create_server_with_vtpm(secret_security='host',
+                                               host='src')
+
+        self._live_migrate(server, migration_expected_state='error')
+
+        # Live migration attempt should have failed with NoValidHost because
+        # no other host is advertising the
+        # COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST trait.
+        event = self._wait_for_instance_action_event(
+            server, 'live-migration', 'conductor_live_migrate_instance',
+            'Error')
+        self.assertIn('NoValidHost', event['traceback'])
+
+    def test_live_migrate_host_server_secret_security_host_to_old(self):
+        """Test behavior when a new server tries to migrate to an old compute
+
+        This will request a destination host for live migration.
+
+        We will simulate this by starting one compute without any
+        supported_tpm_secret_security to represent an old compute node and try
+        to live migrate to it.
+
+        The attempt should fail with NoValidHost.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.flags(supported_tpm_secret_security=[], group='libvirt')
+        self.start_compute(hostname='dest')
+
+        server = self._create_server_with_vtpm(secret_security='host',
+                                               host='src')
+
+        self._live_migrate(
+            server, migration_expected_state='error', host='dest')
+
+        # Live migration attempt should have failed with NoValidHost because
+        # no other host is advertising the
+        # COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST trait.
+        event = self._wait_for_instance_action_event(
+            server, 'live-migration', 'conductor_live_migrate_instance',
+            'Error')
+        self.assertIn('NoValidHost', event['traceback'])
+
+    def test_live_migrate_host_force_server_secret_security_host_to_old(self):
+        """Test behavior when a new server tries to migrate to an old compute
+
+        This will request a destination host for live migration and force=True
+        by using an older microversion 2.30.
+
+        We will simulate this by starting one compute without any
+        supported_tpm_secret_security to represent an old compute node and try
+        to live migrate to it.
+
+        This will go through because it bypasses the scheduler entirely.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.flags(supported_tpm_secret_security=[], group='libvirt')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(secret_security='host',
+                                                    host='src')
+
+        # FIXME(melwitt): Is this reason enough to do a service version bump
+        # and disallow all vTPM live migration until the minimum service
+        # version in the deployment is new enough? Or some subset of live
+        # migration until the minimum service version is met?
+        with utils.temporary_mutation(self.api, microversion='2.30'):
+            self.api.post_server_action(
+                self.server['id'],
+                {'os-migrateLive': {'host': 'dest',
+                                    'block_migration': 'auto',
+                                    'force': 'True'}})
+            self._wait_for_migration_status(self.server, ['completed'])
+            self._wait_for_state_change(self.server, 'ACTIVE')
+
+    def test_live_migrate_server_secret_security_host(self):
+        """Test a successful live migration of a server with 'host' security
+
+        Because we have two computes that support the 'host' secret security
+        policy, we expect the live migration to be successful.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(secret_security='host',
+                                                    host='src')
+        # We should have a secret in the key manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should also have a libvirt secret on the source host.
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        # And no libvirt secret on the destination host.
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        self._live_migrate(self.server)
+
+        # After the live migration, we should still have a secret in the key
+        # manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should have removed the libvirt secret from the source host.
+        self._assert_libvirt_secret_missing(self.src, self.server['id'])
+        # And we should have a libvirt secret on the destination host.
+        self._assert_libvirt_has_secret(self.dest, self.server['id'])
+
+    def test_live_migrate_server_secret_security_host_rollback(self):
+        """Test a failed live migration of a server with 'host' security
+
+        Simulate a failure and verify that secrets are correctly handled during
+        the rollback process.
+        """
+
+        def _migrate_stub(domain, destination, params, flags):
+            self.dest.driver._host.get_connection().createXML(
+                params['destination_xml'],
+                'fake-createXML-doesnt-care-about-flags')
+            conn = self.src.driver._host.get_connection()
+            dom = conn.lookupByUUIDString(self.server['id'])
+            dom.fail_job()
+
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(secret_security='host',
+                                                    host='src')
+        # We should have a secret in the key manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should also have a libvirt secret on the source host.
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        # And no libvirt secret on the destination host.
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
+
+        with mock.patch('nova.tests.fixtures.libvirt.Domain.migrateToURI3',
+                        _migrate_stub):
+            self._live_migrate(self.server, migration_expected_state='failed')
+
+        # After the live migration fails, we should still have a secret in the
+        # key manager service.
+        self.assertInstanceHasSecret(self.server)
+        # We should have a libvirt secret on the source host.
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        # And no libvirt secret on the destination host.
+        self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
     def test_suspend_resume_server(self):
         self.start_compute()

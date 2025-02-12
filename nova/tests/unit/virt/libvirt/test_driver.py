@@ -16050,6 +16050,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
 
         inst_ref = {'id': 'foo'}
+        mig_data = objects.LibvirtLiveMigrateData()
         cntx = context.get_admin_context()
 
         # Set up the mock expectations
@@ -16057,7 +16058,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                            return_value=bdi['block_device_mapping'])
         @mock.patch.object(drvr, '_disconnect_volume')
         def _test(_disconnect_volume, block_device_info_get_mapping):
-            drvr.post_live_migration(cntx, inst_ref, bdi)
+            drvr.post_live_migration(cntx, inst_ref, bdi, mig_data)
 
             block_device_info_get_mapping.assert_called_once_with(bdi)
             _disconnect_volume.assert_has_calls([
@@ -16074,13 +16075,14 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         vol_2_conn_info = {'data': {'volume_id': uuids.vol_2_id}}
         mock_get_bdm.return_value = [{'connection_info': vol_1_conn_info},
                                      {'connection_info': vol_2_conn_info}]
+        mig_data = objects.LibvirtLiveMigrateData()
 
         # Raise an exception with the first call to disconnect_volume
         mock_disconnect_volume.side_effect = [test.TestingException, None]
 
         drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
         drvr.post_live_migration(mock.sentinel.ctxt, mock.sentinel.instance,
-                                 mock.sentinel.bdi)
+                                 mock.sentinel.bdi, mig_data)
 
         # Assert disconnect_volume is called twice despite the exception
         mock_disconnect_volume.assert_has_calls([
