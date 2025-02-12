@@ -106,7 +106,8 @@ class MigrateServerController(wsgi.Controller):
         # 'LiveMigrationTask._check_instance_has_no_numa' check in the
         # conductor
         instance = common.get_instance(self.compute_api, context, id,
-                                       expected_attrs=['numa_topology'])
+                                       expected_attrs=['numa_topology',
+                                                       'system_metadata'])
 
         host = body["os-migrateLive"]["host"]
         if host:

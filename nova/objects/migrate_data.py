@@ -352,6 +352,18 @@ class LibvirtLiveMigrateData(LiveMigrateData):
     def is_on_shared_storage(self):
         return self.is_shared_block_storage or self.is_shared_instance_path
 
+    @property
+    def has_vtpm(self):
+        """Whether the live migration involves vTPM"""
+        return (self.obj_attr_is_set('vtpm_secret_uuid') and
+                self.obj_attr_is_set('vtpm_secret_value'))
+
+    @property
+    def has_vtpm_secret_data(self):
+        """Whether vTPM secret data has been populated"""
+        return (
+            self.has_vtpm and self.vtpm_secret_uuid and self.vtpm_secret_value)
+
 
 # TODO(gmann): HyperV virt driver has been removed in Nova 29.0.0 (OpenStack
 # 2024.1) release but we kept this object for a couple of cycle. This can be

@@ -10791,7 +10791,43 @@ class LibvirtDriver(driver.ComputeDriver):
             mdev_types = self._get_mdev_types_from_uuids(instance_mdevs.keys())
             dest_check_data.source_mdev_types = mdev_types
 
+        self._add_vtpm_secret_to_live_migrate_data(instance, dest_check_data)
+
         return dest_check_data
+
+    def _add_vtpm_secret_to_live_migrate_data(self, instance, dest_check_data):
+        has_vtpm = hardware.get_vtpm_constraint(
+                instance.flavor, instance.image_meta) is not None
+        if not has_vtpm:
+            return
+
+        security = hardware.get_tpm_secret_security_constraint(
+                instance.flavor) or 'user'
+        if security == 'host':
+            secret = self._host.find_secret('vtpm', instance.uuid)
+
+            if secret is None:
+                # If the libvirt secret is not found on this host, a hard
+                # reboot will cause the secret to be re-created and the user
+                # will be able to try to live migration again.
+                msg = _('TPM secret was not found. Try hard-rebooting the '
+                        'instance to recover.')
+                LOG.error(msg, instance=instance)
+                raise exception.VTPMSecretNotFound(msg)
+
+            dest_check_data.vtpm_secret_uuid = secret.UUIDString()
+            # Have to decode the bytes type to conform to the object's
+            # SensitiveStringField type.
+            dest_check_data.vtpm_secret_value = secret.value().decode()
+        else:
+            # If the instance has a vTPM, set the relevant fields to None in
+            # order to convey that we are actively choosing not to pass any
+            # vTPM data for the 'deployment' or 'user' security policies. (The
+            # 'user' security policy should not be able to reach this code as
+            # live migration is rejected at the API, but we set the fields
+            # anyway for completeness.)
+            dest_check_data.vtpm_secret_uuid = None
+            dest_check_data.vtpm_secret_value = None
 
     def _host_can_support_mdev_live_migration(self):
         return self._host.has_min_version(
@@ -11701,6 +11737,8 @@ class LibvirtDriver(driver.ComputeDriver):
         try:
             self.destroy(context, instance, network_info, block_device_info,
                          destroy_disks)
+            if migrate_data and migrate_data.has_vtpm:
+                self._host.delete_secret('vtpm', instance.uuid)
         finally:
             # NOTE(gcb): Failed block live migration may leave instance
             # directory at destination node, ensure it is always deleted.
@@ -11889,6 +11927,15 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('No dst_numa_info in migrate_data, '
                       'no cores to power up in pre_live_migration.')
 
+        if migrate_data.has_vtpm_secret_data:
+            self._host.create_secret(
+                'vtpm', instance.uuid,
+                # Convert the SensitiveStringField back to bytes when creating
+                # the libvirt secret.
+                password=migrate_data.vtpm_secret_value.encode(),
+                uuid=migrate_data.vtpm_secret_uuid, ephemeral=False,
+                private=False)
+
         return migrate_data
 
     def _try_fetch_image_cache(self, image, fetch_func, context, filename,
@@ -12026,6 +12073,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
     def post_live_migration(self, context, instance, block_device_info,
                             migrate_data=None):
+        if migrate_data and migrate_data.has_vtpm:
+            self._host.delete_secret('vtpm', instance.uuid)
         # NOTE(mdbooth): The block_device_info we were passed was initialized
         # with BDMs from the source host before they were updated to point to
         # the destination. We can safely use this to disconnect the source
