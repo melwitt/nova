@@ -2666,3 +2666,8 @@ class HostConflict(Exception):
 class InstanceEventTimeout(Exception):
     """A custom timeout exception to replace eventlet.timeout.Timeout."""
     pass
+
+
+class VTPMSecretNotFound(NovaException):
+    msg_fmt = _('TPM encryption secret for instance %(instance_uuid)s was not '
+                'found.')
