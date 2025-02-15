@@ -8149,6 +8149,27 @@ class LibvirtDriver(driver.ComputeDriver):
         finally:
             self._create_domain_cleanup_lxc(instance)
 
+    def _create_secret_for_vtpm(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+    ) -> ty.Tuple[ty.Any, ty.Optional[str]]:
+        secret_uuid, passphrase = crypto.ensure_vtpm_secret(context, instance)
+        security = instance.system_metadata.get('image_hw_tpm_secret_security')
+
+        kwargs = {}
+        if security == 'host':
+            # create_secret() already contains logic to default to the most
+            # secure ephemeral and private for TPM, so just specify if we
+            # don't want that.
+            kwargs = {'ephemeral': False, 'private': False}
+
+        libvirt_secret = self._host.create_secret(
+            'vtpm', instance.uuid, password=passphrase, uuid=secret_uuid,
+            **kwargs)
+
+        return libvirt_secret, security
+
     def _create_guest(
         self,
         context: nova_context.RequestContext,
@@ -8166,15 +8187,13 @@ class LibvirtDriver(driver.ComputeDriver):
         :returns guest.Guest: Created guest.
         """
         libvirt_secret = None
+        secret_security = None
         # determine whether vTPM is in use and, if so, create the secret
         if CONF.libvirt.swtpm_enabled and hardware.get_vtpm_constraint(
             instance.flavor, instance.image_meta,
         ):
-            secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+            libvirt_secret, secret_security = self._create_secret_for_vtpm(
                 context, instance)
-            libvirt_secret = self._host.create_secret(
-                'vtpm', instance.uuid, password=passphrase,
-                uuid=secret_uuid)
 
         try:
             guest = libvirt_guest.Guest.create(xml, self._host)
@@ -8187,7 +8206,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
             return guest
         finally:
-            if libvirt_secret is not None:
+            if libvirt_secret is not None and secret_security != 'host':
                 libvirt_secret.undefine()
 
     def _neutron_failed_callback(self, event_name, instance):
