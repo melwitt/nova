@@ -20471,7 +20471,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         # we should also have created the secret...
         drvr._host.create_secret.assert_called_once_with(
             'vtpm', instance.uuid, password='passphrase',
-            uuid=uuids.fake_secret)
+            uuid=uuids.fake_secret, ephemeral=True, private=True)
         # ...and undefined it after
         drvr._host.create_secret.return_value.undefine.assert_called_once()
 
@@ -20510,7 +20510,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         # we should also have created the secret...
         drvr._host.create_secret.assert_called_once_with(
             'vtpm', instance.uuid, password='passphrase',
-            uuid=uuids.fake_secret)
+            uuid=uuids.fake_secret, ephemeral=True, private=True)
         # ...and undefined it after, despite the error
         drvr._host.create_secret.return_value.undefine.assert_called_once()
 

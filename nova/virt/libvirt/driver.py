@@ -8162,15 +8162,25 @@ class LibvirtDriver(driver.ComputeDriver):
         :returns guest.Guest: Created guest.
         """
         libvirt_secret = None
+        secret_security = None
         # determine whether vTPM is in use and, if so, create the secret
         if CONF.libvirt.swtpm_enabled and hardware.get_vtpm_constraint(
             instance.flavor, instance.image_meta,
         ):
             secret_uuid, passphrase = crypto.ensure_vtpm_secret(
                 context, instance)
+            secret_security = hardware.get_tpm_secret_security_constraint(
+                instance.flavor, instance.image_meta)
+            secret_security = (secret_security or
+                               CONF.libvirt.default_tpm_secret_security)
+            ephemeral = True
+            private = True
+            if secret_security == 'host':
+                ephemeral = False
+                private = False
             libvirt_secret = self._host.create_secret(
                 'vtpm', instance.uuid, password=passphrase,
-                uuid=secret_uuid)
+                uuid=secret_uuid, ephemeral=ephemeral, private=private)
 
         try:
             guest = libvirt_guest.Guest.create(xml, self._host)
@@ -8183,7 +8193,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
             return guest
         finally:
-            if libvirt_secret is not None:
+            if libvirt_secret is not None and secret_security != 'host':
                 libvirt_secret.undefine()
 
     def _neutron_failed_callback(self, event_name, instance):
