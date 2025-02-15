@@ -1619,6 +1619,10 @@ Possible values are:
   accessed by anyone else. The Libvirt secret is private and non-persistent.
   The instance cannot be live-migrated or automatically resumed after host
   reboot.
+* 'host': The Barbican secret is owned by the instance owner and cannot be
+  accessed by anyone else. The Libvirt secret is public and persistent. It
+  can be read by anyone with sufficient access on the host. The instance can
+  be live-migrated and automatically resumed after host reboot.
 """),
 ]
 

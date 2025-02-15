@@ -193,6 +193,14 @@ class VTPMServersTest(base.ServersTestBase):
         self.assertNotIn('vtpm_secret_uuid', instance.system_metadata)
         self.assertEqual(0, len(self.key_mgr._passphrases))
 
+    def _assert_libvirt_has_secret(self, host, instance_uuid):
+        s = host.driver._host.find_secret('vtpm', instance_uuid)
+        self.assertIsNotNone(s)
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, instance_uuid)
+        secret_uuid = instance.system_metadata['vtpm_secret_uuid']
+        self.assertEqual(secret_uuid, s.UUIDString())
+
     def _assert_libvirt_had_secret(self, compute, secret_uuid):
         # This assert is for ephemeral private libvirt secrets that we
         # undefine immediately after guest creation. Examples include 'user'
@@ -201,6 +209,10 @@ class VTPMServersTest(base.ServersTestBase):
         # removed, so we can assert this.
         conn = compute.driver._host.get_connection()
         self.assertIn(secret_uuid, conn._removed_secrets)
+
+    def _assert_libvirt_secret_missing(self, host, instance_uuid):
+        s = host.driver._host.find_secret('vtpm', instance_uuid)
+        self.assertIsNone(s)
 
     def test_tpm_secret_security_user(self):
         self.flags(supported_tpm_secret_security=['user'], group='libvirt')
@@ -268,6 +280,38 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure we deleted the key now that we no longer need it
         self.assertEqual(0, len(self.key_mgr._passphrases))
+
+    def test_create_server_secret_security_host(self):
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        compute = self.start_compute()
+
+        # ensure we are reporting the correct traits
+        traits = self._get_provider_traits(self.compute_rp_uuids[compute])
+        self.assertIn('COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST', traits)
+
+        # create a server with vTPM
+        server = self._create_server_with_vtpm(secret_security='host')
+
+        # ensure our instance's system_metadata field and key manager inventory
+        # is correct
+        self.assertInstanceHasSecret(server, secret_security='host')
+
+        # ensure the libvirt secret is defined correctly
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        conn = self.computes[compute].driver._host.get_connection()
+        secret = conn._secrets[instance.system_metadata['vtpm_secret_uuid']]
+        self.assertFalse(secret._ephemeral)
+        self.assertFalse(secret._private)
+
+        # now delete the server
+        self._delete_server(server)
+
+        # ensure we deleted the key and undefined the secret now that we no
+        # longer need it
+        self.assertEqual(0, len(self.key_mgr._passphrases))
+        self.assertNotIn(conn._secrets,
+                         instance.system_metadata['vtpm_secret_uuid'])
 
     def test_suspend_resume_server(self):
         self.start_compute()
