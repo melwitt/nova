@@ -154,14 +154,31 @@ class VTPMServersTest(base.ServersTestBase):
 
         return server
 
+    def _create_legacy_server_with_vtpm(self, host):
+        with mock.patch.object(host.manager, '_set_tpm_secret_security'):
+            server = self._create_server_with_vtpm()
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
+        self.assertNotIn('provisional_tpm_secret_security',
+                         instance.system_metadata)
+        return server
+
     def _create_server_without_vtpm(self):
         # use the default flavor (i.e. one without vTPM extra specs)
         return self._create_server()
 
-    def assertInstanceHasSecret(self, server):
+    def assertInstanceHasSecret(self, server, secret_security=None,
+                                confirmed=False):
         ctx = nova_context.get_admin_context()
         instance = objects.Instance.get_by_uuid(ctx, server['id'])
         self.assertIn('vtpm_secret_uuid', instance.system_metadata)
+        if secret_security is not None:
+            key = ('image_hw_tpm_secret_security' if confirmed else
+                   'provisional_tpm_secret_security')
+            self.assertEqual(
+                secret_security, instance.system_metadata.get(key))
         self.assertEqual(1, len(self.key_mgr._passphrases))
         self.assertIn(
             instance.system_metadata['vtpm_secret_uuid'],
@@ -174,6 +191,14 @@ class VTPMServersTest(base.ServersTestBase):
         self.assertNotIn('vtpm_secret_uuid', instance.system_metadata)
         self.assertEqual(0, len(self.key_mgr._passphrases))
 
+    def _assert_libvirt_has_secret(self, host, instance_uuid):
+        s = host.driver._host.find_secret('vtpm', instance_uuid)
+        self.assertIsNotNone(s)
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, instance_uuid)
+        secret_uuid = instance.system_metadata['vtpm_secret_uuid']
+        self.assertEqual(secret_uuid, s.UUIDString())
+
     def _assert_libvirt_had_secret(self, compute, secret_uuid):
         # This assert is for ephemeral private libvirt secrets that we
         # undefine immediately after guest creation. Examples include 'user'
@@ -182,6 +207,19 @@ class VTPMServersTest(base.ServersTestBase):
         # removed, so we can assert this.
         conn = compute.driver._host.get_connection()
         self.assertIn(secret_uuid, conn._removed_secrets)
+
+    def _assert_libvirt_secret_missing(self, host, instance_uuid):
+        s = host.driver._host.find_secret('vtpm', instance_uuid)
+        self.assertIsNone(s)
+
+    def _assert_legacy_server_migrated_secret_security(self, server):
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertEqual(
+            'host',
+            instance.system_metadata['provisional_tpm_secret_security'])
+        self.assertNotIn(
+            'image_hw_tpm_secret_security', instance.system_metadata)
 
     def test_tpm_secret_security_user(self):
         self.flags(supported_tpm_secret_security=['user'], group='libvirt')
@@ -214,36 +252,21 @@ class VTPMServersTest(base.ServersTestBase):
         # Mock out _set_tpm_secret_security() to fake a legacy instance that
         # we'll then migrate by restarting nova-compute.
         compute = self.computes['tpm-host']
-        with mock.patch.object(compute.manager, '_set_tpm_secret_security'):
-            server = self._create_server_with_vtpm()
-        ctx = nova_context.get_admin_context()
-        instance = objects.Instance.get_by_uuid(ctx, server['id'])
-        self.assertNotIn('image_hw_tpm_secret_security',
-                         instance.system_metadata)
-        self.assertNotIn('provisional_tpm_secret_security',
-                         instance.system_metadata)
+        server = self._create_legacy_server_with_vtpm(compute)
 
         # Now restart nova-compute without the mock, testing that we migrate
         # the instance correctly.
         self.restart_compute_service(hostname='tpm-host')
-        instance = objects.Instance.get_by_uuid(ctx, server['id'])
-        self.assertNotIn('image_hw_tpm_secret_security',
-                         instance.system_metadata)
-        self.assertEqual(
-            'host',
-            instance.system_metadata['provisional_tpm_secret_security'])
+
+        self._assert_legacy_server_migrated_secret_security(server)
 
         # Now restart nova-compute again with a different secret security
         # policy and verify that it did not change the security policy of the
         # instance.
         self.flags(default_tpm_secret_security='user', group='libvirt')
         self.restart_compute_service(hostname='tpm-host')
-        instance = objects.Instance.get_by_uuid(ctx, server['id'])
-        self.assertNotIn('image_hw_tpm_secret_security',
-                         instance.system_metadata)
-        self.assertEqual(
-            'host',
-            instance.system_metadata['provisional_tpm_secret_security'])
+
+        self._assert_legacy_server_migrated_secret_security(server)
 
     def test_create_server(self):
         compute = self.start_compute()
@@ -265,6 +288,86 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure we deleted the key now that we no longer need it
         self.assertEqual(0, len(self.key_mgr._passphrases))
+
+    def test_create_server_secret_security_host(self):
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        compute = self.start_compute()
+
+        # ensure we are reporting the correct traits
+        traits = self._get_provider_traits(self.compute_rp_uuids[compute])
+        self.assertIn('COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST', traits)
+
+        # create a server with vTPM
+        server = self._create_server_with_vtpm(secret_security='host')
+
+        # ensure our instance's system_metadata field and key manager inventory
+        # is correct
+        self.assertInstanceHasSecret(server, secret_security='host',
+                                     confirmed=True)
+
+        # ensure the libvirt secret is defined correctly
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        conn = self.computes[compute].driver._host.get_connection()
+        secret = conn._secrets[instance.system_metadata['vtpm_secret_uuid']]
+        self.assertFalse(secret._ephemeral)
+        self.assertFalse(secret._private)
+
+        # now delete the server
+        self._delete_server(server)
+
+        # ensure we deleted the key and undefined the secret now that we no
+        # longer need it
+        self.assertEqual(0, len(self.key_mgr._passphrases))
+        self.assertNotIn(conn._secrets,
+                         instance.system_metadata['vtpm_secret_uuid'])
+
+    def test_create_legacy_server_secret_security_host(self):
+        """Test behavior of guest creation when secret security is unconfirmed
+
+        When a legacy instance has been migrated but has not yet been
+        confirmed, it will have a secret security policy recorded in its system
+        metadata but we should not act on that policy until the policy has been
+        confirmed. Secret security should behave as legacy if unconfirmed.
+        """
+        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.start_compute(hostname='tpm-host')
+
+        # Mock out _set_tpm_secret_security() to fake a legacy instance that
+        # we'll then migrate by restarting nova-compute.
+        compute = self.computes['tpm-host']
+        server = self._create_legacy_server_with_vtpm(compute)
+
+        # Now restart nova-compute without the mock, testing that we migrate
+        # the instance correctly.
+        self.restart_compute_service(hostname='tpm-host')
+
+        self._assert_legacy_server_migrated_secret_security(server)
+
+        self.assertInstanceHasSecret(server, secret_security='host')
+
+        # The server should not have a libvirt secret because it should have
+        # been undefined after guest creation.
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        conn = compute.driver._host.get_connection()
+        secret = conn._removed_secrets[
+            instance.system_metadata['vtpm_secret_uuid']]
+        self.assertTrue(secret._ephemeral)
+        self.assertTrue(secret._private)
+
+        # Suspend and resume the server to force guest creation.
+        self._suspend_server(server)
+        self._resume_server(server)
+
+        # The server should still not have a libvirt secret i.e. the 'host' or
+        # 'deployment' secret security policy should not have been acted upon
+        # because it is not yet confirmed.
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        secret = conn._removed_secrets[
+            instance.system_metadata['vtpm_secret_uuid']]
+        self.assertTrue(secret._ephemeral)
+        self.assertTrue(secret._private)
 
     def test_suspend_resume_server(self):
         self.start_compute()
