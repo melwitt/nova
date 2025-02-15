@@ -13,6 +13,7 @@
 import os_traits as ot
 from unittest import mock
 
+import ddt
 from oslo_utils.fixture import uuidsentinel as uuids
 from oslo_utils import timeutils
 
@@ -25,6 +26,7 @@ from nova import test
 from nova.tests.unit import utils
 
 
+@ddt.ddt
 class TestRequestFilter(test.NoDBTestCase):
     def setUp(self):
         super(TestRequestFilter, self).setUp()
@@ -747,7 +749,11 @@ class TestRequestFilter(test.NoDBTestCase):
             reqspec.root_required)
         self.assertEqual(set(), reqspec.root_forbidden)
 
-    def test_tpm_secret_security_filter(self):
+    @ddt.data(
+        ('user', ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_USER),
+        ('host', ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST))
+    @ddt.unpack
+    def test_tpm_secret_security_filter(self, secret_security, trait):
         # First ensure that tpm_secret_security_filter is included
         self.assertIn(request_filter.tpm_secret_security_filter,
                       request_filter.ALL_REQUEST_FILTERS)
@@ -757,16 +763,14 @@ class TestRequestFilter(test.NoDBTestCase):
                 extra_specs={
                     'hw:tpm_model': 'tpm-tis',
                     'hw:tpm_version': '1.2',
-                    'hw:tpm_secret_security': 'user',
+                    'hw:tpm_secret_security': secret_security,
                 }),
             image=objects.ImageMeta(properties=objects.ImageMetaProps()))
         self.assertEqual(set(), reqspec.root_required)
         self.assertEqual(set(), reqspec.root_forbidden)
         self.assertTrue(
             request_filter.tpm_secret_security_filter(self.context, reqspec))
-        self.assertEqual(
-            {ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_USER},
-            reqspec.root_required)
+        self.assertEqual({trait}, reqspec.root_required)
         self.assertEqual(set(), reqspec.root_forbidden)
 
     def test_tpm_secret_security_filter_skip(self):
