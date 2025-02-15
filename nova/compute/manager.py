@@ -2675,6 +2675,7 @@ class ComputeManager(manager.Manager):
                         accel_uuids) as resources:
                     instance.vm_state = vm_states.BUILDING
                     instance.task_state = task_states.SPAWNING
+                    self._set_tpm_secret_security(instance, confirmed=True)
                     # NOTE(JoshNang) This also saves the changes to the
                     # instance from _allocate_network_async, as they aren't
                     # saved in that function to prevent races.
