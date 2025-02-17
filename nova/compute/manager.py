@@ -950,6 +950,13 @@ class ComputeManager(manager.Manager):
                 self.host, action=fields.NotificationAction.DELETE,
                 phase=fields.NotificationPhase.END, bdms=bdms)
 
+    def _complete_deletion_vtpm(self, context, instance):
+        use_context = context
+        if hardware.get_tpm_secret_security_constraint(
+                instance.flavor) == 'deployment':
+            use_context = nova.context.get_service_user_context()
+        crypto.delete_vtpm_secret(use_context, instance)
+
     def _complete_deletion(self, context, instance):
         self._update_resource_tracker(context, instance)
 
@@ -965,7 +972,7 @@ class ComputeManager(manager.Manager):
         self._delete_scheduler_instance_info(context, instance.uuid)
 
         # Delete the vTPM secret in the key manager service if needed.
-        crypto.delete_vtpm_secret(context, instance)
+        self._complete_deletion_vtpm(context, instance)
 
     def _validate_pinning_configuration(self, instances):
         if not self.driver.capabilities.get('supports_pcpus', False):

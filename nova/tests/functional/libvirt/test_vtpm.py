@@ -295,6 +295,40 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertNotIn(instance.system_metadata['vtpm_secret_uuid'],
                          conn._secrets)
 
+    def test_create_server_secret_security_deployment(self):
+        self.flags(
+            supported_tpm_secret_security=['deployment'], group='libvirt')
+        self.start_compute(hostname='tpm-host')
+        compute = self.computes['tpm-host']
+
+        # ensure we are reporting the correct traits
+        traits = self._get_provider_traits(self.compute_rp_uuids['tpm-host'])
+        self.assertIn(
+            'COMPUTE_SECURITY_TPM_SECRET_SECURITY_DEPLOYMENT', traits)
+
+        # create a server with vTPM
+        server = self._create_server_with_vtpm(secret_security='deployment')
+
+        # ensure our instance's system_metadata field and key manager inventory
+        # is correct
+        self.assertInstanceHasSecret(server)
+
+        # ensure the libvirt secret is defined correctly
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self._assert_libvirt_had_secret(
+            compute, instance.system_metadata['vtpm_secret_uuid'])
+
+        # now delete the server
+        self._delete_server(server)
+
+        # ensure we deleted the key and undefined the secret now that we no
+        # longer need it
+        self.assertEqual(0, len(self.key_mgr._passphrases))
+        conn = compute.driver._host.get_connection()
+        self.assertNotIn(conn._secrets,
+                         instance.system_metadata['vtpm_secret_uuid'])
+
     def test_live_migrate_server_secret_security_host_to_old(self):
         """Test behavior when a new server tries to migrate to an old compute
 
