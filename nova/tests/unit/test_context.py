@@ -178,6 +178,12 @@ class ContextTestCase(test.NoDBTestCase):
         context.get_admin_context()
         self.assertIs(o_context.get_current(), ctx1)
 
+    @mock.patch('keystoneauth1.loading.load_auth_from_conf_options')
+    def test_get_service_user_context(self, mock_load_auth):
+        ctxt = context.get_service_user_context()
+        mock_load_auth.assert_called_once_with(context.CONF, 'service_user')
+        self.assertEqual(ctxt.user_auth_plugin, mock_load_auth.return_value)
+
     def test_convert_from_rc_to_dict(self):
         ctx = context.RequestContext(
             111, 222, request_id='req-679033b7-1755-4929-bf85-eb3bfaef7e0b',
