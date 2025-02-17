@@ -1760,7 +1760,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
             self, reclaim_instance_interval, mock_delete_vtpm,
             mock_delete_alloc):
         self.flags(reclaim_instance_interval=reclaim_instance_interval)
-        instance = objects.Instance(uuid=uuids.instance)
+        instance = objects.Instance(uuid=uuids.instance,
+                                    flavor=objects.Flavor())
 
         with mock.patch.multiple(
                 self.compute,

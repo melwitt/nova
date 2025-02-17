@@ -751,7 +751,8 @@ class TestRequestFilter(test.NoDBTestCase):
 
     @ddt.data(
         ('user', ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_USER),
-        ('host', ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST))
+        ('host', ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST),
+        ('deployment', ot.COMPUTE_SECURITY_TPM_SECRET_SECURITY_DEPLOYMENT))
     @ddt.unpack
     def test_tpm_secret_security_filter(self, secret_security, trait):
         # First ensure that tpm_secret_security_filter is included
