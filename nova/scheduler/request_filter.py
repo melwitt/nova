@@ -457,6 +457,9 @@ def tpm_secret_security_filter(
     if security == 'host':
         request_spec.root_required.add(
             os_traits.COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST)
+    if security == 'deployment':
+        request_spec.root_required.add(
+            os_traits.COMPUTE_SECURITY_TPM_SECRET_SECURITY_DEPLOYMENT)
 
     return True
 
