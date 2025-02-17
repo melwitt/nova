@@ -1623,6 +1623,9 @@ Possible values are:
   accessed by anyone else. The Libvirt secret is public and persistent. It
   can be read by anyone with sufficient access on the host. The instance can
   be live-migrated and automatically resumed after host reboot.
+* 'deployment': The Barbican secret is owned by the Nova service user. The
+  Libvirt secret is private and non-persistent. The instance can be
+  live-migrated and resumed automatically after host reboot.
 """),
 ]
 
