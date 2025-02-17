@@ -17,6 +17,7 @@ from unittest import mock
 
 from castellan.common.objects import passphrase
 from castellan.key_manager import key_manager
+import ddt
 from oslo_log import log as logging
 from oslo_utils import uuidutils
 
@@ -121,6 +122,7 @@ class FakeKeyManager(key_manager.KeyManager):
         )
 
 
+@ddt.ddt
 class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
     # many move operations are admin-only
@@ -328,7 +330,45 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertNotIn(conn._secrets,
                          instance.system_metadata['vtpm_secret_uuid'])
 
-    def test_create_legacy_server_secret_security_host(self):
+    def test_create_server_secret_security_deployment(self):
+        self.flags(
+            supported_tpm_secret_security=['deployment'], group='libvirt')
+        self.start_compute(hostname='tpm-host')
+        compute = self.computes['tpm-host']
+
+        # ensure we are reporting the correct traits
+        traits = self._get_provider_traits(self.compute_rp_uuids['tpm-host'])
+        self.assertIn(
+            'COMPUTE_SECURITY_TPM_SECRET_SECURITY_DEPLOYMENT', traits)
+
+        # create a server with vTPM
+        server = self._create_server_with_vtpm(secret_security='deployment')
+
+        # ensure our instance's system_metadata field and key manager inventory
+        # is correct
+        self.assertInstanceHasSecret(server, secret_security='deployment',
+                                     confirmed='True')
+
+        # ensure the libvirt secret is defined correctly
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self._assert_libvirt_had_secret(
+            compute, instance.system_metadata['vtpm_secret_uuid'])
+
+        # now delete the server
+        self._delete_server(server)
+
+        # ensure we deleted the key and undefined the secret now that we no
+        # longer need it
+        self.assertEqual(0, len(self.key_mgr._passphrases))
+        conn = compute.driver._host.get_connection()
+        self.assertNotIn(conn._secrets,
+                         instance.system_metadata['vtpm_secret_uuid'])
+
+    @mock.patch('nova.context.get_service_user_context')
+    @ddt.data('host', 'deployment')
+    def test_create_legacy_server_secret_security_host_deployment(
+            self, secret_security, mock_svc_user_context):
         """Test behavior of guest creation when secret security is unconfirmed
 
         When a legacy instance has been migrated but has not yet been
@@ -336,7 +376,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         metadata but we should not act on that policy until the policy has been
         confirmed. Secret security should behave as legacy if unconfirmed.
         """
-        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.flags(
+            default_tpm_secret_security=secret_security, group='libvirt')
         self.start_compute(hostname='tpm-host')
 
         # Mock out _set_tpm_secret_security() to fake a legacy instance that
@@ -348,10 +389,11 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # the instance correctly.
         self.restart_compute_service(hostname='tpm-host')
 
-        self._assert_legacy_server_migrated_secret_security(server, 'host')
+        self._assert_legacy_server_migrated_secret_security(
+            server, secret_security)
 
-        secret_uuid = self.assertInstanceHasSecret(server,
-                                                   secret_security='host')
+        secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security=secret_security)
 
         # The server should not have a libvirt secret because it should have
         # been undefined after guest creation.
@@ -382,6 +424,9 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
             instance.system_metadata['vtpm_secret_uuid']]
         self.assertTrue(secret._ephemeral)
         self.assertTrue(secret._private)
+
+        # The service user context should not have been retrieved at any point.
+        mock_svc_user_context.assert_not_called()
 
     def test_live_migrate_legacy_server_secret_security_host_rejected(self):
         """Test the behavior of the API when a legacy server is unconfirmed

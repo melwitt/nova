@@ -16722,6 +16722,77 @@ class LibvirtConnTestCase(test.NoDBTestCase,
                                return_value=mock_connection):
             drvr.spawn(self.context, instance, image_meta, [], None, {})
 
+    @mock.patch('nova.context.get_service_user_context')
+    @mock.patch('nova.crypto.ensure_vtpm_secret')
+    @ddt.data(False, True)
+    def test_create_secret_for_vtpm_security_deployment(
+            self, confirmed, mock_ensure_secret, mock_get_ctxt):
+        # Test that vTPM secret security 'deployment' will use the Nova service
+        # user auth to create the secret in the key manager service.
+        mock_ensure_secret.return_value = uuids.secret, mock.sentinel.password
+        flavor = flavor = objects.Flavor(
+            extra_specs={'hw:tpm_secret_security': 'deployment'})
+
+        if confirmed:
+            prefix = 'image_hw'
+        else:
+            prefix = 'provisional'
+
+        system_metadata = {prefix + '_tpm_secret_security': 'deployment'}
+
+        instance = objects.Instance(
+            uuid=uuids.instance, image_ref=uuids.image, flavor=flavor,
+            system_metadata=system_metadata)
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        drvr._create_secret_for_vtpm(self.context, instance)
+
+        if confirmed:
+            # If the instance secret security is confirmed, we should use the
+            # service user context.
+            mock_get_ctxt.assert_called_once_with()
+            mock_ensure_secret.assert_called_once_with(
+                mock_get_ctxt.return_value, instance)
+        else:
+            # Otherwise, we should use the normal user's context.
+            mock_get_ctxt.assert_not_called()
+            mock_ensure_secret.assert_called_once_with(self.context, instance)
+
+    @mock.patch('nova.context.get_service_user_context')
+    @mock.patch('nova.crypto.ensure_vtpm_secret')
+    @ddt.data(False, True)
+    def test_create_secret_for_vtpm_security_deployment_default(
+            self, confirmed, mock_ensure_secret, mock_get_ctxt):
+        # Test that vTPM secret security 'deployment' will use the Nova service
+        # user auth to create the secret in the key manager service.
+        self.flags(default_tpm_secret_security='deployment', group='libvirt')
+        mock_ensure_secret.return_value = uuids.secret, mock.sentinel.password
+
+        if confirmed:
+            prefix = 'image_hw'
+        else:
+            prefix = 'provisional'
+
+        system_metadata = {prefix + '_tpm_secret_security': 'deployment'}
+
+        instance = objects.Instance(
+            uuid=uuids.instance, image_ref=uuids.image,
+            flavor=objects.Flavor(), system_metadata=system_metadata)
+
+        drvr = libvirt_driver.LibvirtDriver(fake.FakeVirtAPI(), False)
+        drvr._create_secret_for_vtpm(self.context, instance)
+
+        if confirmed:
+            # If the instance secret security is confirmed, we should use the
+            # service user context.
+            mock_get_ctxt.assert_called_once_with()
+            mock_ensure_secret.assert_called_once_with(
+                mock_get_ctxt.return_value, instance)
+        else:
+            # Otherwise, we should use the normal user's context.
+            mock_get_ctxt.assert_not_called()
+            mock_ensure_secret.assert_called_once_with(self.context, instance)
+
     @mock.patch.object(libvirt_driver.LibvirtDriver,
                        '_register_undefined_instance_details',
                        new=mock.Mock())
@@ -16743,6 +16814,7 @@ class LibvirtConnTestCase(test.NoDBTestCase,
         self.flags(swtpm_enabled=True, group='libvirt')
         self.useFixture(nova_fixtures.LibvirtImageBackendFixture())
 
+        mock_ensure_vtpm.return_value = uuids.secret, mock.sentinel.password
         mock_get_info.return_value = hardware.InstanceInfo(
             state=power_state.RUNNING)
 
