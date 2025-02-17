@@ -42,6 +42,7 @@ import paramiko
 import nova.conf
 from nova import context as nova_context
 from nova import exception
+from nova import hardware
 from nova.i18n import _
 from nova import objects
 from nova import utils
@@ -186,13 +187,19 @@ def ensure_vtpm_secret(
         the instance's system metadata but could not be found in the key
         manager service.
     """
+    security = hardware.get_tpm_secret_security_constraint(instance.flavor,
+                                                           instance.image_meta)
+    security = security or CONF.libvirt.default_tpm_secret_security
+    service_auth = security == 'deployment'
+
     key_mgr = _get_key_manager()
 
     secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
     if secret_uuid is not None:
         # Try to retrieve the secret from the key manager
         try:
-            secret = key_mgr.get(context, secret_uuid)
+            secret = key_mgr.get(context, secret_uuid,
+                                 service_auth=service_auth)
             # assert secret_uuid == secret.id ?
             LOG.debug(
                 "Found existing vTPM secret with UUID %s.",
@@ -213,7 +220,7 @@ def ensure_vtpm_secret(
     # Castellan ManagedObject
     cmo = passphrase.Passphrase(
         secret, name="vTPM secret for instance %s" % instance.uuid)
-    secret_uuid = key_mgr.store(context, cmo)
+    secret_uuid = key_mgr.store(context, cmo, service_auth=service_auth)
     LOG.debug("Created vTPM secret with UUID %s",
               secret_uuid, instance=instance)
 
@@ -245,9 +252,14 @@ def delete_vtpm_secret(
     if not secret_uuid:
         return
 
+    security = hardware.get_tpm_secret_security_constraint(instance.flavor,
+                                                           instance.image_meta)
+    security = security or CONF.libvirt.default_tpm_secret_security
+    service_auth = security == 'deployment'
+
     key_mgr = _get_key_manager()
     try:
-        key_mgr.delete(context, secret_uuid)
+        key_mgr.delete(context, secret_uuid, service_auth=service_auth)
         LOG.debug("Deleted vTPM secret with UUID %s",
                   secret_uuid, instance=instance)
     except castellan_exception.ManagedObjectNotFoundError:
