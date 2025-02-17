@@ -213,6 +213,7 @@ def ensure_vtpm_secret(
     # Castellan ManagedObject
     cmo = passphrase.Passphrase(
         secret, name="vTPM secret for instance %s" % instance.uuid)
+
     secret_uuid = key_mgr.store(context, cmo)
     LOG.debug("Created vTPM secret with UUID %s",
               secret_uuid, instance=instance)
