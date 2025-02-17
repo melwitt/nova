@@ -34,6 +34,7 @@ from cryptography.hazmat.primitives.asymmetric import padding
 from cryptography.hazmat.primitives import hashes
 from cryptography.hazmat.primitives import serialization
 from cryptography import x509
+from keystoneauth1 import loading as ks_loading
 from oslo_concurrency import processutils
 from oslo_log import log as logging
 from oslo_serialization import base64 as oslo_base64
@@ -46,6 +47,7 @@ from nova.i18n import _
 from nova import objects
 from nova import utils
 from nova.virt import block_device as driver_block_device
+from nova.virt import hardware
 
 
 LOG = logging.getLogger(__name__)
@@ -64,6 +66,12 @@ def _get_key_manager():
     if _KEYMGR is None:
         _KEYMGR = key_manager.API(configuration=CONF)
     return _KEYMGR
+
+
+def _get_service_user_context():
+    auth_plugin = ks_loading.load_auth_from_conf_options(
+        CONF, nova.conf.service_token.SERVICE_USER_GROUP)
+    return nova_context.RequestContext(user_auth_plugin=auth_plugin)
 
 
 def generate_fingerprint(public_key: str) -> str:
@@ -190,6 +198,11 @@ def ensure_vtpm_secret(
 
     secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
     if secret_uuid is not None:
+        security = instance.system_metadata.get('image_tpm_secret_security')
+        if security == 'deployment':
+            # If the instance is using 'deployment' secret security, replace
+            # the context with that of the Nova service user.
+            context = _get_service_user_context()
         # Try to retrieve the secret from the key manager
         try:
             secret = key_mgr.get(context, secret_uuid)
@@ -213,6 +226,15 @@ def ensure_vtpm_secret(
     # Castellan ManagedObject
     cmo = passphrase.Passphrase(
         secret, name="vTPM secret for instance %s" % instance.uuid)
+
+    # If the instance is using 'deployment' secret security, replace the
+    # context with that of the Nova service user.
+    security = hardware.get_tpm_secret_security_constraint(instance.flavor,
+                                                           instance.image_meta)
+    security = security or CONF.libvirt.default_tpm_secret_security
+    if security == 'deployment':
+        context = _get_service_user_context()
+
     secret_uuid = key_mgr.store(context, cmo)
     LOG.debug("Created vTPM secret with UUID %s",
               secret_uuid, instance=instance)
@@ -244,6 +266,12 @@ def delete_vtpm_secret(
     secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
     if not secret_uuid:
         return
+
+    # If the instance is using 'deployment' secret security, replace the
+    # context with that of the Nova service user's.
+    security = instance.system_metadata.get('image_tpm_secret_security')
+    if security == 'deployment':
+        context = _get_service_user_context()
 
     key_mgr = _get_key_manager()
     try:
