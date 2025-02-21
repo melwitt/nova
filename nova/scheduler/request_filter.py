@@ -462,6 +462,18 @@ def virtio_sound_filter(
 
     request_spec.root_required.add(os_traits.COMPUTE_SOUND_MODEL_VIRTIO)
     LOG.debug('virtio_sound_filter added trait COMPUTE_SOUND_MODEL_VIRTIO')
+
+@trace_request_filter
+def tpm_secret_security_filter(
+    ctxt: nova_context.RequestContext,
+    request_spec: 'objects.RequestSpec'
+) -> bool:
+    security = hardware.get_tpm_secret_security_constraint(request_spec.flavor,
+                                                           request_spec.image)
+    if security == 'user':
+        request_spec.root_required.add(
+            os_traits.COMPUTE_SECURITY_TPM_SECRET_SECURITY_USER)
+
     return True
 
 
@@ -477,7 +489,8 @@ ALL_REQUEST_FILTERS = [
     routed_networks_filter,
     remote_managed_ports_filter,
     ephemeral_encryption_filter,
-    virtio_sound_filter
+    virtio_sound_filter,
+    tpm_secret_security_filter,
 ]
 
 

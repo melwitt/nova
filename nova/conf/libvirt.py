@@ -1600,7 +1600,7 @@ Related options:
 * ``swtpm_user`` must also be set.
 """),
     cfg.ListOpt('supported_tpm_secret_security',
-        default=[],
+        default=['user'],
         help="""
 The list of TPM security policies supported by this compute host. If a value is
 absent, it is not supported by this host, and any instance that requests it
