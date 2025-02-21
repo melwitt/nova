@@ -1064,6 +1064,48 @@ class ComputeManager(manager.Manager):
                 )
                 raise exception.InvalidConfiguration(msg)
 
+    def _set_tpm_secret_security(self, instance: 'objects.Instance') -> bool:
+        """Set TPM secret security attributes on an instance.
+
+        If the instance has a TPM device, set a TPM secret security policy,
+        either by the admin in the flavor or the user in the image.
+
+        NOTE: The caller is responsible for saving the instance afterwards if
+        desired.
+
+        :param instance: The instance object.
+
+        :returns: True if TPM security metadata was updated, False otherwise
+        """
+        # Check if the instance has a TPM from the tpm_version and tpm_model
+        # extra specs or image properties. If the instance has no TPM, we don't
+        # need to do anything.
+        if not hardware.get_vtpm_constraint(instance.flavor,
+                                            instance.image_meta):
+            return False
+
+        # If the instance already has a secret security policy set, there is
+        # nothing to do.
+        if 'image_hw_tpm_secret_security' in instance.system_metadata:
+            return False
+
+        # If the instance has a TPM, check if a secret security policy has
+        # been specified from the tpm_secret_security the extra spec or
+        # image property.
+        security = hardware.get_tpm_secret_security_constraint(
+            instance.flavor, instance.image_meta)
+        # If one was not specified, do not migrate legacy instances.
+        # Only new instances with explicit security settings are supported.
+        if not security:
+            return False
+
+        # Set the explicitly specified security in the instance system
+        # metadata.
+        updates = {'image_hw_tpm_secret_security': security}
+
+        instance.system_metadata.update(updates)
+        return True
+
     def _reset_live_migration(self, context, instance):
         migration = None
         try:
@@ -1681,7 +1723,8 @@ class ComputeManager(manager.Manager):
 
         instances = objects.InstanceList.get_by_host(
             context, self.host,
-            expected_attrs=['info_cache', 'metadata', 'numa_topology'])
+            expected_attrs=['info_cache', 'metadata', 'numa_topology',
+                            'system_metadata'])
 
         self.init_virt_events()
 
@@ -2667,6 +2710,7 @@ class ComputeManager(manager.Manager):
                         accel_uuids) as resources:
                     instance.vm_state = vm_states.BUILDING
                     instance.task_state = task_states.SPAWNING
+                    self._set_tpm_secret_security(instance)
                     # NOTE(JoshNang) This also saves the changes to the
                     # instance from _allocate_network_async, as they aren't
                     # saved in that function to prevent races.
