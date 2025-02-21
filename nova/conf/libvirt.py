@@ -1599,6 +1599,42 @@ Related options:
 
 * ``swtpm_user`` must also be set.
 """),
+    cfg.ListOpt('supported_tpm_secret_security',
+        default=[],
+        help="""
+The list of TPM security policies supported by this compute host. If a value is
+absent, it is not supported by this host, and any instance that requests it
+will not be scheduled on this host. For the possible values and their meaning,
+see ``[libvirt] default_tpm_secret_security``.
+
+Related options:
+
+* ``[libvirt] default_tpm_secret_security`` for the possible values and their
+  meaning.
+"""),
+    cfg.StrOpt('default_tpm_secret_security',
+        choices=[
+            ('user', 'The Barbican secret is owned by the instance owner and '
+                     'cannot be accessed by anyone else. The Libvirt secret '
+                     'is private and non-persistent. The instance cannot be '
+                     'live-migrated or automatically resumed after host '
+                     'reboot.'),
+            ('host', 'The Barbican secret is owned by the instance owner and '
+                     'cannot be accessed by anyone else. The Libvirt secret '
+                     'is public and persistent. It can be read by anyone with '
+                     'sufficient access on the chost. The instance can be '
+                     'live-migrated and automatically resumed after host '
+                     'reboot.'),
+            ('deployment', 'The Barbican secret is owned by the Nova service '
+                           'user. The Libvirt secret is private and '
+                           'non-persistent. The instance can be live-migrated '
+                           'and resumed automatically after host reboot.'),
+        ],
+        default='user',
+        help="""
+The default TPM secret security policy to apply to all instances on this host
+if nothing is set in the instance's flavor or image properties.
+"""),
 ]
 
 libvirt_cpu_mgmt_opts = [
