@@ -5926,6 +5926,50 @@ class VTPMConfigTest(test.NoDBTestCase):
                 expected, hw.get_vtpm_constraint(flavor, image_meta),
             )
 
+    @ddt.unpack
+    @ddt.data(
+        # pass: no configuration
+        (None, None, None),
+        # pass: flavor-only
+        ('user', None, 'user'),
+        ('host', None, 'host'),
+        ('deployment', None, 'deployment'),
+        # pass: image-only
+        (None, 'user', 'user'),
+        (None, 'host', 'host'),
+        (None, 'deployment', 'deployment'),
+        # pass: identical flavor and image
+        ('user', 'user', 'user'),
+        ('host', 'host', 'host'),
+        ('deployment', 'deployment', 'deployment'),
+        # fail: mismatched image and flavor
+        ('user', 'host', exception.FlavorImageConflict),
+    )
+    def test_get_tpm_secret_security_constraint(self, flavor_security,
+                                                image_security, expected):
+        extra_specs = {}
+
+        if flavor_security:
+            extra_specs['hw:tpm_secret_security'] = flavor_security
+
+        image_meta_props = {}
+
+        if image_security:
+            image_meta_props['hw_tpm_secret_security'] = image_security
+
+        flavor = objects.Flavor(
+            name='foo', vcpus=1, memory_mb=1024, extra_specs=extra_specs)
+        image_meta = objects.ImageMeta.from_dict(
+            {'name': 'bar', 'properties': image_meta_props})
+
+        if isinstance(expected, type) and issubclass(expected, Exception):
+            self.assertRaises(expected, hw.get_tpm_secret_security_constraint,
+                              flavor, image_meta)
+        else:
+            self.assertEqual(
+                expected,
+                hw.get_tpm_secret_security_constraint(flavor, image_meta))
+
 
 @ddt.ddt
 class SecureBootPolicyTest(test.NoDBTestCase):
