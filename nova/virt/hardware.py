@@ -2063,6 +2063,14 @@ def get_vtpm_constraint(
     return VTPMConfig(version, model)
 
 
+def get_tpm_secret_security_constraint(
+    flavor: 'objects.Flavor',
+    image_meta: 'objects.ImageMeta',
+) -> ty.Optional[str]:
+    return _get_unique_flavor_image_meta(
+        'tpm_secret_security', flavor, image_meta)
+
+
 def get_secure_boot_constraint(
     flavor: 'objects.Flavor',
     image_meta: 'objects.ImageMeta',
