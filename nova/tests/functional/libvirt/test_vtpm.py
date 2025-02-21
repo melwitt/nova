@@ -144,31 +144,109 @@ class VTPMServersTest(base.ServersTestBase):
 
         self.key_mgr = crypto._get_key_manager()
 
-    def _create_server_with_vtpm(self):
+    def _create_server_with_vtpm(self, secret_security=None,
+                                 expected_state='ACTIVE'):
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
+        if secret_security:
+            extra_specs.update({'hw:tpm_secret_security': secret_security})
         flavor_id = self._create_flavor(extra_spec=extra_specs)
-        server = self._create_server(flavor_id=flavor_id)
+        server = self._create_server(flavor_id=flavor_id,
+                                     expected_state=expected_state)
 
+        return server
+
+    def _create_legacy_server_with_vtpm(self, host):
+        with mock.patch.object(host.manager, '_set_tpm_secret_security'):
+            server = self._create_server_with_vtpm()
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
         return server
 
     def _create_server_without_vtpm(self):
         # use the default flavor (i.e. one without vTPM extra specs)
         return self._create_server()
 
-    def assertInstanceHasSecret(self, server):
+    def assertInstanceHasSecret(self, server, secret_security=None):
         ctx = nova_context.get_admin_context()
         instance = objects.Instance.get_by_uuid(ctx, server['id'])
         self.assertIn('vtpm_secret_uuid', instance.system_metadata)
+
+        if secret_security is None:
+            self.assertNotIn(
+                'image_hw_tpm_secret_security', instance.system_metadata)
+        else:
+            self.assertEqual(
+                secret_security,
+                instance.system_metadata.get('image_hw_tpm_secret_security'))
+
         self.assertEqual(1, len(self.key_mgr._passphrases))
         self.assertIn(
             instance.system_metadata['vtpm_secret_uuid'],
             self.key_mgr._passphrases)
+        return instance.system_metadata['vtpm_secret_uuid']
 
     def assertInstanceHasNoSecret(self, server):
         ctx = nova_context.get_admin_context()
         instance = objects.Instance.get_by_uuid(ctx, server['id'])
         self.assertNotIn('vtpm_secret_uuid', instance.system_metadata)
         self.assertEqual(0, len(self.key_mgr._passphrases))
+
+    def _assert_libvirt_had_secret(self, compute, secret_uuid):
+        # This assert is for ephemeral private libvirt secrets that we
+        # undefine immediately after guest creation. Examples include 'user'
+        # and 'deployment' TPM secret security modes and legacy servers.
+        # The LibvirtFixture tracks secrets that existed before they were
+        # removed, so we can assert this.
+        conn = compute.driver._host.get_connection()
+        self.assertIn(secret_uuid, conn._removed_secrets)
+
+    def test_tpm_secret_security_user(self):
+        self.flags(supported_tpm_secret_security=['user'], group='libvirt')
+        host = self.start_compute(hostname='tpm-host')
+        compute = self.computes['tpm-host']
+
+        # ensure we are reporting the correct traits
+        traits = self._get_provider_traits(self.compute_rp_uuids[host])
+        self.assertIn('COMPUTE_SECURITY_TPM_SECRET_SECURITY_USER', traits)
+
+        server = self._create_server_with_vtpm(secret_security='user')
+
+        # The server should have a secret in the key manager service.
+        secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security='user')
+
+        # And it should have had a libvirt secret created and undefined.
+        self._assert_libvirt_had_secret(compute, secret_uuid)
+
+    def test_tpm_secret_security_user_negative(self):
+        self.flags(supported_tpm_secret_security=['deployment'],
+                   group='libvirt')
+        self.start_compute(hostname='tpm-host')
+        self._create_server_with_vtpm(secret_security='user',
+                                      expected_state='ERROR')
+
+    def test_tpm_secret_security_legacy_instance(self):
+        self.start_compute(hostname='tpm-host')
+
+        compute = self.computes['tpm-host']
+        with mock.patch.object(compute.manager, '_set_tpm_secret_security'):
+            server = self._create_server_with_vtpm()
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
+
+        # Now restart nova-compute without the mock, testing that we do NOT
+        # migrate legacy instances.
+        self.restart_compute_service(hostname='tpm-host')
+
+        # Verify that the legacy instance was NOT migrated
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
 
     def test_create_server(self):
         compute = self.start_compute()
@@ -183,7 +261,7 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure our instance's system_metadata field and key manager inventory
         # is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # now delete the server
         self._delete_server(server)
@@ -203,14 +281,14 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure our instance's system_metadata field and key manager inventory
         # is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # resume the server
         server = self._resume_server(server)
 
         # ensure our instance's system_metadata field and key manager inventory
         # is still correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
     def test_soft_reboot_server(self):
         self.start_compute()
@@ -224,7 +302,7 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure our instance's system_metadata field and key manager inventory
         # is still correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
     def test_hard_reboot_server(self):
         self.start_compute()
@@ -238,7 +316,7 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure our instance's system_metadata field and key manager inventory
         # is still correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
     def _test_resize_revert_server__vtpm_to_vtpm(self, extra_specs=None):
         """Test behavior of revert when a vTPM is retained across a resize.
@@ -263,7 +341,7 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure our instance's system_metadata field and key manager inventory
         # is updated to reflect the new vTPM requirement
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # revert the instance rather than confirming it, and ensure the secret
         # is correctly cleaned up
@@ -275,7 +353,7 @@ class VTPMServersTest(base.ServersTestBase):
             server = self._revert_resize(server)
 
         # Should still have a secret because we had a vTPM before too.
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
     def test_resize_revert_server__vtpm_to_vtpm_same_config(self):
         self._test_resize_revert_server__vtpm_to_vtpm()
@@ -338,7 +416,7 @@ class VTPMServersTest(base.ServersTestBase):
         self.addCleanup(self._delete_server, server)
 
         # ensure our instance's system_metadata field is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # create a flavor without vTPM
         flavor_id = self._create_flavor()
@@ -354,7 +432,7 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure we still have the key for the vTPM device in storage in case
         # we revert
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # confirm the instance and ensure the secret is correctly cleaned up
 
@@ -380,7 +458,7 @@ class VTPMServersTest(base.ServersTestBase):
         self.addCleanup(self._delete_server, server)
 
         # ensure our instance's system_metadata field is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # TODO(stephenfin): The mock of 'migrate_disk_and_power_off' should
         # probably be less...dumb
@@ -392,7 +470,7 @@ class VTPMServersTest(base.ServersTestBase):
             self._migrate_server(server)
 
         # ensure nothing has changed
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
     def test_live_migrate_server(self):
         for host in ('test_compute0', 'test_compute1'):
@@ -403,7 +481,7 @@ class VTPMServersTest(base.ServersTestBase):
         self.addCleanup(self._delete_server, server)
 
         # ensure our instance's system_metadata field is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # live migrate the server
         self.assertRaises(
@@ -419,7 +497,7 @@ class VTPMServersTest(base.ServersTestBase):
         self.addCleanup(self._delete_server, server)
 
         # ensure our instance's system_metadata field is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='user')
 
         # attempt to shelve the server
         self.assertRaises(
