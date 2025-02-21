@@ -1042,7 +1042,10 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                           '_validate_vtpm_configuration')
         @mock.patch.object(manager.ComputeManager, '_init_instance')
         @mock.patch.object(self.compute, '_update_scheduler_instance_info')
-        def _do_mock_calls(mock_update_scheduler, mock_inst_init,
+        @mock.patch.object(manager.ComputeManager,
+                           '_set_tpm_secret_security', return_value=False)
+        def _do_mock_calls(mock_set_tpm_secret_security,
+                           mock_update_scheduler, mock_inst_init,
                            mock_validate_vtpm, mock_validate_pinning,
                            mock_destroy, mock_admin_ctxt, mock_host_get,
                            mock_init_host,
@@ -1071,7 +1074,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
 
             mock_init_host.assert_called_once_with(host=our_host)
             mock_host_get.assert_called_once_with(self.context, our_host,
-                expected_attrs=['info_cache', 'metadata', 'numa_topology'])
+                expected_attrs=['info_cache', 'metadata', 'numa_topology',
+                                'system_metadata'])
 
             mock_update_scheduler.assert_called_once_with(
                 self.context, inst_list)
@@ -1234,7 +1238,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
 
         mock_init_host.assert_called_once_with(host=our_host)
         mock_host_get.assert_called_once_with(self.context, our_host,
-            expected_attrs=['info_cache', 'metadata', 'numa_topology'])
+            expected_attrs=['info_cache', 'metadata', 'numa_topology',
+                            'system_metadata'])
         mock_init_virt.assert_called_once_with()
         mock_temp_mut.assert_called_once_with(self.context, read_deleted='yes')
         mock_get_inst.assert_called_once_with(self.context)

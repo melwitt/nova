@@ -1040,6 +1040,53 @@ class ComputeManager(manager.Manager):
                 )
                 raise exception.InvalidConfiguration(msg)
 
+    def _set_tpm_secret_security(
+            self, instance: 'objects.Instance', confirmed: bool) -> bool:
+        """Set TPM secret security attributes on an instance.
+
+        If the instance has a TPM device, set a TPM secret security policy,
+        either by the admin in the flavor or the user in the image. If nothing
+        is set, apply the default from this host's configuration.
+
+        NOTE: The caller is responsible for saving the instance afterwards if
+        desired.
+
+        :param instance: The instance object.
+        :param confirmed: Whether the TPM secret security policy has been
+            confirmed by the user. For new instances this should be True. For
+            legacy instances being migrated to the new way of doing things,
+            this should be False until the user confirms it with a hard reboot.
+            This is passed in to this method because this method is where we
+            persist the security policy in the system metadata. To be more
+            efficient with DB queries, the confirmed property is saved in the
+            same transaction here as well.
+
+        :returns: True if TPM security metadata was updated, False otherwise
+        """
+        # If the instance already has a secret security policy set, there is
+        # nothing to do.
+        if 'image_hw_tpm_secret_security' in instance.system_metadata:
+            return False
+
+        # Check if the instance has a TPM from the tpm_version and tpm_model
+        # extra specs or image properties.
+        if hardware.get_vtpm_constraint(instance.flavor, instance.image_meta):
+            # If the instance has a TPM, check if a secret security policy has
+            # been specified from the tpm_secret_security the extra spec or
+            # image property.
+            security = hardware.get_tpm_secret_security_constraint(
+                instance.flavor, instance.image_meta)
+            # If one was not specified, take the configured default.
+            security = (security or
+                        CONF.libvirt.default_tpm_secret_security)
+            # Then set them in the instance system metadata.
+            instance.system_metadata.update({
+                'image_hw_tpm_secret_security': security,
+                'tpm_secret_security_confirmed': confirmed,
+            })
+            return True
+        return False
+
     def _reset_live_migration(self, context, instance):
         migration = None
         try:
@@ -1657,12 +1704,18 @@ class ComputeManager(manager.Manager):
 
         instances = objects.InstanceList.get_by_host(
             context, self.host,
-            expected_attrs=['info_cache', 'metadata', 'numa_topology'])
+            expected_attrs=['info_cache', 'metadata', 'numa_topology',
+                            'system_metadata'])
 
         self.init_virt_events()
 
         self._validate_pinning_configuration(instances)
         self._validate_vtpm_configuration(instances)
+        for instance in instances:
+            # For existing instances, set TPM security with confirmed=False
+            # until hard reboot.
+            if self._set_tpm_secret_security(instance, confirmed=False):
+                instance.save()
 
         # NOTE(gibi): If ironic and vcenter virt driver slow start time
         # becomes problematic here then we should consider adding a config
