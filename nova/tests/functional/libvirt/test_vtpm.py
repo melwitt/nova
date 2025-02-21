@@ -13,6 +13,7 @@
 # License for the specific language governing permissions and limitations
 # under the License.
 
+import ddt
 from unittest import mock
 
 from castellan.common.objects import passphrase
@@ -120,6 +121,7 @@ class FakeKeyManager(key_manager.KeyManager):
         )
 
 
+@ddt.ddt
 class VTPMServersTest(base.ServersTestBase):
 
     # many move operations are admin-only
@@ -143,10 +145,14 @@ class VTPMServersTest(base.ServersTestBase):
 
         self.key_mgr = crypto._get_key_manager()
 
-    def _create_server_with_vtpm(self):
+    def _create_server_with_vtpm(self, secret_security=None,
+                                 expected_state='ACTIVE'):
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
+        if secret_security:
+            extra_specs.update({'hw:tpm_secret_security': secret_security})
         flavor_id = self._create_flavor(extra_spec=extra_specs)
-        server = self._create_server(flavor_id=flavor_id)
+        server = self._create_server(flavor_id=flavor_id,
+                                     expected_state=expected_state)
 
         return server
 
@@ -168,6 +174,23 @@ class VTPMServersTest(base.ServersTestBase):
         instance = objects.Instance.get_by_uuid(ctx, server['id'])
         self.assertNotIn('vtpm_secret_uuid', instance.system_metadata)
         self.assertEqual(0, len(self.key_mgr._passphrases))
+
+    def test_tpm_secret_security_user(self):
+        self.flags(supported_tpm_secret_security=['user'], group='libvirt')
+        compute = self.start_compute(hostname='tpm-host')
+
+        # ensure we are reporting the correct traits
+        traits = self._get_provider_traits(self.compute_rp_uuids[compute])
+        self.assertIn('COMPUTE_SECURITY_TPM_SECRET_SECURITY_USER', traits)
+
+        self._create_server_with_vtpm(secret_security='user')
+
+    def test_tpm_secret_security_user_negative(self):
+        self.flags(supported_tpm_secret_security=['deployment'],
+                   group='libvirt')
+        self.start_compute(hostname='tpm-host')
+        self._create_server_with_vtpm(secret_security='user',
+                                      expected_state='ERROR')
 
     def test_tpm_secret_security_legacy_instance(self):
         self.flags(default_tpm_secret_security='host', group='libvirt')
