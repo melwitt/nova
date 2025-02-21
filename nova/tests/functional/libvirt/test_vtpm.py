@@ -169,6 +169,44 @@ class VTPMServersTest(base.ServersTestBase):
         self.assertNotIn('vtpm_secret_uuid', instance.system_metadata)
         self.assertEqual(0, len(self.key_mgr._passphrases))
 
+    def test_tpm_secret_security_legacy_instance(self):
+        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.start_compute(hostname='tpm-host')
+
+        # Mock out _set_tpm_secret_security() to fake a legacy instance that
+        # we'll then migrate by restarting nova-compute.
+        compute = self.computes['tpm-host']
+        with mock.patch.object(compute.manager, '_set_tpm_secret_security'):
+            server = self._create_server_with_vtpm()
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
+        self.assertNotIn('provisional_tpm_secret_security',
+                         instance.system_metadata)
+
+        # Now restart nova-compute without the mock, testing that we migrate
+        # the instance correctly.
+        self.restart_compute_service(hostname='tpm-host')
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
+        self.assertEqual(
+            'host',
+            instance.system_metadata['provisional_tpm_secret_security'])
+
+        # Now restart nova-compute again with a different secret security
+        # policy and verify that it did not change the security policy of the
+        # instance.
+        self.flags(default_tpm_secret_security='user', group='libvirt')
+        self.restart_compute_service(hostname='tpm-host')
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
+        self.assertEqual(
+            'host',
+            instance.system_metadata['provisional_tpm_secret_security'])
+
     def test_create_server(self):
         compute = self.start_compute()
 
