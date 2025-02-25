@@ -776,64 +776,10 @@
 
 - project:
     # Please try to keep the list of job names sorted alphabetically.
-    templates:
-      - check-requirements
-      - integrated-gate-compute
-      - openstack-cover-jobs
-      - openstack-python3-jobs
-      - openstack-python3-jobs-arm64
-      - periodic-stable-jobs
-      - publish-openstack-docs-pti
-      - release-notes-jobs-python3
     check:
       jobs:
-        # We define our own irrelevant-files so we don't run the job
-        # on things like nova docs-only changes.
-        - ironic-tempest-ipa-wholedisk-bios-agent_ipmitool-tinyipa:
-            voting: false
-            irrelevant-files: *nova-base-irrelevant-files
         - nova-ceph-multistore:
             irrelevant-files: *nova-base-irrelevant-files
-        - neutron-linuxbridge-tempest:
-            files:
-              # NOTE(mriedem): This job has its own irrelevant-files section
-              # so that we only run it on changes to networking and libvirt/vif
-              # code; we don't need to run this on all changes.
-              - ^nova/network/.*$
-              - nova/virt/libvirt/vif.py
-        - nova-live-migration
-        - nova-live-migration-ceph
-        - nova-lvm
-        - nova-multi-cell
-        - nova-next
-        - nova-ovs-hybrid-plug
-        - nova-tox-validate-backport:
-            voting: false
-        - nova-tox-functional-py39
-        - nova-tox-functional-py310
-        - nova-tox-functional-py312
-        - openstack-tox-py312:
-            voting: true
-        - tempest-integrated-compute:
-           # NOTE(gmann): Policies changes do not need to run all the
-           # integration test jobs. Running only tempest and grenade
-           # common jobs will be enough along with nova functional
-           # and unit tests.
-           irrelevant-files: *policies-irrelevant-files
-        - grenade-skip-level-always:
-            irrelevant-files: *policies-irrelevant-files
-        - nova-grenade-multinode:
-            irrelevant-files: *policies-irrelevant-files
-        - tempest-ipv6-only:
-            irrelevant-files: *nova-base-irrelevant-files
-        - openstacksdk-functional-devstack:
-            irrelevant-files: *nova-base-irrelevant-files
-        - cyborg-tempest:
-            irrelevant-files: *nova-base-irrelevant-files
-            voting: false
-        - barbican-tempest-plugin-simple-crypto:
-            irrelevant-files: *nova-base-irrelevant-files
-            voting: false
     gate:
       jobs:
         - nova-live-migration

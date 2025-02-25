@@ -159,7 +159,7 @@ class GlanceClientWrapper(object):
         return _glanceclient_from_endpoint(context, self.api_server, version)
 
     def call(self, context, version, method, controller=None, args=None,
-             kwargs=None):
+             kwargs=None, extra_headers=None):
         """Call a glance client method.  If we get a connection error,
         retry the request according to CONF.glance.num_retries.
 
@@ -186,6 +186,8 @@ class GlanceClientWrapper(object):
         for attempt in range(1, num_attempts + 1):
             client = self.client or self._create_onetime_client(context,
                                                                 version)
+            if extra_headers:
+                client.encode_headers(extra_headers)
             try:
                 controller = getattr(client, controller_name)
                 result = getattr(controller, method)(*args, **kwargs)
@@ -587,11 +589,24 @@ class GlanceImageServiceV2(object):
             _reraise_translated_exception()
 
     def _upload_data(self, context, image_id, data):
+
+        def get_file_size(file_obj):
+            orig_pos = file_obj.tell()
+            file_obj.seek(0, os.SEEK_END)
+            size = file_obj.tell()
+            file_obj.seek(orig_pos)
+            return size
+
         # NOTE(aarents) offload upload in a native thread as it can block
         # coroutine in busy environment.
-        utils.tpool_execute(self._client.call,
-                      context, 2, 'upload',
-                      args=(image_id, data))
+        #
+        # NOTE(melwitt): Since we know the image size, we can tell Glance the
+        # content length and avoid its "resize-before-write" process which
+        # would grow the volume size by 1GB repeatedly until it reaches the
+        # required size.
+        utils.tpool_execute(
+            self._client.call, context, 2, 'upload', args=(image_id, data),
+            extra_headers={'Content-Length': get_file_size(data)})
 
         return self._client.call(context, 2, 'get', args=(image_id,))
 
