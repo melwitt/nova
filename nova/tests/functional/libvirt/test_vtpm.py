@@ -1012,14 +1012,10 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.start_compute(hostname='dest')
         self.dest = self.computes['dest']
 
-        # FIXME(melwitt): This is the bug where the scheduling will incorrectly
-        # succeed despite the destination host not supporting the secret
-        # security of the instance. Remove and uncomment when the bug is fixed.
-        self._live_migrate(self.server)
-        # e = self.assertRaises(
-        #     client.OpenStackApiException, self._live_migrate, self.server)
-        # self.assertEqual(500, e.response.status_code)
-        # self.assertIn('NoValidHost', str(e))
+        e = self.assertRaises(
+            client.OpenStackApiException, self._live_migrate, self.server)
+        self.assertEqual(500, e.response.status_code)
+        self.assertIn('NoValidHost', str(e))
 
     def test_shelve_server(self):
         for host in ('test_compute0', 'test_compute1'):
