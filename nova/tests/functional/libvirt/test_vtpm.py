@@ -1013,20 +1013,16 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.start_compute(hostname='dest')
         self.dest = self.computes['dest']
 
-        # FIXME(melwitt): This is the bug where the scheduling will incorrectly
-        # succeed despite the destination host not supporting the secret
-        # security of the instance. Remove and uncomment when the bug is fixed.
-        self._live_migrate(self.server)
-        # self._live_migrate(
-        #     self.server, migration_expected_state='error', host='dest')
+        self._live_migrate(
+            self.server, migration_expected_state='error', host='dest')
 
-        # # Live migration attempt should have failed with NoValidHost because
-        # # no other host is advertising the
-        # # COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST trait.
-        # event = self._wait_for_instance_action_event(
-        #     self.server, 'live-migration', 'conductor_live_migrate_instance',
-        #     'Error')
-        # self.assertIn('NoValidHost', event['traceback'])
+        # Live migration attempt should have failed with NoValidHost because
+        # no other host is advertising the
+        # COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST trait.
+        event = self._wait_for_instance_action_event(
+            self.server, 'live-migration', 'conductor_live_migrate_instance',
+            'Error')
+        self.assertIn('NoValidHost', event['traceback'])
 
     def test_shelve_server(self):
         for host in ('test_compute0', 'test_compute1'):
