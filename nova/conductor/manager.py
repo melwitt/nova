@@ -63,6 +63,7 @@ from nova.scheduler.client import report
 from nova.scheduler import utils as scheduler_utils
 from nova import servicegroup
 from nova import utils
+from nova.virt import hardware
 from nova.volume import cinder
 
 LOG = logging.getLogger(__name__)
@@ -287,6 +288,39 @@ class ComputeTaskManager:
         compute_rpcapi.LAST_VERSION = None
         self.compute_rpcapi = compute_rpcapi.ComputeAPI()
 
+    def update_vtpm_instance_request_spec(
+        self,
+        instance: 'objects.Instance',
+        request_spec: 'objects.RequestSpec',
+    ) -> None:
+        """Update an instance request spec with vTPM secret security.
+
+        The vTPM secret security policy could be indicated in the flavor or
+        image properties. However, if an instance was assigned a host's default
+        secret security policy, this info will only be available in the
+        instance system_metadata.
+
+        Scheduling relies on the instance request spec to filter which hosts
+        support vTPM secret security policy of the instance. In order to
+        properly schedule during move operations, we will update the instance
+        request spec if needed to add the vTPM secret security policy if the
+        instance took the host default when it was created.
+        """
+
+        if (hardware.get_vtpm_constraint(
+                instance.flavor, instance.image_meta) and not
+                    hardware.get_tpm_secret_security_constraint(
+                        request_spec.flavor, request_spec.image)):
+            tpm_secret_security = instance.system_metadata.get(
+                'image_tpm_secret_security')
+            if tpm_secret_security:
+                request_spec.image.properties.hw_tpm_secret_security = (
+                    tpm_secret_security)
+                LOG.info(
+                    f"Updating request_spec with '{tpm_secret_security}' TPM "
+                    'secret security', instance=instance)
+                request_spec.save()
+
     # TODO(tdurakov): remove `live` parameter here on compute task api RPC
     # version bump to 2.x
     # TODO(danms): remove the `reservations` parameter here on compute task api
@@ -323,6 +357,9 @@ class ComputeTaskManager:
             # Code downstream may expect extra_specs to be populated since it
             # is receiving an object, so lookup the flavor to ensure this.
             flavor = objects.Flavor.get_by_id(context, flavor['id'])
+
+        self.update_vtpm_instance_request_spec(instance, request_spec)
+
         if live and not rebuild and not flavor:
             self._live_migrate(context, instance, scheduler_hint,
                                block_migration, disk_over_commit, request_spec)
@@ -464,6 +501,7 @@ class ComputeTaskManager:
     @wrap_instance_event(prefix='conductor')
     def live_migrate_instance(self, context, instance, scheduler_hint,
                               block_migration, disk_over_commit, request_spec):
+        self.update_vtpm_instance_request_spec(instance, request_spec)
         self._live_migrate(context, instance, scheduler_hint,
                            block_migration, disk_over_commit, request_spec)
 
@@ -1010,6 +1048,8 @@ class ComputeTaskManager:
             else:
                 raise exception.ImageNotFound(image_id='')
 
+        self.update_vtpm_instance_request_spec(instance, request_spec)
+
         if instance.vm_state == vm_states.SHELVED:
             instance.task_state = task_states.POWERING_ON
             instance.save(expected_task_state=task_states.UNSHELVING)
@@ -1212,6 +1252,8 @@ class ComputeTaskManager:
         # confusing, so rename it to evacuate here at the top, which is simpler
         # than renaming a parameter in an RPC versioned method.
         evacuate = recreate
+
+        self.update_vtpm_instance_request_spec(instance, request_spec)
 
         # NOTE(efried): It would be nice if this were two separate events, one
         # for 'rebuild' and one for 'evacuate', but this is part of the API
