@@ -411,8 +411,8 @@ class _BaseTaskTestCase(object):
                            clean_shutdown=True):
         get_im.return_value.cell_mapping = (
             objects.CellMappingList.get_all(self.context)[0])
-        get_image_from_metadata.return_value = 'image'
-        inst = fake_instance.fake_db_instance(image_ref='image_ref')
+        get_image_from_metadata.return_value = {}
+        inst = fake_instance.fake_db_instance(image_ref=uuids.image)
         inst_obj = objects.Instance._from_db_object(
             self.context, objects.Instance(), inst, [])
         inst_obj.system_metadata = {'image_hw_disk_bus': 'scsi'}
@@ -437,7 +437,7 @@ class _BaseTaskTestCase(object):
                 False, False, flavor, None, None, [],
                 clean_shutdown)
 
-        get_image_from_metadata.assert_called_once_with(
+        get_image_from_metadata.assert_called_with(
             inst_obj.system_metadata)
         migration_task_execute.assert_called_once_with()
         spec_save.assert_called_once_with()
@@ -3617,8 +3617,9 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         get_im.return_value.cell_mapping = (
             objects.CellMappingList.get_all(self.context)[0])
 
-        instance = fake_instance.fake_instance_obj(self.context,
-                                                   vm_state=vm_states.ACTIVE)
+        instance = fake_instance.fake_instance_obj(
+            self.context, vm_state=vm_states.ACTIVE,
+            expected_attrs=['system_metadata'])
         self.assertRaises(NotImplementedError, self.conductor.migrate_server,
             self.context, instance, None, True, True, None, None, None)
 
@@ -3626,9 +3627,9 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
     def test_migrate_server_fails_with_flavor(self, get_im):
         get_im.return_value.cell_mapping = (
             objects.CellMappingList.get_all(self.context)[0])
-        instance = fake_instance.fake_instance_obj(self.context,
-                                                   vm_state=vm_states.ACTIVE,
-                                                   flavor=self.flavor)
+        instance = fake_instance.fake_instance_obj(
+            self.context, vm_state=vm_states.ACTIVE, flavor=self.flavor,
+            expected_attrs=['system_metadata'])
         self.assertRaises(NotImplementedError, self.conductor.migrate_server,
             self.context, instance, None, True, False, self.flavor, None, None)
 
@@ -3649,6 +3650,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                                   vm_state=vm_states.ACTIVE)
         inst_obj = objects.Instance._from_db_object(
             self.context, objects.Instance(), instance, [])
+        inst_obj.flavor = objects.Flavor(id=1)
+        inst_obj.system_metadata = {}
         mock_execute.side_effect = ex
         self.conductor = utils.ExceptionHelper(self.conductor)
 
@@ -3676,6 +3679,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
                                                   vm_state=vm_states.ACTIVE)
         inst_obj = objects.Instance._from_db_object(
             self.context, objects.Instance(), instance, [])
+        inst_obj.flavor = objects.Flavor(id=1)
+        inst_obj.system_metadata = {}
         ex = exc.InvalidCPUInfo(reason="invalid cpu info.")
         mock_execute.side_effect = ex
 
@@ -3723,6 +3728,8 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         instance = fake_instance.fake_db_instance()
         inst_obj = objects.Instance._from_db_object(
             self.context, objects.Instance(), instance, [])
+        inst_obj.flavor = objects.Flavor(id=1)
+        inst_obj.system_metadata = {}
         ex = self.assertRaises(exc.MigrationError,
             self.conductor.migrate_server, self.context, inst_obj,
             {'host': 'destination'}, True, False, None, 'block_migration',
@@ -4512,6 +4519,7 @@ class ConductorTaskTestCase(_BaseTaskTestCase, test_compute.BaseTestCase):
         instance lives in.
         """
         instance = self.params['build_requests'][0].instance
+        instance.system_metadata = {}
         scheduler_hint = {'host': None}
         reqspec = self.params['request_specs'][0]
 
