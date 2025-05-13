@@ -8318,6 +8318,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 context, instance)
             confirmed = instance.system_metadata.get(
                 'tpm_secret_security_confirmed')
+            print(f'secret_security = {secret_security}')
 
         try:
             guest = libvirt_guest.Guest.create(xml, self._host)
