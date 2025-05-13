@@ -313,12 +313,13 @@ class ComputeTaskManager:
                         request_spec.flavor, request_spec.image)):
             tpm_secret_security = instance.system_metadata.get(
                 'image_tpm_secret_security')
-            request_spec.image.tpm_secret_security = tpm_secret_security
-            tpm_secret_security_confirmed = instance.system_metadata.get(
-                'tpm_secret_security_confirmed')
-            request_spec.image.tpm_secret_security_confirmed = (
-                tpm_secret_security_confirmed)
-            request_spec.save()
+            if tpm_secret_security:
+                request_spec.image.properties.hw_tpm_secret_security = (
+                    tpm_secret_security)
+                LOG.info(
+                    f"Updating request_spec with '{tpm_secret_security}' TPM "
+                    'secret security', instance=instance)
+                request_spec.save()
 
     # TODO(tdurakov): remove `live` parameter here on compute task api RPC
     # version bump to 2.x
