@@ -188,18 +188,16 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertEqual(0, len(self.key_mgr._passphrases))
 
     def _assert_libvirt_has_secret(self, host, instance_uuid):
+        s = host.driver._host.find_secret('vtpm', instance_uuid)
+        self.assertIsNotNone(s)
         ctx = nova_context.get_admin_context()
         instance = objects.Instance.get_by_uuid(ctx, instance_uuid)
-        conn = host.driver._host.get_connection()
-        self.assertIn(instance.system_metadata['vtpm_secret_uuid'],
-                      conn._secrets)
+        secret_uuid = instance.system_metadata['vtpm_secret_uuid']
+        self.assertEqual(secret_uuid, s.UUIDString())
 
     def _assert_libvirt_secret_missing(self, host, instance_uuid):
-        ctx = nova_context.get_admin_context()
-        instance = objects.Instance.get_by_uuid(ctx, instance_uuid)
-        conn = host.driver._host.get_connection()
-        self.assertNotIn(instance.system_metadata['vtpm_secret_uuid'],
-                         conn._secrets)
+        s = host.driver._host.find_secret('vtpm', instance_uuid)
+        self.assertIsNone(s)
 
     def test_tpm_secret_security_user(self):
         self.flags(supported_tpm_secret_security=['user'], group='libvirt')
