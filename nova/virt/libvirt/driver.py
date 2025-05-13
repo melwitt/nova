@@ -8319,6 +8319,7 @@ class LibvirtDriver(driver.ComputeDriver):
         ):
             libvirt_secret, secret_security = self._create_secret_for_vtpm(
                 context, instance)
+            print(f'secret_security = {secret_security}')
 
         try:
             guest = libvirt_guest.Guest.create(xml, self._host)
