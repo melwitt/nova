@@ -8174,6 +8174,7 @@ class LibvirtDriver(driver.ComputeDriver):
                 instance.flavor, instance.image_meta)
             secret_security = (secret_security or
                                CONF.libvirt.default_tpm_secret_security)
+            print(f'secret_security = {secret_security}')
             ephemeral = True
             private = True
             if secret_security == 'host':
@@ -11683,6 +11684,7 @@ class LibvirtDriver(driver.ComputeDriver):
             'vtpm_secret_uuid' in migrate_data and
             'vtpm_secret_value' in migrate_data
         ):
+            print('Creating secret on dest')
             self._host.create_secret('vtpm', instance.uuid,
                                      password=migrate_data.vtpm_secret_value,
                                      uuid=migrate_data.vtpm_secret_uuid,
