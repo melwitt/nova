@@ -1023,6 +1023,47 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # And no libvirt secret on the destination host.
         self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
+    def test_live_migrate_server_different_secret_security_flavor(self):
+        """Live migration when hosts have different supported secret security.
+
+        Test a scenario where a server is created with a specified vTPM secret
+        security mode. Then try to live migrate it to a host which does not
+        support the secret security of the instance. This should fail to
+        schedule as there is no valid host available that supports the needed
+        secret security mode.
+        """
+        # Source with 'deployment' TPM secret security.
+        # This will make the source report trait:
+        # COMPUTE_SECURITY_TPM_SECRET_SECURITY_DEPLOYMENT.
+        self.flags(
+           supported_tpm_secret_security=['deployment'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.src = self.computes['src']
+
+        self.server = self._create_server_with_vtpm(
+                secret_security='deployment')
+        secret_uuid = self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_had_secret(self.src, secret_uuid)
+
+        # Destination with 'host' TPM secret security.
+        # This will make the destination report trait:
+        # COMPUTE_SECURITY_TPM_SECRET_SECURITY_HOST.
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='dest')
+        self.dest = self.computes['dest']
+
+        self._live_migrate(
+            self.server, migration_expected_state='error', host='dest',
+            api=self.admin_api)
+
+        # Live migration attempt should have failed with NoValidHost because
+        # no other host is advertising the
+        # COMPUTE_SECURITY_TPM_SECRET_SECURITY_DEPLOYMENT trait.
+        event = self._wait_for_instance_action_event(
+            self.server, 'live-migration', 'conductor_live_migrate_instance',
+            'Error')
+        self.assertIn('NoValidHost', event['traceback'])
+
     def test_shelve_server(self):
         for host in ('test_compute0', 'test_compute1'):
             self.start_compute(host)
