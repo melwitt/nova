@@ -11891,6 +11891,9 @@ class LibvirtDriver(driver.ComputeDriver):
         """
         self.unplug_vifs(instance, network_info)
         self.cpu_api.power_down_for_instance(instance)
+        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
+        if secret_uuid:
+            self._host.delete_secret('vtpm', instance.uuid)
 
     def _qemu_monitor_announce_self(self, instance):
         """Send announce_self command to QEMU monitor.
@@ -11947,9 +11950,6 @@ class LibvirtDriver(driver.ComputeDriver):
         :param network_info: instance network information
         :param block_migration: if true, post operation of block_migration.
         """
-        secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
-        if secret_uuid:
-            self._host.delete_secret('vtpm', instance.uuid)
         self._reattach_instance_vifs(context, instance, network_info)
         self._qemu_monitor_announce_self(instance)
         mdevs = self.instance_claimed_mdevs.pop(instance.uuid, None)
