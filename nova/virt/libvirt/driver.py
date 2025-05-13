@@ -8146,6 +8146,27 @@ class LibvirtDriver(driver.ComputeDriver):
         finally:
             self._create_domain_cleanup_lxc(instance)
 
+    def _create_secret_for_vtpm(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+    ) -> ty.Tuple[ty.Any, str]:
+        secret_uuid, passphrase = crypto.ensure_vtpm_secret(context, instance)
+        secret_security = hardware.get_tpm_secret_security_constraint(
+            instance.flavor, instance.image_meta)
+        secret_security = (secret_security or
+                           CONF.libvirt.default_tpm_secret_security)
+        kwargs = {}
+        if secret_security == 'host':
+            # create_secret() already contains logic to default to the most
+            # secure ephemeral and private for TPM, so just specify if we
+            # don't want that.
+            kwargs = {'ephemeral': False, 'private': False}
+        libvirt_secret = self._host.create_secret(
+            'vtpm', instance.uuid, password=passphrase, uuid=secret_uuid,
+            **kwargs)
+        return libvirt_secret, secret_security
+
     def _create_guest(
         self,
         context: nova_context.RequestContext,
@@ -8168,21 +8189,8 @@ class LibvirtDriver(driver.ComputeDriver):
         if CONF.libvirt.swtpm_enabled and hardware.get_vtpm_constraint(
             instance.flavor, instance.image_meta,
         ):
-            secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+            libvirt_secret, secret_security = self._create_secret_for_vtpm(
                 context, instance)
-            secret_security = hardware.get_tpm_secret_security_constraint(
-                instance.flavor, instance.image_meta)
-            secret_security = (secret_security or
-                               CONF.libvirt.default_tpm_secret_security)
-            print(f'secret_security = {secret_security}')
-            ephemeral = True
-            private = True
-            if secret_security == 'host':
-                ephemeral = False
-                private = False
-            libvirt_secret = self._host.create_secret(
-                'vtpm', instance.uuid, password=passphrase,
-                uuid=secret_uuid, ephemeral=ephemeral, private=private)
 
         try:
             guest = libvirt_guest.Guest.create(xml, self._host)
