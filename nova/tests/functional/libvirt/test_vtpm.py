@@ -505,12 +505,12 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         self.server = self._create_server_with_vtpm(host='src')
         self.assertInstanceHasSecret(self.server)
-        self._assert_libvirt_had_secret(self.src, self.server['id'])
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
         self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
         self._live_migrate(self.server)
         self.assertInstanceHasSecret(self.server)
-        self._assert_libvirt_had_secret(self.dest, self.server['id'])
+        self._assert_libvirt_has_secret(self.dest, self.server['id'])
 
     def test_live_migrate_server_inaccessible_secret(self):
         for host in ('test_compute0', 'test_compute1'):
@@ -547,14 +547,14 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         self.server = self._create_server_with_vtpm(host='src')
         self.assertInstanceHasSecret(self.server)
-        self._assert_libvirt_had_secret(self.src, self.server['id'])
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
         self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
         with mock.patch('nova.tests.fixtures.libvirt.Domain.migrateToURI3',
                         _migrate_stub):
             self._live_migrate(self.server, migration_expected_state='failed')
             self.assertInstanceHasSecret(self.server)
-            self._assert_libvirt_had_secret(self.dest, self.server['id'])
+            self._assert_libvirt_has_secret(self.dest, self.server['id'])
 
     def test_shelve_server(self):
         for host in ('test_compute0', 'test_compute1'):
