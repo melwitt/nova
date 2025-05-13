@@ -1062,7 +1062,7 @@ class ComputeManager(manager.Manager):
             efficient with DB queries, the confirmed property is saved in the
             same transaction here as well.
 
-        :returns: True if TPM attributes were set on the instance, else False
+        :returns: True if TPM security metadata was updated, False otherwise
         """
         if hardware.get_vtpm_constraint(instance.flavor, instance.image_meta):
             security = hardware.get_tpm_secret_security_constraint(
