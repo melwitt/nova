@@ -2419,6 +2419,7 @@ class Connection(object):
         return [secret for secret in self._secrets.values()]
 
     def secretLookupByUsage(self, usage_type_obj, usage_id):
+        print(self._secrets)
         for secret in self._secrets.values():
             # Ignore usage_type_obj because we don't have a way to map libvrt
             # usage type constants to strings.
@@ -2427,7 +2428,9 @@ class Connection(object):
 
     def secretDefineXML(self, xml):
         secret = Secret(self, xml)
+        print(secret)
         self._add_secret(secret)
+        print(self._secrets)
         return secret
 
     def listAllDevices(self, flags):
