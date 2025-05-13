@@ -11711,10 +11711,11 @@ class LibvirtDriver(driver.ComputeDriver):
                       str(secret.value()))
 
         # TODO(artom) gate this on the instance actually being `deployment`
-        secret_uuid, passphrase = crypto.ensure_vtpm_secret(context, instance)
-        if secret_uuid:
-            self._host.create_secret('vtpm', instance.uuid,
-                                     password=passphrase, uuid=secret_uuid)
+        # secret_uuid, passphrase = crypto.ensure_vtpm_secret(context,
+        # instance)
+        # if secret_uuid:
+        #    self._host.create_secret('vtpm', instance.uuid,
+        #                             password=passphrase, uuid=secret_uuid)
 
         return migrate_data
 
