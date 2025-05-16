@@ -10574,14 +10574,8 @@ class LibvirtDriver(driver.ComputeDriver):
             security == 'host' and confirmed
         ):
             secret = self._host.find_secret('vtpm', instance.uuid)
-            # FIXME(artom) Remove this loggig once we've figured out why the
-            # live migration is failing with a vTPM encryption error
-            LOG.debug('vTPM secret value read from source host is %s',
-                      str(secret.value()))
-            LOG.debug('vTPM secret UUID read from source host is %s',
-                      str(secret.UUIDString()))
             dest_check_data.vtpm_secret_uuid = secret.UUIDString()
-            dest_check_data.vtpm_secret_value = secret.value().decode()
+            dest_check_data.vtpm_secret_value = secret.value()
 
         return dest_check_data
 
