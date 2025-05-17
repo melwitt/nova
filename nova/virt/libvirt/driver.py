@@ -10575,7 +10575,9 @@ class LibvirtDriver(driver.ComputeDriver):
         ):
             secret = self._host.find_secret('vtpm', instance.uuid)
             dest_check_data.vtpm_secret_uuid = secret.UUIDString()
-            dest_check_data.vtpm_secret_value = secret.value()
+            # Have to decode the bytes type to conform to the object's
+            # SensitiveStringField type.
+            dest_check_data.vtpm_secret_value = secret.value().decode()
 
         return dest_check_data
 
@@ -11687,10 +11689,13 @@ class LibvirtDriver(driver.ComputeDriver):
             'vtpm_secret_value' in migrate_data
         ):
             print('Creating secret on dest')
-            self._host.create_secret('vtpm', instance.uuid,
-                                     password=migrate_data.vtpm_secret_value,
-                                     uuid=migrate_data.vtpm_secret_uuid,
-                                     ephemeral=False, private=False)
+            self._host.create_secret(
+                'vtpm', instance.uuid,
+                # Convert the SensitiveStringField back to bytes when creating
+                # the libvirt secret.
+                password=migrate_data.vtpm_secret_value.encode(),
+                uuid=migrate_data.vtpm_secret_uuid, ephemeral=False,
+                private=False)
             LOG.debug('vTPM secret created on dest has UUID %s and value %s',
                       str(migrate_data.vtpm_secret_uuid),
                       str(migrate_data.vtpm_secret_value))
@@ -11698,7 +11703,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # migraiton is failing with a TPM encryption error.
             secret = self._host.find_secret('vtpm', instance.uuid)
             LOG.debug('vTPM secret read back on dest has value %s',
-                      secret.value())
+                      str(secret.value()))
 
         # TODO(artom) gate this on the instance actually being `deployment`
         # secret_uuid, passphrase = crypto.ensure_vtpm_secret(context,
