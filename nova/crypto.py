@@ -198,6 +198,11 @@ def ensure_vtpm_secret(
 
     secret_uuid = instance.system_metadata.get('vtpm_secret_uuid')
     if secret_uuid is not None:
+        security = instance.system_metadata.get('image_tpm_secret_security')
+        if security == 'deployment':
+            # If the instance is using 'deployment' secret security, replace
+            # the context with that of the Nova service user.
+            context = _get_service_user_context()
         # Try to retrieve the secret from the key manager
         try:
             secret = key_mgr.get(context, secret_uuid)
