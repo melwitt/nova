@@ -180,6 +180,7 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertIn(
             instance.system_metadata['vtpm_secret_uuid'],
             self.key_mgr._passphrases)
+        return instance.system_metadata['vtpm_secret_uuid']
 
     def assertInstanceHasNoSecret(self, server):
         ctx = nova_context.get_admin_context()
@@ -194,6 +195,15 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         instance = objects.Instance.get_by_uuid(ctx, instance_uuid)
         secret_uuid = instance.system_metadata['vtpm_secret_uuid']
         self.assertEqual(secret_uuid, s.UUIDString())
+
+    def _assert_libvirt_had_secret(self, host, secret_uuid):
+        # This assert is for ephemeral private libvirt secrets that we
+        # undefine immediately after guest creation. Examples include 'user'
+        # and 'deployment' TPM secret security modes.
+        # The LibvirtFixture tracks secrets that existed before they were
+        # removed, so we can assert this.
+        conn = host.driver._host.get_connection()
+        self.assertIn(secret_uuid, conn._removed_secrets)
 
     def _assert_libvirt_secret_missing(self, host, instance_uuid):
         s = host.driver._host.find_secret('vtpm', instance_uuid)
@@ -573,8 +583,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.dest = self.computes['dest']
 
         self.server = self._create_server_with_vtpm(host='src')
-        self.assertInstanceHasSecret(self.server)
-        self._assert_libvirt_has_secret(self.src, self.server['id'])
+        secret_uuid = self.assertInstanceHasSecret(self.server)
+        self._assert_libvirt_had_secret(self.src, secret_uuid)
         self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
         with mock.patch('nova.tests.fixtures.libvirt.Domain.migrateToURI3',
