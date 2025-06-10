@@ -11710,12 +11710,13 @@ class LibvirtDriver(driver.ComputeDriver):
             LOG.debug('vTPM secret read back on dest has value %s',
                       str(secret.value()))
 
-        # TODO(artom) gate this on the instance actually being `deployment`
-        # secret_uuid, passphrase = crypto.ensure_vtpm_secret(context,
-        # instance)
-        # if secret_uuid:
-        #    self._host.create_secret('vtpm', instance.uuid,
-        #                             password=passphrase, uuid=secret_uuid)
+        security = instance.system_metadata.get('image_tpm_secret_security')
+        if security == 'deployment':
+            secret_uuid, passphrase = crypto.ensure_vtpm_secret(context,
+                                                                instance)
+            if secret_uuid:
+               self._host.create_secret('vtpm', instance.uuid,
+                                        password=passphrase, uuid=secret_uuid)
 
         return migrate_data
 
