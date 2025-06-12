@@ -149,6 +149,10 @@ class _TestLibvirtLiveMigrateData(object):
         primitive = data(obj.obj_to_primitive(target_version='1.12',
                                               version_manifest=manifest))
         self.assertNotIn('pci_dev_map_src_dst', primitive)
+        primitive = data(obj.obj_to_primitive(target_version='1.13',
+                                              version_manifest=manifest))
+        self.assertNotIn('vtpm_secret_uuid', primitive)
+        self.assertNotIn('vtpm_secret_value', primitive)
 
     def test_bdm_obj_make_compatible(self):
         obj = migrate_data.LibvirtLiveMigrateBDMInfo(
