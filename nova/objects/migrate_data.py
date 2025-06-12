@@ -154,7 +154,8 @@ class LiveMigrateData(obj_base.NovaObject):
     # Version 1.2: Added wait_for_vif_plugged
     # Version 1.3: Added vifs field.
     # Version 1.4: Added pci_dev_map_src_dst field.
-    VERSION = '1.4'
+    # Version 1.5: Added vtpm_secret_uuid and vtpm_secret_value
+    VERSION = '1.5'
 
     fields = {
         'is_volume_backed': fields.BooleanField(),
@@ -172,6 +173,8 @@ class LiveMigrateData(obj_base.NovaObject):
         'wait_for_vif_plugged': fields.BooleanField(),
         'vifs': fields.ListOfObjectsField('VIFMigrateData'),
         'pci_dev_map_src_dst': fields.DictOfStringsField(),
+        'vtpm_secret_uuid': fields.UUIDField(),
+        'vtpm_secret_value': fields.SensitiveStringField(),
     }
 
 
@@ -246,7 +249,8 @@ class LibvirtLiveMigrateData(LiveMigrateData):
     #               source_mdev_types and target_mdevs fields
     # Version 1.12: Added dst_cpu_shared_set_info
     # Version 1.13: Inherited pci_dev_map_src_dst from LiveMigrateData
-    VERSION = '1.13'
+    # Version 1.14: Inherited vtpm_secret_(uuid|value) from LiveMigrateData
+    VERSION = '1.14'
 
     fields = {
         'filename': fields.StringField(),
@@ -291,6 +295,9 @@ class LibvirtLiveMigrateData(LiveMigrateData):
         super(LibvirtLiveMigrateData, self).obj_make_compatible(
             primitive, target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if (target_version < (1, 14)):
+            primitive.pop('vtpm_secret_uuid', None)
+            primitive.pop('vtpm_secret_value', None)
         if (target_version < (1, 13)):
             primitive.pop('pci_dev_map_src_dst', None)
         if (target_version < (1, 12)):
@@ -347,7 +354,8 @@ class HyperVLiveMigrateData(LiveMigrateData):
     # Version 1.3: Added wait_for_vif_plugged
     # Version 1.4: Inherited vifs from LiveMigrateData
     # Version 1.5: Inherited pci_dev_map_src_dst from LiveMigrateData
-    VERSION = '1.5'
+    # Version 1.6: Inherited vtpm_secret_(uuid|value) from LiveMigrateData
+    VERSION = '1.6'
 
     fields = {'is_shared_instance_path': fields.BooleanField()}
 
@@ -355,6 +363,9 @@ class HyperVLiveMigrateData(LiveMigrateData):
         super(HyperVLiveMigrateData, self).obj_make_compatible(
             primitive, target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if (target_version < (1, 6)):
+            primitive.pop('vtpm_secret_uuid', None)
+            primitive.pop('vtpm_secret_value', None)
         if (target_version < (1, 5)):
             primitive.pop('pci_dev_map_src_dst', None)
         if target_version < (1, 4) and 'vifs' in primitive:
@@ -373,7 +384,8 @@ class HyperVLiveMigrateData(LiveMigrateData):
 class VMwareLiveMigrateData(LiveMigrateData):
     # Version 1.0: Initial version
     # Version 1.1: Inherited pci_dev_map_src_dst from LiveMigrateData
-    VERSION = '1.1'
+    # Version 1.2: Inherited vtpm_secret_(uuid|value) from LiveMigrateData
+    VERSION = '1.2'
 
     fields = {
         'cluster_name': fields.StringField(nullable=False),
@@ -384,5 +396,8 @@ class VMwareLiveMigrateData(LiveMigrateData):
         super(VMwareLiveMigrateData, self).obj_make_compatible(
             primitive, target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if (target_version < (1, 2)):
+            primitive.pop('vtpm_secret_uuid', None)
+            primitive.pop('vtpm_secret_value', None)
         if (target_version < (1, 1)):
             primitive.pop('pci_dev_map_src_dst', None)
