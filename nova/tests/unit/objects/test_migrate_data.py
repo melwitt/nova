@@ -101,7 +101,9 @@ class _TestLibvirtLiveMigrateData(object):
             source_mdev_types={},
             target_mdevs={},
             dst_cpu_shared_set_info=set(),
-            pci_dev_map_src_dst={})
+            pci_dev_map_src_dst={},
+            vtpm_secret_uuid=uuids.vtpm_secret,
+            vtpm_secret_value='password')
         manifest = ovo_base.obj_tree_get_versions(obj.obj_name())
 
         data = lambda x: x['nova_object.data']
@@ -149,6 +151,10 @@ class _TestLibvirtLiveMigrateData(object):
         primitive = data(obj.obj_to_primitive(target_version='1.12',
                                               version_manifest=manifest))
         self.assertNotIn('pci_dev_map_src_dst', primitive)
+        primitive = data(obj.obj_to_primitive(target_version='1.13',
+                                              version_manifest=manifest))
+        self.assertNotIn('vtpm_secret_uuid', primitive)
+        self.assertNotIn('vtpm_secret_value', primitive)
 
     def test_bdm_obj_make_compatible(self):
         obj = migrate_data.LibvirtLiveMigrateBDMInfo(
