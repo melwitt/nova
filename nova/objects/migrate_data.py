@@ -246,7 +246,8 @@ class LibvirtLiveMigrateData(LiveMigrateData):
     #               source_mdev_types and target_mdevs fields
     # Version 1.12: Added dst_cpu_shared_set_info
     # Version 1.13: Inherited pci_dev_map_src_dst from LiveMigrateData
-    VERSION = '1.13'
+    # Version 1.14: Added vtpm_secret_uuid and vtpm_secret_value
+    VERSION = '1.14'
 
     fields = {
         'filename': fields.StringField(),
@@ -285,12 +286,28 @@ class LibvirtLiveMigrateData(LiveMigrateData):
         # key is source mdev UUID and value is the destination mdev UUID.
         'target_mdevs': fields.DictOfStringsField(),
         'dst_cpu_shared_set_info': fields.SetOfIntegersField(),
+        'vtpm_secret_uuid': fields.UUIDField(nullable=True),
+        'vtpm_secret_value': fields.SensitiveStringField(nullable=True),
     }
 
     def obj_make_compatible(self, primitive, target_version):
         super(LibvirtLiveMigrateData, self).obj_make_compatible(
             primitive, target_version)
         target_version = versionutils.convert_version_to_tuple(target_version)
+        if (target_version < (1, 14)):
+            # In an object primitive, a field will be included if and only if
+            # it is set to anything (including None, if the field is nullable).
+            vtpm_fields = ['vtpm_secret_uuid', 'vtpm_secret_value']
+            if any(field in vtpm_fields for field in primitive):
+                # If either field is set, then we know this object was passed
+                # from newer compute which could support vTPM live migration.
+                # We raise here instead of silently removing the fields during
+                # a backport because an older compute will not be able to honor
+                # the TPM secret security policy required by the request.
+                raise exception.ObjectActionError(
+                    action='obj_make_compatible',
+                    reason='%s are not supported in version %s' %
+                       (' and '.join(vtpm_fields), target_version))
         if (target_version < (1, 13)):
             primitive.pop('pci_dev_map_src_dst', None)
         if (target_version < (1, 12)):

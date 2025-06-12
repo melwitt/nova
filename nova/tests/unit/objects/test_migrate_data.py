@@ -161,6 +161,18 @@ class _TestLibvirtLiveMigrateData(object):
         self.assertIn(
             'encryption_secret_uuid', primitive['nova_object.data'])
 
+    def test_vtpm_obj_make_compatible(self):
+        obj = migrate_data.LibvirtLiveMigrateData(
+            vtpm_secret_uuid=uuids.vtpm_secret,
+            vtpm_secret_value='password')
+        manifest = ovo_base.obj_tree_get_versions(obj.obj_name())
+        ex = self.assertRaises(
+            exception.ObjectActionError, obj.obj_to_primitive,
+            target_version='1.13', version_manifest=manifest)
+        self.assertIn(
+            'vtpm_secret_uuid and vtpm_secret_value are not supported in '
+            'version (1, 13)', str(ex))
+
     def test_vif_migrate_data(self):
         source_vif = network_model.VIF(
             id=uuids.port_id,
