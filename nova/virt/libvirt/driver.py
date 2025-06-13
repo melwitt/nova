@@ -8152,11 +8152,16 @@ class LibvirtDriver(driver.ComputeDriver):
         finally:
             self._create_domain_cleanup_lxc(instance)
 
-    def _create_secret_for_vtpm(
-        self,
+    @staticmethod
+    def _ensure_vtpm_secret(
         context: nova_context.RequestContext,
         instance: 'objects.Instance',
-    ) -> ty.Tuple[ty.Any, str]:
+    ) -> ty.Tuple[str, str]:
+        """Wrap crypto.ensure_vtpm_secret() to determine secret owner.
+
+        This will check the instance's secret security mode and pass the Nova
+        service user's auth if it is 'deployment'.
+        """
         secret_security = hardware.get_tpm_secret_security_constraint(
             instance.flavor, instance.image_meta)
         secret_security = (secret_security or
@@ -8166,7 +8171,16 @@ class LibvirtDriver(driver.ComputeDriver):
             # the context with that of the Nova service user.
             context = nova_context.get_service_user_context()
 
-        secret_uuid, passphrase = crypto.ensure_vtpm_secret(context, instance)
+        return crypto.ensure_vtpm_secret(context, instance)
+
+    def _create_secret_for_vtpm(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+    ) -> ty.Tuple[ty.Any, ty.Optional[str]]:
+        secret_security = hardware.get_tpm_secret_security_constraint(
+            instance.flavor, instance.image_meta)
+        secret_uuid, passphrase = self._ensure_vtpm_secret(context, instance)
         kwargs = {}
         if secret_security == 'host':
             # create_secret() already contains logic to default to the most
@@ -11731,8 +11745,8 @@ class LibvirtDriver(driver.ComputeDriver):
 
         security = instance.system_metadata.get('image_tpm_secret_security')
         if security == 'deployment':
-            secret_uuid, passphrase = crypto.ensure_vtpm_secret(context,
-                                                                instance)
+            secret_uuid, passphrase = self._ensure_vtpm_secret(context,
+                                                               instance)
             if secret_uuid:
                 self._host.create_secret('vtpm', instance.uuid,
                                          password=passphrase, uuid=secret_uuid)
