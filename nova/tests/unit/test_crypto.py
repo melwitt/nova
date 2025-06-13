@@ -279,7 +279,8 @@ class VTPMTest(test.NoDBTestCase):
 
         We should create a new one.
         """
-        instance = objects.Instance()
+        instance = objects.Instance(flavor=objects.Flavor(),
+                                    image_ref=uuids.image)
         instance.uuid = uuids.instance
         instance.system_metadata = {}
         mock_get_manager.return_value.store.return_value = uuids.secret
@@ -293,6 +294,54 @@ class VTPMTest(test.NoDBTestCase):
         mock_get_manager.return_value.store.assert_called_once_with(
             self.ctxt, passphrase)
         mock_save.assert_called_once()
+        self.assertEqual(uuids.secret, secret_uuid)
+
+    @mock.patch('keystoneauth1.loading.load_auth_from_conf_options')
+    @mock.patch('nova.context.RequestContext')
+    @mock.patch.object(crypto, '_get_key_manager')
+    @mock.patch('castellan.common.objects.passphrase.Passphrase')
+    def test_ensure_vtpm_secret_security_deployment_get(
+            self, mock_pass, mock_get_manager, mock_context, mock_auth_load):
+        instance = objects.Instance()
+        instance.system_metadata = {
+            'vtpm_secret_uuid': uuids.secret,
+            'image_tpm_secret_security': 'deployment',
+        }
+        passphrase = FakePassphrase()
+        passphrase.id = uuids.secret
+        mock_pass.return_value = passphrase
+        mock_get_manager.return_value.get.return_value = passphrase
+
+        secret_uuid, _ = crypto.ensure_vtpm_secret(self.ctxt, instance)
+
+        mock_auth_load.assert_called_once_with(crypto.CONF, 'service_user')
+        mock_get_manager.return_value.get.assert_called_once_with(
+            mock_context.return_value, uuids.secret)
+        self.assertEqual(uuids.secret, secret_uuid)
+
+    @mock.patch('keystoneauth1.loading.load_auth_from_conf_options')
+    @mock.patch('nova.context.RequestContext')
+    @mock.patch.object(crypto, '_get_key_manager')
+    @mock.patch('castellan.common.objects.passphrase.Passphrase')
+    def test_ensure_vtpm_secret_security_deployment_create(
+            self, mock_pass, mock_get_manager, mock_context, mock_auth_load):
+        instance = objects.Instance(
+            uuid=uuids.instance,
+            flavor=objects.Flavor(
+                extra_specs={'hw:tpm_secret_security': 'deployment'}),
+            image_ref=uuids.image)
+        instance.system_metadata = {}
+        passphrase = FakePassphrase()
+        mock_pass.return_value = passphrase
+        mock_get_manager.return_value.store.return_value = uuids.secret
+
+        with mock.patch.object(instance, 'save') as mock_save:
+            secret_uuid, _ = crypto.ensure_vtpm_secret(self.ctxt, instance)
+
+        mock_auth_load.assert_called_once_with(crypto.CONF, 'service_user')
+        mock_get_manager.return_value.store.assert_called_once_with(
+            mock_context.return_value, passphrase)
+        mock_save.assert_called_once_with()
         self.assertEqual(uuids.secret, secret_uuid)
 
     @mock.patch.object(crypto, '_get_key_manager')

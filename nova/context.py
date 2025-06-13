@@ -23,12 +23,14 @@ import copy
 import eventlet.queue
 import eventlet.timeout
 from keystoneauth1.access import service_catalog as ksa_service_catalog
+from keystoneauth1 import loading as ks_loading
 from keystoneauth1 import plugin
 from oslo_context import context
 from oslo_db.sqlalchemy import enginefacade
 from oslo_log import log as logging
 from oslo_utils import timeutils
 
+import nova.conf
 from nova import exception
 from nova.i18n import _
 from nova import objects
@@ -36,6 +38,7 @@ from nova import policy
 from nova import utils
 
 LOG = logging.getLogger(__name__)
+CONF = nova.conf.CONF
 CELL_CACHE = {}
 # NOTE(melwitt): Used for the scatter-gather utility to indicate we timed out
 # waiting for a result from a cell.
@@ -276,6 +279,12 @@ def get_admin_context(read_deleted="no"):
                           is_admin=True,
                           read_deleted=read_deleted,
                           overwrite=False)
+
+
+def get_service_user_context():
+    auth_plugin = ks_loading.load_auth_from_conf_options(
+        CONF, nova.conf.service_token.SERVICE_USER_GROUP)
+    return RequestContext(user_auth_plugin=auth_plugin)
 
 
 def is_user_context(context):
