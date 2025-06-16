@@ -336,6 +336,15 @@ class Guest(object):
         LOG.debug("attach device xml: %s", device_xml)
         self._domain.attachDeviceFlags(device_xml, flags=flags)
 
+    def update_device(self, conf, persistent=False, live=False):
+        flags = persistent and libvirt.VIR_DOMAIN_AFFECT_CONFIG or 0
+        flags |= live and libvirt.VIR_DOMAIN_AFFECT_LIVE or 0
+
+        device_xml = conf.to_xml()
+
+        LOG.debug("update device xml: %s", device_xml)
+        self._domain.updateDeviceFlags(device_xml, flags=flags)
+
     def set_metadata(self, metadata, persistent=False, live=False):
         """Set metadata to the guest.
 
