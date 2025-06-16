@@ -4117,6 +4117,68 @@ class LibvirtDriver(driver.ComputeDriver):
             time.sleep(1)
         return False
 
+    def _confirm_tpm_secret_security(self, context, instance):
+        """Confirm the TPM secret security policy recorded in system metadata.
+
+        Only legacy instances will need their TPM secret security confirmed.
+        Legacy instances have secrets persisted in the key manager service but
+        have no secrets persisted in libvirt. When their libvirt domains are
+        created, a libvirt secret is created with ephemeral=yes and private=yes
+        and then it is undefined (deleted) after the domain is running.
+
+        For an instance converting to 'host' secret security:
+
+          1. Get the secret from the key manager service
+          2. Create a libvirt secret with ephemeral=no and private=no
+
+        These two steps will be done automatically during _create_guest(), so
+        nothing needs to be done here other than setting confirmed to True.
+
+        For an instance converting to 'deployment' secret security:
+
+          1. Get the existing secret passphrase from the key manager service
+          2. Create a new secret with the same passphrase using the Nova
+             service user context
+          3. Delete the existing user owned secret in the key manager service
+          4. Create and undefine a libvirt secret with ephemeral=yes and
+             private=yes
+
+        We need to do steps 1 and 3 in this method using the user's request
+        context and step 4 will be done automatically during _create_guest().
+        """
+        if instance.system_metadata.get(
+                'tpm_secret_security_confirmed') == 'False':
+            # This is a legacy instance which has the equivalent of the 'user'
+            # secret security policy. If it has a different policy set, then we
+            # need to convert it.
+            secret_security = instance.system_metadata.get(
+                'image_hw_tpm_secret_security')
+
+            LOG.info("Confirming '%s' TPM secret security", secret_security,
+                     instance=instance)
+
+            if secret_security == 'deployment':
+                # Get the existing secret passphrase.
+                user_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+                    context, instance)
+
+                # Clear the secret UUID in the system metadata so a new secret
+                # will be created.
+                instance.system_metadata.pop('vtpm_secret_uuid', None)
+
+                # Create a new secret owned by the Nova service user with the
+                # same passphrase.
+                service_user_context = nova_context.get_service_user_context()
+                service_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+                    service_user_context, instance, secret=passphrase)
+
+                # Delete the existing secret using the user's request context.
+                crypto.delete_encryption_secret(
+                    context, instance.uuid, user_secret_uuid)
+
+            instance.system_metadata['tpm_secret_security_confirmed'] = 'True'
+            instance.save()
+
     def _hard_reboot(self, context, instance, network_info, share_info,
                      block_device_info=None, accel_info=None):
         """Reboot a virtual machine, given an instance reference.
@@ -4171,6 +4233,8 @@ class LibvirtDriver(driver.ComputeDriver):
         #             regenerate raw backend images, however, so when it
         #             does we need to (re)generate the xml after the images
         #             are in place.
+
+        self._confirm_tpm_secret_security(context, instance)
 
         xml = self._get_guest_xml(context, instance, network_info, disk_info,
                                   instance.image_meta,

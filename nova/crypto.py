@@ -171,7 +171,8 @@ def _create_x509_openssl_config(conffile: str, upn: str):
 def ensure_vtpm_secret(
     context: nova_context.RequestContext,
     instance: 'objects.Instance',
-) -> ty.Tuple[str, str]:
+    secret: ty.Optional[bytes] = None,
+) -> ty.Tuple[str, bytes]:
     """Communicates with the key manager service to retrieve or create a secret
     for an instance's emulated TPM.
 
@@ -180,6 +181,7 @@ def ensure_vtpm_secret(
 
     :param context: Nova auth context.
     :param instance: Instance object.
+    :param secret: Optional secret passphrase to use when creating a secret.
     :return: A tuple comprising (secret_uuid, passphrase).
     :raise: castellan_exception.ManagedObjectNotFoundError if communication
         with the key manager API fails, or if a vtpm_secret_uuid was present in
@@ -192,12 +194,12 @@ def ensure_vtpm_secret(
     if secret_uuid is not None:
         # Try to retrieve the secret from the key manager
         try:
-            secret = key_mgr.get(context, secret_uuid)
+            secret_obj = key_mgr.get(context, secret_uuid)
             # assert secret_uuid == secret.id ?
             LOG.debug(
                 "Found existing vTPM secret with UUID %s.",
                 secret_uuid, instance=instance)
-            return secret.id, secret.get_encoded()
+            return secret_obj.id, secret_obj.get_encoded()
         except castellan_exception.ManagedObjectNotFoundError:
             LOG.warning(
                 "Despite being set on the instance, failed to find a vTPM "
@@ -209,7 +211,8 @@ def ensure_vtpm_secret(
 
     # If we get here, the instance has no vtpm_secret_uuid. Create a new one
     # and register it with the key manager.
-    secret = base64.b64encode(os.urandom(_VTPM_SECRET_BYTE_LENGTH))
+    if secret is None:
+        secret = base64.b64encode(os.urandom(_VTPM_SECRET_BYTE_LENGTH))
     # Castellan ManagedObject
     cmo = passphrase.Passphrase(
         secret, name="vTPM secret for instance %s" % instance.uuid)
