@@ -349,7 +349,7 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # ensure our instance's system_metadata field and key manager inventory
         # is correct
         self.assertInstanceHasSecret(server, secret_security='deployment',
-                                     confirmed='True')
+                                     confirmed=True)
 
         # ensure the libvirt secret is defined correctly
         ctx = nova_context.get_admin_context()
@@ -429,6 +429,118 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # The service user context should not have been retrieved at any point.
         mock_svc_user_context.assert_not_called()
+
+    def test_confirm_legacy_server_secret_security_host(self):
+        """Test confirming a legacy server migrated to 'host' secret security
+
+        Before the secret security policy has been confirmed, the libvirt
+        secret should be ephemeral=yes and private=yes and unqueryable in
+        libvirt because the secret is undefined after it is created.
+
+        After the secret security policy has been confirmed, the libvirt secret
+        should be ephermeral=no and private=no and queryable in libvirt because
+        the secret will not be undefined after it is created.
+        """
+        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.start_compute(hostname='tpm-host')
+
+        # Mock out _set_tpm_secret_security() to fake a legacy instance that
+        # we'll then migrate by restarting nova-compute.
+        compute = self.computes['tpm-host']
+        server = self._create_legacy_server_with_vtpm(compute)
+
+        # Now restart nova-compute without the mock, testing that we migrate
+        # the instance correctly.
+        self.restart_compute_service(hostname='tpm-host')
+
+        self._assert_legacy_server_migrated_secret_security(server, 'host')
+
+        # The server should now have unconfirmed 'host' secret security.
+        secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security='host', confirmed=False)
+
+        # The server should not have a libvirt secret because it should have
+        # been undefined after guest creation.
+        self._assert_libvirt_secret_missing(compute, server['id'])
+
+        # Confirm the 'host' secret security policy by hard rebooting.
+        self._reboot_server(server, hard=True)
+
+        # The server should now have confirmed 'host' secret security.
+        new_secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security='host', confirmed=True)
+
+        # The secret in the key manager service should be the same.
+        self.assertEqual(secret_uuid, new_secret_uuid)
+
+        # ensure the libvirt secret is defined correctly
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        conn = compute.driver._host.get_connection()
+        secret = conn._secrets[instance.system_metadata['vtpm_secret_uuid']]
+        self.assertFalse(secret._ephemeral)
+        self.assertFalse(secret._private)
+
+    def test_confirm_legacy_server_secret_security_deployment(self):
+        """Test confirming a legacy server migrated to 'deployment' secret
+        security
+
+        Before the secret security policy has been confirmed, the libvirt
+        secret should be ephemeral=yes and private=yes and unqueryable in
+        libvirt because the secret is undefined after it is created.
+
+        After the secret security policy has been confirmed, the libvirt secret
+        should still be ephemeral=yes and private=yes and unqueryable in
+        libvirt because the secret is undefined after it is created.
+
+        The only difference is the secret in the key manager service should be
+        a new secret owned by the Nova service user rather than the instance
+        owner.
+        """
+        self.flags(
+            default_tpm_secret_security='deployment', group='libvirt')
+        self.start_compute(hostname='tpm-host')
+
+        # Mock out _set_tpm_secret_security() to fake a legacy instance that
+        # we'll then migrate by restarting nova-compute.
+        compute = self.computes['tpm-host']
+        server = self._create_legacy_server_with_vtpm(compute)
+
+        # Now restart nova-compute without the mock, testing that we migrate
+        # the instance correctly.
+        self.restart_compute_service(hostname='tpm-host')
+
+        self._assert_legacy_server_migrated_secret_security(
+            server, 'deployment')
+
+        # The server should now have unconfirmed 'deployment' secret security.
+        secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security='deployment', confirmed=False)
+        passphrase = self.key_mgr._passphrases[secret_uuid]
+
+        # The server should not have a libvirt secret because it should have
+        # been undefined after guest creation.
+        self._assert_libvirt_had_secret(compute, secret_uuid)
+
+        # Confirm the 'host' secret security policy by hard rebooting.
+        self._reboot_server(server, hard=True)
+
+        # The server should now have confirmed 'deployment' secret security.
+        new_secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security='deployment', confirmed=True)
+        new_passphrase = self.key_mgr._passphrases[new_secret_uuid]
+
+        # The secret in the key manager service should be different. We should
+        # have deleted the original secret and created a new one owned by the
+        # Nova service user.
+        self.assertNotEqual(secret_uuid, new_secret_uuid)
+
+        # But the passphrase should be the same.
+        self.assertEqual(passphrase, new_passphrase)
+
+        # The server should not have a libvirt secret because it should have
+        # been undefined after guest creation.
+        self._assert_libvirt_had_secret(compute, new_secret_uuid)
 
     @ddt.data('host', 'deployment')
     def test_live_migrate_legacy_server_secret_security_host_deploy_rejected(
