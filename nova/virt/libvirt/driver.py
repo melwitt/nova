@@ -4117,6 +4117,26 @@ class LibvirtDriver(driver.ComputeDriver):
             time.sleep(1)
         return False
 
+    def _confirm_tpm_secret_security(self, context, instance):
+        if instance.system_metadata.get(
+                'tpm_secret_security_confirmed') == False:
+            # This is a legacy instance which has the equivalent of the 'user'
+            # secret security policy. If it has a different policy set, then we
+            # need to convert it.
+            secret_security = instance.system_metadata.get(
+                'image_hw_tpm_secret_security')
+
+            if secret_security == 'user':
+                # Nothing else to do other than confirm it.
+                instance.system_metadata[
+                    'tpm_secret_security_confirmed'] = True
+            elif secret_security == 'host':
+                # We won't be able to lookup the secret because it would have
+                # been undefined after guest creation.
+                pass
+
+            instance.save()
+
     def _hard_reboot(self, context, instance, network_info, share_info,
                      block_device_info=None, accel_info=None):
         """Reboot a virtual machine, given an instance reference.
@@ -4171,6 +4191,8 @@ class LibvirtDriver(driver.ComputeDriver):
         #             regenerate raw backend images, however, so when it
         #             does we need to (re)generate the xml after the images
         #             are in place.
+
+        self._confirm_tpm_secret_security(context, instance)
 
         xml = self._get_guest_xml(context, instance, network_info, disk_info,
                                   instance.image_meta,
