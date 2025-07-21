@@ -8161,6 +8161,9 @@ class LibvirtDriver(driver.ComputeDriver):
             instance.flavor, instance.image_meta)
         secret_security = (secret_security or
                            CONF.libvirt.default_tpm_secret_security)
+        confirmed = instance.system_metadata.get(
+            'tpm_secret_security_confirmed')
+
         kwargs = {}
         if secret_security == 'host' and confirmed:
             # create_secret() already contains logic to default to the most
@@ -8214,7 +8217,7 @@ class LibvirtDriver(driver.ComputeDriver):
             return guest
         finally:
             if libvirt_secret is not None and not (
-                    secret_security == 'host' and confirmed):
+                    secret_security == 'host' and confirmed == 'True'):
                 libvirt_secret.undefine()
 
     def _neutron_failed_callback(self, event_name, instance):
