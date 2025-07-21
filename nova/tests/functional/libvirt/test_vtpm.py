@@ -348,6 +348,29 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # not yet confirmed.
         self._assert_libvirt_secret_missing(compute, server['id'])
 
+    def test_live_migrate_legacy_server_secret_security_host_rejected(self):
+        """Test the behavior of the API when a legacy server is unconfirmed"""
+        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.start_compute(hostname='tpm-host')
+
+        # Mock out _set_tpm_secret_security() to fake a legacy instance that
+        # we'll then migrate by restarting nova-compute.
+        compute = self.computes['tpm-host']
+        server = self._create_legacy_server_with_vtpm(compute)
+
+        # Now restart nova-compute without the mock, testing that we migrate
+        # the instance correctly.
+        self.restart_compute_service(hostname='tpm-host')
+
+        self._assert_legacy_server_migrated_secret_security(server)
+
+        ex = self.assertRaises(
+            client.OpenStackApiException, self._live_migrate, server)
+        self.assertEqual(400, ex.response.status_code)
+        self.assertIn(
+            "Operation 'live-migration' not supported for vTPM-enabled "
+            "instance", str(ex))
+
     def test_live_migrate_server_secret_security_host(self):
         self.flags(supported_tpm_secret_security=['host'], group='libvirt')
         self.start_compute(hostname='src')
