@@ -401,9 +401,12 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # not yet confirmed.
         self._assert_libvirt_secret_missing(compute, server['id'])
 
-    def test_live_migrate_legacy_server_secret_security_host_rejected(self):
+    @ddt.data('host', 'deployment')
+    def test_live_migrate_legacy_server_secret_security_host_deploy_rejected(
+            self, secret_security):
         """Test the behavior of the API when a legacy server is unconfirmed"""
-        self.flags(default_tpm_secret_security='host', group='libvirt')
+        self.flags(
+            default_tpm_secret_security=secret_security, group='libvirt')
         self.start_compute(hostname='tpm-host')
 
         # Mock out _set_tpm_secret_security() to fake a legacy instance that
@@ -415,7 +418,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # the instance correctly.
         self.restart_compute_service(hostname='tpm-host')
 
-        self._assert_legacy_server_migrated_secret_security(server)
+        self._assert_legacy_server_migrated_secret_security(
+            server, secret_security=secret_security)
 
         ex = self.assertRaises(
             client.OpenStackApiException, self._live_migrate, server)
