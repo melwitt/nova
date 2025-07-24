@@ -8240,7 +8240,7 @@ class LibvirtDriver(driver.ComputeDriver):
         secret_uuid, passphrase = crypto.ensure_vtpm_secret(context, instance)
 
         kwargs = {}
-        if secret_security == 'host' and confirmed:
+        if secret_security == 'host' and confirmed == 'True':
             # create_secret() already contains logic to default to the most
             # secure ephemeral and private for TPM, so just specify if we
             # don't want that.

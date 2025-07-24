@@ -388,18 +388,31 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self._assert_legacy_server_migrated_secret_security(
             server, secret_security=secret_security)
 
+        secret_uuid = self.assertInstanceHasSecret(
+            server, secret_security=secret_security, confirmed='False')
+
         # The server should not have a libvirt secret because it should have
         # been undefined after guest creation.
-        self._assert_libvirt_secret_missing(compute, server['id'])
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        conn = compute.driver._host.get_connection()
+        secret = conn._removed_secrets[
+            instance.system_metadata['vtpm_secret_uuid']]
+        self.assertTrue(secret._ephemeral)
+        self.assertTrue(secret._private)
 
         # Suspend and resume the server to force guest creation.
         self._suspend_server(server)
         self._resume_server(server)
 
-        # The server should still not have a libvirt secret i.e. the 'host'
-        # secret security policy should not have been acted upon because it is
-        # not yet confirmed.
-        self._assert_libvirt_secret_missing(compute, server['id'])
+        # The server should still not have a libvirt secret i.e. the 'host' or
+        # 'deployment' secret security policy should not have been acted upon
+        # because it is not yet confirmed.
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        secret = conn._removed_secrets[
+            instance.system_metadata['vtpm_secret_uuid']]
+        self.assertTrue(secret._ephemeral)
+        self.assertTrue(secret._private)
 
     def test_confirm_legacy_server_secret_security_host(self):
         """Test confirming a legacy server migrated to 'host' secret security
