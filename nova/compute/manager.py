@@ -939,106 +939,98 @@ class ComputeManager(manager.Manager):
         self._clean_instance_console_tokens(context, instance)
         self._delete_scheduler_instance_info(context, instance.uuid)
 
-    def _validate_pinning_configuration(self, instances):
-        if not self.driver.capabilities.get('supports_pcpus', False):
+    def _validate_pinning_configuration(self, instance):
+        # ignore deleted instances
+        if instance.deleted:
             return
 
-        for instance in instances:
-            # ignore deleted instances
-            if instance.deleted:
-                continue
-
-            # if this is an unpinned instance and the host only has
-            # 'cpu_dedicated_set' configured, we need to tell the operator to
-            # correct their configuration
-            if not instance.numa_topology or (
-                instance.numa_topology.cpu_policy in (
-                    None, fields.CPUAllocationPolicy.SHARED
-                )
-            ):
-                # we don't need to check 'vcpu_pin_set' since it can't coexist
-                # alongside 'cpu_dedicated_set'
-                if (CONF.compute.cpu_dedicated_set and
-                        not CONF.compute.cpu_shared_set):
-                    msg = _("This host has unpinned instances but has no CPUs "
-                            "set aside for this purpose; configure '[compute] "
-                            "cpu_shared_set' instead of, or in addition to, "
-                            "'[compute] cpu_dedicated_set'")
-                    raise exception.InvalidConfiguration(msg)
-
-                continue
-
-            # ditto for pinned instances if only 'cpu_shared_set' is configured
-            if (CONF.compute.cpu_shared_set and
-                    not CONF.compute.cpu_dedicated_set and
-                    not CONF.vcpu_pin_set):
-                msg = _("This host has pinned instances but has no CPUs "
-                        "set aside for this purpose; configure '[compute] "
-                        "cpu_dedicated_set' instead of, or in addition to, "
-                        "'[compute] cpu_shared_set'.")
-                raise exception.InvalidConfiguration(msg)
-
-            # if this is a mixed instance with both pinned and unpinned CPUs,
-            # the host must have both 'cpu_dedicated_set' and 'cpu_shared_set'
-            # configured. check if 'cpu_shared_set' is set.
-            if (instance.numa_topology.cpu_policy ==
-                    fields.CPUAllocationPolicy.MIXED and
+        # if this is an unpinned instance and the host only has
+        # 'cpu_dedicated_set' configured, we need to tell the operator to
+        # correct their configuration
+        if not instance.numa_topology or (
+            instance.numa_topology.cpu_policy in (
+                None, fields.CPUAllocationPolicy.SHARED
+            )
+        ):
+            # we don't need to check 'vcpu_pin_set' since it can't coexist
+            # alongside 'cpu_dedicated_set'
+            if (CONF.compute.cpu_dedicated_set and
                     not CONF.compute.cpu_shared_set):
-                msg = _("This host has mixed instance requesting both pinned "
-                        "and unpinned CPUs but hasn't set aside unpinned CPUs "
-                        "for this purpose; Configure "
-                        "'[compute] cpu_shared_set'.")
-                raise exception.InvalidConfiguration(msg)
-
-            # for mixed instance check if 'cpu_dedicated_set' is set.
-            if (instance.numa_topology.cpu_policy ==
-                    fields.CPUAllocationPolicy.MIXED and
-                    not CONF.compute.cpu_dedicated_set):
-                msg = _("This host has mixed instance requesting both pinned "
-                        "and unpinned CPUs but hasn't set aside pinned CPUs "
-                        "for this purpose; Configure "
+                msg = _("This host has unpinned instances but has no CPUs "
+                        "set aside for this purpose; configure '[compute] "
+                        "cpu_shared_set' instead of, or in addition to, "
                         "'[compute] cpu_dedicated_set'")
                 raise exception.InvalidConfiguration(msg)
 
-            # also check to make sure the operator hasn't accidentally
-            # dropped some cores that instances are currently using
-            available_dedicated_cpus = (hardware.get_vcpu_pin_set() or
-                                        hardware.get_cpu_dedicated_set())
-            pinned_cpus = instance.numa_topology.cpu_pinning
-            if available_dedicated_cpus and (
-                    pinned_cpus - available_dedicated_cpus):
-                # we can't raise an exception because of bug #1289064,
-                # which meant we didn't recalculate CPU pinning information
-                # when we live migrated a pinned instance
-                LOG.warning(
-                    "Instance is pinned to host CPUs %(cpus)s "
-                    "but one or more of these CPUs are not included in "
-                    "either '[compute] cpu_dedicated_set' or "
-                    "'vcpu_pin_set'; you should update these "
-                    "configuration options to include the missing CPUs "
-                    "or rebuild or cold migrate this instance.",
-                    {'cpus': list(pinned_cpus)},
-                    instance=instance)
-
-    def _validate_vtpm_configuration(self, instances):
-        if self.driver.capabilities.get('supports_vtpm', False):
             return
 
-        for instance in instances:
-            if instance.deleted:
-                continue
+        # ditto for pinned instances if only 'cpu_shared_set' is configured
+        if (CONF.compute.cpu_shared_set and
+                not CONF.compute.cpu_dedicated_set and
+                not CONF.vcpu_pin_set):
+            msg = _("This host has pinned instances but has no CPUs "
+                    "set aside for this purpose; configure '[compute] "
+                    "cpu_dedicated_set' instead of, or in addition to, "
+                    "'[compute] cpu_shared_set'.")
+            raise exception.InvalidConfiguration(msg)
 
-            # NOTE(stephenfin): We don't have an attribute on the instance to
-            # check for this, so we need to inspect the flavor/image metadata
-            if hardware.get_vtpm_constraint(
-                instance.flavor, instance.image_meta,
-            ):
-                msg = _(
-                    'This host has instances with the vTPM feature enabled, '
-                    'but the host is not correctly configured; enable '
-                    'vTPM support.'
-                )
-                raise exception.InvalidConfiguration(msg)
+        # if this is a mixed instance with both pinned and unpinned CPUs,
+        # the host must have both 'cpu_dedicated_set' and 'cpu_shared_set'
+        # configured. check if 'cpu_shared_set' is set.
+        if (instance.numa_topology.cpu_policy ==
+                fields.CPUAllocationPolicy.MIXED and
+                not CONF.compute.cpu_shared_set):
+            msg = _("This host has mixed instance requesting both pinned "
+                    "and unpinned CPUs but hasn't set aside unpinned CPUs "
+                    "for this purpose; Configure "
+                    "'[compute] cpu_shared_set'.")
+            raise exception.InvalidConfiguration(msg)
+
+        # for mixed instance check if 'cpu_dedicated_set' is set.
+        if (instance.numa_topology.cpu_policy ==
+                fields.CPUAllocationPolicy.MIXED and
+                not CONF.compute.cpu_dedicated_set):
+            msg = _("This host has mixed instance requesting both pinned "
+                    "and unpinned CPUs but hasn't set aside pinned CPUs "
+                    "for this purpose; Configure "
+                    "'[compute] cpu_dedicated_set'")
+            raise exception.InvalidConfiguration(msg)
+
+        # also check to make sure the operator hasn't accidentally
+        # dropped some cores that instances are currently using
+        available_dedicated_cpus = (hardware.get_vcpu_pin_set() or
+                                    hardware.get_cpu_dedicated_set())
+        pinned_cpus = instance.numa_topology.cpu_pinning
+        if available_dedicated_cpus and (
+                pinned_cpus - available_dedicated_cpus):
+            # we can't raise an exception because of bug #1289064,
+            # which meant we didn't recalculate CPU pinning information
+            # when we live migrated a pinned instance
+            LOG.warning(
+                "Instance is pinned to host CPUs %(cpus)s "
+                "but one or more of these CPUs are not included in "
+                "either '[compute] cpu_dedicated_set' or "
+                "'vcpu_pin_set'; you should update these "
+                "configuration options to include the missing CPUs "
+                "or rebuild or cold migrate this instance.",
+                {'cpus': list(pinned_cpus)},
+                instance=instance)
+
+    def _validate_vtpm_configuration(self, instance):
+        if instance.deleted:
+            return
+
+        # NOTE(stephenfin): We don't have an attribute on the instance to
+        # check for this, so we need to inspect the flavor/image metadata
+        if hardware.get_vtpm_constraint(
+            instance.flavor, instance.image_meta,
+        ):
+            msg = _(
+                'This host has instances with the vTPM feature enabled, '
+                'but the host is not correctly configured; enable '
+                'vTPM support.'
+            )
+            raise exception.InvalidConfiguration(msg)
 
     def _reset_live_migration(self, context, instance):
         migration = None
@@ -1655,41 +1647,55 @@ class ComputeManager(manager.Manager):
         # ours.
         self._check_for_host_rename(nodes_by_uuid)
 
+        self.init_virt_events()
+
+        # In this method we pull the list of instances associated with this
+        # host and validate each one with various checks. This is to avoid
+        # needlessly iterating over the same list of instances repeatedly.
+        self._validate_hosted_instances(context, nodes_by_uuid)
+
+    def _validate_hosted_instances(self, context, nodes_by_uuid):
         instances = objects.InstanceList.get_by_host(
             context, self.host,
             expected_attrs=['info_cache', 'metadata', 'numa_topology'])
 
-        self.init_virt_events()
-
-        self._validate_pinning_configuration(instances)
-        self._validate_vtpm_configuration(instances)
-
-        # NOTE(gibi): If ironic and vcenter virt driver slow start time
-        # becomes problematic here then we should consider adding a config
-        # option or a driver flag to tell us if we should thread
-        # _destroy_evacuated_instances and
-        # _error_out_instances_whose_build_was_interrupted out in the
-        # background on startup
         try:
+            # NOTE(gibi): If ironic and vcenter virt driver slow start time
+            # becomes problematic here then we should consider adding a config
+            # option or a driver flag to tell us if we should thread
+            # _destroy_evacuated_instances and
+            # _error_out_instances_whose_build_was_interrupted out in the
+            # background on startup
+
             # checking that instance was not already evacuated to other host
             evacuated_instances = self._destroy_evacuated_instances(
                 context, nodes_by_uuid)
 
-            # Initialise instances on the host that are not evacuating
+            already_handled_uuids = {instance.uuid for instance in instances}
+
             for instance in instances:
+                if self.driver.capabilities.get('supports_pcpus', False):
+                    self._validate_pinning_configuration(instance)
+
+                if not self.driver.capabilities.get('supports_vtpm', False):
+                    self._validate_vtpm_configuration(instance)
+
+                # Initialise instances on the host that are not evacuating
                 if instance.uuid not in evacuated_instances:
                     self._init_instance(context, instance)
 
-            # NOTE(gibi): collect all the instance uuids that is in some way
-            # was already handled above. Either by init_instance or by
-            # _destroy_evacuated_instances. This way we can limit the scope of
-            # the _error_out_instances_whose_build_was_interrupted call to look
-            # only for instances that have allocations on this node and not
-            # handled by the above calls.
-            already_handled = {instance.uuid for instance in instances}.union(
-                evacuated_instances)
+                # NOTE(gibi): collect all the instance uuids that is in some
+                # way was already handled above. Either by init_instance or by
+                # _destroy_evacuated_instances. This way we can limit the scope
+                # of the _error_out_instances_whose_build_was_interrupted call
+                # to look only for instances that have allocations on this node
+                # and not handled by the above calls.
+                if instance.uuid in evacuated_instances:
+                    already_handled_uuids.add(instance.uuid)
+
             self._error_out_instances_whose_build_was_interrupted(
-                context, already_handled, nodes_by_uuid.keys())
+                context, instances, already_handled_uuids,
+                nodes_by_uuid.keys())
 
         finally:
             if instances:
@@ -1702,7 +1708,8 @@ class ComputeManager(manager.Manager):
                 self._update_scheduler_instance_info(context, instances)
 
     def _error_out_instances_whose_build_was_interrupted(
-            self, context, already_handled_instances, node_uuids):
+            self, context, all_instances, already_handled_instances,
+            node_uuids):
         """If there are instances in BUILDING state that are not
         assigned to this host but have allocations in placement towards
         this compute that means the nova-compute service was
@@ -1712,6 +1719,7 @@ class ComputeManager(manager.Manager):
         prevent keeping them in BUILDING state forever.
 
         :param context: The request context
+        :param all_instances: All of the instances for this host
         :param already_handled_instances: The set of instance UUIDs that the
             host initialization process already handled in some way.
         :param node_uuids: The list of compute node uuids handled by this
@@ -1746,20 +1754,15 @@ class ComputeManager(manager.Manager):
             if not not_handled_consumers:
                 continue
 
-            filters = {
-                'vm_state': vm_states.BUILDING,
-                'uuid': not_handled_consumers
-            }
-
-            instances = objects.InstanceList.get_by_filters(
-                context, filters, expected_attrs=[])
-
-            for instance in instances:
-                LOG.debug(
-                    "Instance spawn was interrupted before instance_claim, "
-                    "setting instance to ERROR state", instance=instance)
-                self._set_instance_obj_error_state(
-                    instance, clean_task_state=True)
+            for instance in all_instances:
+                if (instance.vm_state == vm_states.BUILDING and
+                        instance.uuid in not_handled_consumers):
+                    LOG.debug(
+                        "Instance spawn was interrupted before "
+                        "instance_claim, setting instance to ERROR state",
+                        instance=instance)
+                    self._set_instance_obj_error_state(
+                        instance, clean_task_state=True)
 
     def cleanup_host(self):
         self.driver.register_event_listener(None)

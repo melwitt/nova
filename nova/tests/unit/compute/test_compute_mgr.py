@@ -1055,13 +1055,19 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                 host=self.compute.host, uuid=uuids.our_node_uuid,
                 hypervisor_hostname='fake-node')
             mock_get_nodes.return_value = {uuids.our_node_uuid: our_node}
+            # Simulate support so that init_host() will validate pinning and
+            # vtpm configuration.
+            self.compute.driver.capabilities.update(
+                {'supports_pcpus': True, 'supports_vtpm': False})
 
             self.compute.init_host(None)
 
             mock_check_new.assert_called_once_with()
             mock_existing_node.assert_not_called()
-            mock_validate_pinning.assert_called_once_with(inst_list)
-            mock_validate_vtpm.assert_called_once_with(inst_list)
+            expected_calls = [mock.call(inst_list[0]), mock.call(inst_list[1]),
+                              mock.call(inst_list[2])]
+            mock_validate_pinning.assert_has_calls(expected_calls)
+            mock_validate_vtpm.assert_has_calls(expected_calls)
             mock_destroy.assert_called_once_with(
                 self.context, {uuids.our_node_uuid: our_node})
             mock_inst_init.assert_has_calls(
@@ -1077,7 +1083,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                 self.context, inst_list)
 
             mock_error_interrupted.assert_called_once_with(
-                self.context, {inst.uuid for inst in inst_list},
+                self.context, inst_list, {inst.uuid for inst in inst_list},
                 mock_get_nodes.return_value.keys())
 
         _do_mock_calls()
@@ -1455,6 +1461,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
         # by init_host and init_instance
         self.compute._error_out_instances_whose_build_was_interrupted(
             self.context,
+            mock_get_instances.return_value,
             {inst.uuid for inst in [active_instance, evacuating_instance]},
             [uuids.cn_uuid])
 
@@ -1614,7 +1621,8 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
 
         with mock.patch.dict(self.compute.driver.capabilities,
                              supports_pcpus=supports_pcpus):
-            self.compute._validate_pinning_configuration(instances)
+            for instance in instances:
+                self.compute._validate_pinning_configuration(instance)
 
     def test__validate_pinning_configuration_valid_config(self):
         """Test that configuring proper 'cpu_dedicated_set' and
@@ -1685,7 +1693,10 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
         """
         self._test__validate_pinning_configuration(supports_pcpus=False)
 
-    def _test__validate_vtpm_configuration(self, supports_vtpm):
+    @mock.patch.object(objects.InstanceList, 'get_by_host')
+    @mock.patch.object(manager.ComputeManager,'_destroy_evacuated_instances',
+                       new=mock.Mock(return_value={}))
+    def _test__validate_vtpm_configuration(self, mock_list, supports_vtpm):
         instance_1 = fake_instance.fake_instance_obj(
             self.context, uuid=uuids.instance_1)
         instance_2 = fake_instance.fake_instance_obj(
@@ -1698,7 +1709,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
 
         instance_3.deleted = True
 
-        instances = objects.InstanceList(objects=[
+        mock_list.return_value = objects.InstanceList(objects=[
             instance_1, instance_2, instance_3])
 
         with test.nested(
@@ -1709,7 +1720,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                 objects.ImageMeta, 'from_instance', return_value=image_meta,
             ),
         ):
-            self.compute._validate_vtpm_configuration(instances)
+            self.compute._validate_hosted_instances(self.context, {})
 
     def test__validate_vtpm_configuration_unsupported(self):
         """Test that the check fails if the driver does not support vTPM and
