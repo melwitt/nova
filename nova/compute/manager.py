@@ -1021,8 +1021,7 @@ class ComputeManager(manager.Manager):
                     instance=instance)
 
     def _validate_vtpm_configuration(self, instances):
-        if self.driver.capabilities.get('supports_vtpm', False):
-            return
+        supports_vtpm = self.driver.capabilities.get('supports_vtpm', False)
 
         for instance in instances:
             if instance.deleted:
@@ -1030,15 +1029,21 @@ class ComputeManager(manager.Manager):
 
             # NOTE(stephenfin): We don't have an attribute on the instance to
             # check for this, so we need to inspect the flavor/image metadata
-            if hardware.get_vtpm_constraint(
-                instance.flavor, instance.image_meta,
-            ):
+            requested_vtpm = hardware.get_vtpm_constraint(instance.flavor,
+                                                          instance.image_meta)
+            if not supports_vtpm and requested_vtpm:
                 msg = _(
                     'This host has instances with the vTPM feature enabled, '
                     'but the host is not correctly configured; enable '
                     'vTPM support.'
                 )
                 raise exception.InvalidConfiguration(msg)
+
+            # For existing instances, set TPM security provisionally. The
+            # security policy will not take effect until the user confirms it
+            # by hard rebooting the instance.
+            if self._set_tpm_secret_security(instance, confirmed=False):
+                instance.save()
 
     def _set_tpm_secret_security(
             self, instance: 'objects.Instance', confirmed: bool) -> bool:
@@ -1060,33 +1065,35 @@ class ComputeManager(manager.Manager):
 
         :returns: True if TPM security metadata was updated, False otherwise
         """
+        # Check if the instance has a TPM from the tpm_version and tpm_model
+        # extra specs or image properties. If the instance has no TPM, we don't
+        # need to do anything.
+        if not hardware.get_vtpm_constraint(instance.flavor,
+                                            instance.image_meta):
+            return False
+
         # If the instance already has a secret security policy set, there is
         # nothing to do.
         if ('image_hw_tpm_secret_security' in instance.system_metadata or
                 'provisional_tpm_secret_security' in instance.system_metadata):
             return False
 
-        # Check if the instance has a TPM from the tpm_version and tpm_model
-        # extra specs or image properties.
-        if hardware.get_vtpm_constraint(instance.flavor, instance.image_meta):
-            # If the instance has a TPM, check if a secret security policy has
-            # been specified from the tpm_secret_security the extra spec or
-            # image property.
-            security = hardware.get_tpm_secret_security_constraint(
-                instance.flavor, instance.image_meta)
-            # If one was not specified, take the configured default.
-            security = (
-                security or CONF.libvirt.default_tpm_secret_security)
-            # Then set it in the instance system metadata.
-            if confirmed:
-                updates = {'image_hw_tpm_secret_security': security}
-            else:
-                updates = {'provisional_tpm_secret_security': security}
+        # If the instance has a TPM, check if a secret security policy has
+        # been specified from the tpm_secret_security the extra spec or
+        # image property.
+        security = hardware.get_tpm_secret_security_constraint(
+            instance.flavor, instance.image_meta)
+        # If one was not specified, take the configured default.
+        security = (
+            security or CONF.libvirt.default_tpm_secret_security)
+        # Then set it in the instance system metadata.
+        if confirmed:
+            updates = {'image_hw_tpm_secret_security': security}
+        else:
+            updates = {'provisional_tpm_secret_security': security}
 
-            instance.system_metadata.update(updates)
-            return True
-
-        return False
+        instance.system_metadata.update(updates)
+        return True
 
     def _reset_live_migration(self, context, instance):
         migration = None
@@ -1712,13 +1719,6 @@ class ComputeManager(manager.Manager):
 
         self._validate_pinning_configuration(instances)
         self._validate_vtpm_configuration(instances)
-
-        # For existing instances, set TPM security provisionally. The security
-        # policy will not take effect until the user confirms it by hard
-        # rebooting the instance.
-        for instance in instances:
-            if self._set_tpm_secret_security(instance, confirmed=False):
-                instance.save()
 
         # NOTE(gibi): If ironic and vcenter virt driver slow start time
         # becomes problematic here then we should consider adding a config
