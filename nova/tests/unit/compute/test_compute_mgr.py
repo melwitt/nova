@@ -5131,6 +5131,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
         instance = objects.Instance._from_db_object(
                 self.context, objects.Instance(), db_instance)
         instance.host = 'fake-host'
+        instance.system_metadata = {}
         block_migration = 'block_migration'
         disk_over_commit = 'disk_over_commit'
         src_info = 'src_info'
@@ -5409,6 +5410,29 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                 exception.MigrationPreCheckError,
                 self.compute.check_can_live_migrate_destination,
                 self.context, instance, None, None, None, None)
+
+    @mock.patch.object(compute_utils, 'add_instance_fault_from_exc')
+    def test_check_can_live_migrate_destination_fail_vtpm_secret_security(
+            self, mock_add_fault):
+        instance = fake_instance.fake_instance_obj(
+            self.context, host=self.compute.host, vm_state=vm_states.ACTIVE,
+            node='fake-node')
+        instance.system_metadata = {'image_hw_tpm_secret_security': 'host'}
+
+        ex = exception.UnsupportedVTPMSecretSecurity(
+            policy='host', instance_uuid=instance.uuid)
+
+        @mock.patch.object(self.compute, '_validate_instance_group_policy',
+                           new=mock.Mock())
+        @mock.patch.object(self.compute, '_validate_vtpm_secret_security')
+        def _test(mock_validate):
+            mock_validate.side_effect = ex
+            self.assertRaises(
+                exception.MigrationPreCheckError,
+                self.compute.check_can_live_migrate_destination,
+                self.context, instance, None, None, None, None)
+
+        _test()
 
     def test_dest_can_numa_live_migrate(self):
         positive_dest_check_data = objects.LibvirtLiveMigrateData(
@@ -7269,6 +7293,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
         instance = fake_instance.fake_instance_obj(self.context)
         instance.trusted_certs = None
         instance.info_cache = None
+        instance.system_metadata = {}
         elevated_context = mock.Mock()
         mock_context_elevated.return_value = elevated_context
         request_spec = objects.RequestSpec()
@@ -7331,6 +7356,51 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
         mock_notify.assert_called_once_with(
             elevated_context, instance, 'fake-mini', bdms=None, exception=exc,
             phase='error')
+        # Make sure the instance vm_state did not change.
+        self.assertEqual(vm_states.ACTIVE, instance.vm_state)
+
+    @mock.patch('nova.compute.utils.add_instance_fault_from_exc',
+                new=mock.Mock())
+    @mock.patch('nova.compute.resource_tracker.ResourceTracker.'
+                'delete_allocation_for_evacuated_instance')
+    @mock.patch('nova.context.RequestContext.elevated')
+    @mock.patch('nova.objects.instance.Instance.save', new=mock.Mock())
+    @mock.patch('nova.compute.utils.notify_about_instance_rebuild')
+    @mock.patch('nova.compute.utils.notify_about_instance_usage',
+                new=mock.Mock())
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_validate_vtpm_secret_security')
+    @mock.patch('nova.compute.manager.ComputeManager._set_migration_status',
+                new=mock.Mock())
+    @mock.patch('nova.compute.resource_tracker.ResourceTracker.rebuild_claim',
+                new=mock.MagicMock())
+    def test_evacuate_late_vtpm_secret_security_check_fails(
+            self, mock_validate, mock_notify, mock_elevated,
+            mock_delete_allocation):
+        instance = fake_instance.fake_instance_obj(self.context)
+        instance.info_cache = None
+        instance.trusted_certs = None
+        instance.system_metadata = {'image_hw_tpm_secret_security': 'host'}
+        instance.vm_state = vm_states.ACTIVE
+
+        exc = exception.UnsupportedVTPMSecretSecurity(
+            policy='host', instance_uuid=instance.uuid)
+        mock_validate.side_effect = exc
+
+        self.assertRaises(
+            messaging.ExpectedException, self.compute.rebuild_instance,
+            self.context, instance, None, None, None, None, None, None,
+            recreate=True, on_shared_storage=None, preserve_ephemeral=False,
+            migration=None, scheduled_node='fake-node', limits={},
+            request_spec=None, accel_uuids=[],
+            reimage_boot_volume=False, target_state=None)
+
+        mock_delete_allocation.assert_called_once_with(
+            mock_elevated.return_value, instance, 'fake-node',
+            node_type='destination')
+        mock_notify.assert_called_once_with(
+            mock_elevated.return_value, instance, 'fake-mini', bdms=None,
+            exception=exc, phase='error')
         # Make sure the instance vm_state did not change.
         self.assertEqual(vm_states.ACTIVE, instance.vm_state)
 
@@ -7430,6 +7500,7 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
                                                    instance_uuid=instance.uuid)
 
             instance.info_cache = info_cache
+            instance.system_metadata = {}
             instance.task_state = task_states.REBUILDING
             instance.migration_context = None
             instance.numa_topology = None
@@ -9314,20 +9385,15 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     @mock.patch.object(conductor_api.ComputeTaskAPI, 'build_instances')
     @mock.patch.object(manager.ComputeManager, '_build_failed')
     @mock.patch.object(manager.ComputeManager, '_build_succeeded')
-    @mock.patch.object(manager.ComputeManager,
-                       '_validate_instance_group_policy')
-    def test_group_affinity_violation_exception_with_retry(
-        self, mock_validate_policy, mock_succeeded, mock_failed, mock_build,
-        mock_nil, mock_save, mock_start, mock_finish,
+    def _test_policy_violation_exception_with_retry(
+        self, mock_succeeded, mock_failed, mock_build, mock_nil, mock_save,
+        mock_start, mock_finish,
     ):
         """Test retry by affinity or anti-affinity validation check doesn't
         increase failed build
         """
 
         self._do_build_instance_update(mock_save, reschedule_update=True)
-        mock_validate_policy.side_effect = \
-                exception.GroupAffinityViolation(
-                instance_uuid=self.instance.uuid, policy="Affinity")
 
         orig_do_build_and_run = self.compute._do_build_and_run_instance
 
@@ -9369,6 +9435,30 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                 self.security_groups, self.block_device_mapping,
                 request_spec={}, host_lists=[fake_host_list])
 
+    @mock.patch.object(manager.ComputeManager,
+                       '_validate_instance_group_policy')
+    def test_group_affinity_violation_exception_with_retry(
+            self, mock_validate):
+        """Test retry by affinity or anti-affinity validation check doesn't
+        increase failed build
+        """
+
+        mock_validate.side_effect = exception.GroupAffinityViolation(
+            instance_uuid=self.instance.uuid, policy="Affinity")
+        self._test_policy_violation_exception_with_retry()
+
+    @mock.patch.object(manager.ComputeManager,
+                       '_validate_vtpm_secret_security')
+    def test_vtpm_secret_security_unsupported_exception_with_retry(
+            self, mock_validate):
+        """Test retry by TPM secret security validation doesn't increase failed
+        build
+        """
+
+        mock_validate.side_effect = exception.UnsupportedVTPMSecretSecurity(
+            policy='host', instance_uuid=self.instance.uuid)
+        self._test_policy_violation_exception_with_retry()
+
     @mock.patch('nova.compute.resource_tracker.ResourceTracker.instance_claim',
                 new=mock.MagicMock())
     @mock.patch.object(objects.InstanceActionEvent,
@@ -9383,21 +9473,12 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
     @mock.patch.object(conductor_api.ComputeTaskAPI, 'build_instances')
     @mock.patch.object(manager.ComputeManager, '_build_failed')
     @mock.patch.object(manager.ComputeManager, '_build_succeeded')
-    @mock.patch.object(manager.ComputeManager,
-                       '_validate_instance_group_policy')
-    def test_group_affinity_violation_exception_without_retry(
-        self, mock_validate_policy, mock_succeeded, mock_failed, mock_build,
-        mock_add, mock_set_state, mock_clean_net, mock_nil, mock_save,
-        mock_start, mock_finish,
+    def _test_policy_violation_exception_without_retry(
+        self, mock_succeeded, mock_failed, mock_build, mock_add,
+        mock_set_state, mock_clean_net, mock_nil, mock_save, mock_start,
+        mock_finish,
     ):
-        """Test failure by affinity or anti-affinity validation check doesn't
-        increase failed build
-        """
-
         self._do_build_instance_update(mock_save)
-        mock_validate_policy.side_effect = \
-                exception.GroupAffinityViolation(
-                instance_uuid=self.instance.uuid, policy="Affinity")
 
         orig_do_build_and_run = self.compute._do_build_and_run_instance
 
@@ -9435,6 +9516,30 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
         mock_build.assert_not_called()
         mock_set_state.assert_called_once_with(self.instance,
                 clean_task_state=True)
+
+    @mock.patch.object(manager.ComputeManager,
+                       '_validate_instance_group_policy')
+    def test_group_affinity_violation_exception_without_retry(self,
+                                                              mock_validate):
+        """Test failure by affinity or anti-affinity validation check doesn't
+        increase failed build
+        """
+
+        mock_validate.side_effect = exception.GroupAffinityViolation(
+            instance_uuid=self.instance.uuid, policy="Affinity")
+        self._test_policy_violation_exception_without_retry()
+
+    @mock.patch.object(manager.ComputeManager,
+                       '_validate_vtpm_secret_security')
+    def test_vtpm_secret_security_unsupported_exception_without_retry(
+            self, mock_validate):
+        """Test failure by TPM secret security validation doesn't increase
+        failed build
+        """
+
+        mock_validate.side_effect = exception.UnsupportedVTPMSecretSecurity(
+            policy='host', instance_uuid=self.instance.uuid)
+        self._test_policy_violation_exception_without_retry()
 
     @mock.patch.object(objects.InstanceActionEvent,
                        'event_finish_with_failure')
@@ -9743,12 +9848,14 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
                     '_shutdown_instance'),
                 mock.patch.object(self.compute,
                     '_validate_instance_group_policy'),
+                mock.patch.object(self.compute,
+                    '_validate_vtpm_secret_security'),
                 mock.patch.object(self.compute.rt, 'instance_claim'),
                 mock.patch('nova.compute.utils.notify_about_instance_create')
         ) as (spawn, save,
                 _build_networks_for_instance, _notify_about_instance_usage,
                 _shutdown_instance, _validate_instance_group_policy,
-                mock_claim, mock_notify):
+                _validate_vtpm_secret_security, mock_claim, mock_notify):
 
             self.assertRaises(exception.BuildAbortException,
                     self.compute._build_and_run_instance, self.context,
@@ -9759,6 +9866,8 @@ class ComputeManagerBuildInstanceTestCase(test.NoDBTestCase):
 
             _validate_instance_group_policy.assert_called_once_with(
                     self.context, self.instance, {})
+            _validate_vtpm_secret_security.assert_called_once_with(
+                    self.instance)
             _build_networks_for_instance.assert_has_calls(
                     [mock.call(self.context, self.instance,
                         self.requested_networks, self.security_groups,
@@ -11675,6 +11784,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase,
 
         instance = fake_instance.fake_instance_obj(self.context,
                                                    uuid=uuids.instance)
+        instance.system_metadata = {}
         volume_id = uuids.volume
         vol_bdm = fake_block_device.fake_bdm_object(
             self.context,
@@ -11761,6 +11871,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase,
 
         instance = fake_instance.fake_instance_obj(self.context,
                                                    uuid=uuids.instance)
+        instance.system_metadata = {}
         volume1_id = uuids.volume1
         vol1_bdm = fake_block_device.fake_bdm_object(
             self.context,
@@ -11832,6 +11943,7 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase,
 
         instance = fake_instance.fake_instance_obj(self.context,
                                                    uuid=uuids.instance)
+        instance.system_metadata = {}
         vol1_bdm = fake_block_device.fake_bdm_object(
             self.context,
             {'source_type': 'volume', 'destination_type': 'volume',
@@ -13132,7 +13244,8 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase,
                                         host='host',
                                         node='node',
                                         vm_state='active',
-                                        task_state=None)
+                                        task_state=None,
+                                        system_metadata={})
 
             self.assertRaises(test.TestingException,
                               self.compute.prep_resize,
@@ -13291,6 +13404,59 @@ class ComputeManagerMigrationTestCase(test.NoDBTestCase,
                 self.context, instance.image_meta, instance, instance.flavor,
                 request_spec, filter_properties={}, node=instance.node,
                 clean_shutdown=True, migration=migration, host_list=[])
+        # The instance.vm_state should remain unchanged
+        # (_error_out_instance_on_exception will set to ACTIVE by default).
+        self.assertEqual(vm_states.STOPPED, instance.vm_state)
+
+    @mock.patch('nova.compute.utils.notify_usage_exists')
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_notify_about_instance_usage')
+    @mock.patch('nova.compute.utils.notify_about_resize_prep_instance')
+    @mock.patch('nova.objects.Instance.save')
+    @mock.patch('nova.compute.manager.ComputeManager._revert_allocation')
+    @mock.patch('nova.compute.manager.ComputeManager.'
+                '_reschedule_resize_or_reraise')
+    @mock.patch('nova.compute.utils.add_instance_fault_from_exc')
+    # this is almost copy-paste from test_prep_resize_fails_group_validation
+    def test_prep_resize_fails_vtpm_secret_security_validation(
+            self, add_instance_fault_from_exc, _reschedule_resize_or_reraise,
+            _revert_allocation, mock_instance_save,
+            notify_about_resize_prep_instance, _notify_about_instance_usage,
+            notify_usage_exists):
+        """Tests that if _validate_vtpm_secret_security raises
+        InstanceFaultRollback, the instance.vm_state is reset properly in
+        _error_out_instance_on_exception
+        """
+        instance = fake_instance.fake_instance_obj(
+            self.context, host=self.compute.host, vm_state=vm_states.STOPPED,
+            node='fake-node', expected_attrs=['system_metadata', 'flavor'])
+        migration = mock.MagicMock(spec='nova.objects.Migration')
+        request_spec = mock.MagicMock(spec='nova.objects.RequestSpec')
+        ex = exception.UnsupportedVTPMSecretSecurity(
+            policy='host', instance_uuid=instance.uuid)
+        ex2 = exception.InstanceFaultRollback(
+            inner_exception=ex)
+
+        def fake_reschedule_resize_or_reraise(*args, **kwargs):
+            raise ex2
+
+        _reschedule_resize_or_reraise.side_effect = (
+            fake_reschedule_resize_or_reraise)
+
+        @mock.patch.object(self.compute, '_validate_instance_group_policy')
+        @mock.patch.object(self.compute, '_validate_vtpm_secret_security',
+                           side_effect=ex)
+        def _test():
+            self.assertRaises(
+                # _error_out_instance_on_exception should reraise the
+                # UnsupportedVTPMSecretSecurity inside InstanceFaultRollback.
+                exception.UnsupportedVTPMSecretSecurity,
+                self.compute.prep_resize, self.context, instance.image_meta,
+                instance, instance.flavor, request_spec, filter_properties={},
+                node=instance.node, clean_shutdown=True, migration=migration,
+                host_list=[])
+
+        _test()
         # The instance.vm_state should remain unchanged
         # (_error_out_instance_on_exception will set to ACTIVE by default).
         self.assertEqual(vm_states.STOPPED, instance.vm_state)
