@@ -496,13 +496,12 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self._assert_libvirt_has_secret(self.dest, self.server['id'])
 
     @ddt.data('host', 'deployment')
-    def test_live_migrate_server_secret_security_host_deploy_to_old(
+    def test_live_migrate_server_secret_security_unsupported(
             self, secret_security):
-        """Test behavior when a new server tries to migrate to an old compute
+        """Test behavior when a server tries to migrate to incompatible compute
 
         We will simulate this by starting one compute without any
-        supported_tpm_secret_security to represent an old compute node and try
-        to live migrate to it.
+        supported_tpm_secret_security and try to live migrate to it.
 
         The attempt should fail with NoValidHost.
         """
@@ -526,15 +525,14 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertIn('NoValidHost', event['traceback'])
 
     @ddt.data('host', 'deployment')
-    def test_live_migrate_host_server_secret_security_host_deploy_to_old(
+    def test_live_migrate_host_server_secret_security_host_unsupported(
             self, secret_security):
-        """Test behavior when a new server tries to migrate to an old compute
+        """Test behavior when a server tries to migrate to incompatible compute
 
         This will request a destination host for live migration.
 
         We will simulate this by starting one compute without any
-        supported_tpm_secret_security to represent an old compute node and try
-        to live migrate to it.
+        supported_tpm_secret_security and try to live migrate to it.
 
         The attempt should fail with NoValidHost.
         """
@@ -559,18 +557,18 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertIn('NoValidHost', event['traceback'])
 
     @ddt.data('host', 'deployment')
-    def test_live_migrate_host_force_server_secret_security_host_deploy_to_old(
+    def test_live_migrate_host_force_server_secret_security_unsupported(
             self, secret_security):
-        """Test behavior when a new server tries to migrate to an old compute
+        """Test behavior when a server tries to migrate to incompatible compute
 
         This will request a destination host for live migration and force=True
         by using an older microversion 2.30.
 
         We will simulate this by starting one compute without any
-        supported_tpm_secret_security to represent an old compute node and try
-        to live migrate to it.
+        supported_tpm_secret_security and try to live migrate to it.
 
-        This will go through because it bypasses the scheduler entirely.
+        This will fail the pre-flight check due to the late TPM secret security
+        validation in nova-compute.
         """
         self.flags(
             supported_tpm_secret_security=[secret_security], group='libvirt')
@@ -588,13 +586,16 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # version in the deployment is new enough? Or some subset of live
         # migration until the minimum service version is met?
         with utils.temporary_mutation(self.api, microversion='2.30'):
-            self.api.post_server_action(
+            ex = self.assertRaises(
+                client.OpenStackApiException, self.api.post_server_action,
                 self.server['id'],
                 {'os-migrateLive': {'host': 'dest',
                                     'block_migration': 'auto',
                                     'force': 'True'}})
-            self._wait_for_migration_status(self.server, ['completed'])
-            self._wait_for_state_change(self.server, 'ACTIVE')
+            self.assertEqual(400, ex.response.status_code)
+            self.assertIn(
+                'Migration pre-check error: Failed to validate TPM secret '
+                'security policy', str(ex))
 
     def test_live_migrate_server_secret_security_host(self):
         """Test a successful live migration of a server with 'host' security
