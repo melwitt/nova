@@ -1928,6 +1928,15 @@ class ComputeManager(manager.Manager):
 
         return [_decode(f) for f in injected_files]
 
+    def _validate_vtpm_secret_security(self, instance):
+        if 'image_hw_tpm_secret_security' not in instance.system_metadata:
+            return
+
+        security = instance.system_metadata.get('image_hw_tpm_secret_security')
+        if security not in CONF.libvirt.supported_tpm_secret_security:
+            raise exception.UnsupportedVTPMSecretSecurity(
+                policy=security, instance_uuid=instance.uuid)
+
     def _validate_instance_group_policy(self, context, instance,
                                         scheduler_hints=None):
 
@@ -2713,6 +2722,7 @@ class ComputeManager(manager.Manager):
                 # the host is set on the instance.
                 self._validate_instance_group_policy(context, instance,
                                                      scheduler_hints)
+                self._validate_vtpm_secret_security(instance)
                 image_meta = objects.ImageMeta.from_dict(image)
 
                 with self._build_resources(context, instance,
@@ -2820,7 +2830,8 @@ class ComputeManager(manager.Manager):
                     bdms=block_device_mapping)
             raise exception.BuildAbortException(instance_uuid=instance.uuid,
                     reason=e.format_message())
-        except exception.GroupAffinityViolation as e:
+        except (exception.GroupAffinityViolation,
+                exception.UnsupportedVTPMSecretSecurity) as e:
             LOG.exception('Failed to build and run instance',
                           instance=instance)
             self._notify_about_instance_usage(context, instance,
@@ -4004,11 +4015,12 @@ class ComputeManager(manager.Manager):
                     scheduled_node, limits, accel_uuids, reimage_boot_volume,
                     target_state)
             except (exception.ComputeResourcesUnavailable,
-                    exception.RescheduledException) as e:
+                    exception.RescheduledException,
+                    exception.UnsupportedVTPMSecretSecurity) as e:
                 if isinstance(e, exception.ComputeResourcesUnavailable):
                     LOG.debug("Could not rebuild instance on this host, not "
                               "enough resources available.", instance=instance)
-                else:
+                elif isinstance(e, exception.RescheduledException):
                     # RescheduledException is raised by the late server group
                     # policy check during evacuation if a parallel scheduling
                     # violated the policy.
@@ -4017,6 +4029,10 @@ class ComputeManager(manager.Manager):
                     # operation.
                     LOG.debug("Could not rebuild instance on this host, "
                               "late server group check failed.",
+                              instance=instance)
+                elif isinstance(e, exception.UnsupportedVTPMSecretSecurity):
+                    LOG.debug('Could not rebuild instance on this host, TPM '
+                              f'secret security check failed: {str(e)}',
                               instance=instance)
                 # NOTE(ndipanov): We just abort the build for now and leave a
                 # migration record for potential cleanup later
@@ -4120,6 +4136,10 @@ class ComputeManager(manager.Manager):
                 # reschedule.
                 hints = self._get_scheduler_hints({}, request_spec)
                 self._validate_instance_group_policy(context, instance, hints)
+
+            # Similarly fail if this host cannot support the vTPM secret
+            # security policy required by the instance.
+            self._validate_vtpm_secret_security(instance)
 
             if not self.driver.capabilities.get("supports_evacuate", False):
                 raise exception.InstanceEvacuateNotSupported
@@ -6343,6 +6363,13 @@ class ComputeManager(manager.Manager):
                     self._validate_instance_group_policy(context, instance,
                                                          scheduler_hints)
                 except exception.RescheduledException as e:
+                    raise exception.InstanceFaultRollback(inner_exception=e)
+
+                # Similarly fail if this host cannot support the vTPM secret
+                # security policy required by the instance.
+                try:
+                    self._validate_vtpm_secret_security(instance)
+                except exception.UnsupportedVTPMSecretSecurity as e:
                     raise exception.InstanceFaultRollback(inner_exception=e)
 
                 self._prep_resize(context, image, instance,
@@ -9129,6 +9156,15 @@ class ComputeManager(manager.Manager):
                    "due to: {}".format(e))
             raise exception.MigrationPreCheckError(reason=msg)
 
+        # Similarly fail if this host cannot support the vTPM secret security
+        # policy required by the instance.
+        try:
+            self._validate_vtpm_secret_security(instance)
+        except exception.UnsupportedVTPMSecretSecurity as e:
+            msg = ("Failed to validate TPM secret security policy "
+                   "due to: {}".format(e))
+            raise exception.MigrationPreCheckError(reason=msg)
+
         src_compute_info = obj_base.obj_to_primitive(
             self._get_compute_info(ctxt, instance.host))
         dst_compute_info = obj_base.obj_to_primitive(
@@ -9359,6 +9395,9 @@ class ComputeManager(manager.Manager):
         # violation. Also, it should be safe to explode here. The instance
         # status remains ACTIVE, migration status failed.
         self._validate_instance_group_policy(context, instance)
+        # Similarly fail if this host cannot support the vTPM secret security
+        # policy required by the instance.
+        self._validate_vtpm_secret_security(instance)
 
         migrate_data.old_vol_attachment_ids = {}
         bdms = objects.BlockDeviceMappingList.get_by_instance_uuid(
