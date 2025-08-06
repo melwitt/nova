@@ -606,6 +606,12 @@ class OperationNotSupportedForVTPM(NotSupported):
                 "instance (%(instance_uuid)s).")
 
 
+class UnsupportedVTPMSecretSecurity(Invalid):
+    msg_fmt = _("This compute host does not support the '%(policy)s' TPM "
+                "secret security policy required by the instance "
+                "(%(instance_uuid)s).")
+
+
 class OperationNotSupportedForVDPAInterface(NotSupported):
     msg_fmt = _(
         "Operation '%(operation)s' not supported for instance with "
