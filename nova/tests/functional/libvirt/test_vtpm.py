@@ -398,15 +398,14 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # And we should have a libvirt secret on the destination host.
         self._assert_libvirt_has_secret(self.dest, self.server['id'])
 
-    @ddt.data('host', 'deployment')
-    def test_live_migrate_server_secret_security_host_deploy_to_old(
-            self, secret_security):
-        """Test behavior when a new server tries to migrate to an old compute
+    def _test_live_migrate_server_secret_security_unsupported(
+            self, secret_security, old=False):
+        """Test behavior when a server tries to migrate to incompatible compute
 
-        We will simulate a migration attempt to an old host by setting the
-        service version of the destination to an old version and starting it
-        without any supported_tpm_secret_security. Then we will try to live
-        migrate to it.
+        If old=True, we will simulate a migration attempt to an old host by
+        setting the service version of the destination to an old version. In
+        either case we will start the compute service without any
+        supported_tpm_secret_security. Then we will try to live migrate to it.
 
         This should fail with BadRequest because of the service version check.
         """
@@ -416,35 +415,59 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.flags(supported_tpm_secret_security=[], group='libvirt')
         self.start_compute(hostname='dest')
 
-        # Set the destination compute to fake the old version. We need to use
-        # the DB API directly to get around the minimum service version check
-        # in the Service object save() method.
-        ctx = nova_context.get_admin_context()
-        db_api.service_update(
-            ctx, self.computes['dest'].service_ref.id, {'version': 70})
+        if old:
+            # Set the destination compute to fake the old version. We need to
+            # use the DB API directly to get around the minimum service version
+            # check in the Service object save() method.
+            ctx = nova_context.get_admin_context()
+            db_api.service_update(
+                ctx, self.computes['dest'].service_ref.id, {'version': 70})
 
         server = self._create_server_with_vtpm(secret_security=secret_security,
                                                host='src')
 
-        ex = self.assertRaises(
-            client.OpenStackApiException, self._live_migrate, server)
-        self.assertEqual(400, ex.response.status_code)
-        self.assertIn(
-            'vTPM live migration is not supported by old nova-compute '
-            'services. Upgrade your nova-compute services to '
-            'Flamingo (32.0.0) or later.', str(ex))
+        if old:
+            ex = self.assertRaises(
+                client.OpenStackApiException, self._live_migrate, server)
+            self.assertEqual(400, ex.response.status_code)
+            self.assertIn(
+                'vTPM live migration is not supported by old nova-compute '
+                'services. Upgrade your nova-compute services to '
+                'Flamingo (32.0.0) or later.', str(ex))
+        else:
+            self._live_migrate(
+                server, migration_expected_state='error', host='dest')
+
+            # Live migration attempt should have failed with NoValidHost
+            # because no other host is advertising the
+            # COMPUTE_SECURITY_TPM_SECRET_SECURITY_<secret_security> trait.
+            event = self._wait_for_instance_action_event(
+                server, 'live-migration', 'conductor_live_migrate_instance',
+                'Error')
+            self.assertIn('NoValidHost', event['traceback'])
 
     @ddt.data('host', 'deployment')
-    def test_live_migrate_host_server_secret_security_host_deploy_to_old(
+    def test_live_migrate_server_secret_security_to_unsupported(
             self, secret_security):
-        """Test behavior when a new server tries to migrate to an old compute
+        self._test_live_migrate_server_secret_security_unsupported(
+            secret_security)
+
+    @ddt.data('host', 'deployment')
+    def test_live_migrate_server_secret_security_to_old(self,
+                                                        secret_security):
+        self._test_live_migrate_server_secret_security_unsupported(
+            secret_security, old=True)
+
+    def _test_live_migrate_host_server_secret_security_unsupported(
+            self, secret_security, old=False):
+        """Test behavior when a server tries to migrate to incompatible compute
 
         This will request a destination host for live migration.
 
-        We will simulate a migration attempt to an old host by setting the
-        service version of the destination to an old version and starting it
-        without any supported_tpm_secret_security. Then we will try to live
-        migrate to it.
+        If old=True, we will simulate a migration attempt to an old host by
+        setting the service version of the destination to an old version. In
+        either case we will start the compute service without any
+        supported_tpm_secret_security. Then we will try to live migrate to it.
 
         This should fail with BadRequest because of the service version check.
         """
@@ -454,38 +477,64 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.flags(supported_tpm_secret_security=[], group='libvirt')
         self.start_compute(hostname='dest')
 
-        # Set the destination compute to fake the old version. We need to use
-        # the DB API directly to get around the minimum service version check
-        # in the Service object save() method.
-        ctx = nova_context.get_admin_context()
-        db_api.service_update(
-            ctx, self.computes['dest'].service_ref.id, {'version': 70})
+        if old:
+            # Set the destination compute to fake the old version. We need to
+            # use the DB API directly to get around the minimum service version
+            # check in the Service object save() method.
+            ctx = nova_context.get_admin_context()
+            db_api.service_update(
+                ctx, self.computes['dest'].service_ref.id, {'version': 70})
 
         server = self._create_server_with_vtpm(secret_security=secret_security,
                                                host='src')
 
-        ex = self.assertRaises(
-            client.OpenStackApiException, self._live_migrate, server)
-        self.assertEqual(400, ex.response.status_code)
-        self.assertIn(
-            'vTPM live migration is not supported by old nova-compute '
-            'services. Upgrade your nova-compute services to '
-            'Flamingo (32.0.0) or later.', str(ex))
+        if old:
+            ex = self.assertRaises(
+                client.OpenStackApiException, self._live_migrate, server)
+            self.assertEqual(400, ex.response.status_code)
+            self.assertIn(
+                'vTPM live migration is not supported by old nova-compute '
+                'services. Upgrade your nova-compute services to '
+                'Flamingo (32.0.0) or later.', str(ex))
+        else:
+            self._live_migrate(
+                server, migration_expected_state='error', host='dest')
+
+            # Live migration attempt should have failed with NoValidHost
+            # because no other host is advertising the
+            # COMPUTE_SECURITY_TPM_SECRET_SECURITY_<secret_security> trait.
+            event = self._wait_for_instance_action_event(
+                server, 'live-migration', 'conductor_live_migrate_instance',
+                'Error')
+            self.assertIn('NoValidHost', event['traceback'])
 
     @ddt.data('host', 'deployment')
-    def test_live_migrate_host_force_server_secret_security_host_deploy_to_old(
+    def test_live_migrate_host_server_secret_security_to_unsupported(
             self, secret_security):
-        """Test behavior when a new server tries to migrate to an old compute
+        self._test_live_migrate_host_server_secret_security_unsupported(
+            secret_security)
+
+    @ddt.data('host', 'deployment')
+    def test_live_migrate_host_server_secret_security_to_old(
+            self, secret_security):
+        self._test_live_migrate_host_server_secret_security_unsupported(
+            secret_security, old=True)
+
+    def _test_live_migrate_host_force_server_secret_security_unsupported(
+            self, secret_security, old=False):
+        """Test behavior when a server tries to migrate to incompatible compute
 
         This will request a destination host for live migration and force=True
         by using an older microversion 2.30.
 
-        We will simulate a migration attempt to an old host by setting the
-        service version of the destination to an old version and starting it
-        without any supported_tpm_secret_security. Then we will try to live
-        migrate to it.
+        If old=True, we will simulate a migration attempt to an old host by
+        setting the service version of the destination to an old version. In
+        either case we will start the compute service without any
+        supported_tpm_secret_security. Then we will try to live migrate to it.
 
-        This should fail with BadRequest because of the service version check.
+        This should fail with BadRequest because of the service version check
+        in the case of an old compute, otherwise it will fail the pre-flight
+        check due to the late TPM secret security validation in nova-compute.
         """
         self.flags(
             supported_tpm_secret_security=[secret_security], group='libvirt')
@@ -495,11 +544,13 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.src = self.computes['src']
         self.dest = self.computes['dest']
 
-        # Set the destination compute to fake the old version. We need to use
-        # the DB API directly to get around the minimum service version check
-        # in the Service object save() method.
-        ctx = nova_context.get_admin_context()
-        db_api.service_update(ctx, self.dest.service_ref.id, {'version': 70})
+        if old:
+            # Set the destination compute to fake the old version. We need to
+            # use the DB API directly to get around the minimum service version
+            # check in the Service object save() method.
+            ctx = nova_context.get_admin_context()
+            db_api.service_update(
+                ctx, self.dest.service_ref.id, {'version': 70})
 
         self.server = self._create_server_with_vtpm(
             secret_security=secret_security, host='src')
@@ -514,10 +565,27 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
                                     'block_migration': 'auto',
                                     'force': 'True'}})
             self.assertEqual(400, ex.response.status_code)
-            self.assertIn(
-                'vTPM live migration is not supported by old nova-compute '
-                'services. Upgrade your nova-compute services to '
-                'Flamingo (32.0.0) or later.', str(ex))
+            if old:
+                self.assertIn(
+                    'vTPM live migration is not supported by old nova-compute '
+                    'services. Upgrade your nova-compute services to '
+                    'Flamingo (32.0.0) or later.', str(ex))
+            else:
+                self.assertIn(
+                    'Migration pre-check error: Failed to validate TPM secret '
+                    'security policy', str(ex))
+
+    @ddt.data('host', 'deployment')
+    def test_live_migrate_host_force_server_secret_security_to_unsupported(
+            self, secret_security):
+        self._test_live_migrate_host_force_server_secret_security_unsupported(
+            secret_security)
+
+    @ddt.data('host', 'deployment')
+    def test_live_migrate_host_force_server_secret_security_to_old(
+            self, secret_security):
+        self._test_live_migrate_host_force_server_secret_security_unsupported(
+            secret_security, old=True)
 
     def test_live_migrate_server_secret_security_host(self):
         """Test a successful live migration of a server with 'host' security
