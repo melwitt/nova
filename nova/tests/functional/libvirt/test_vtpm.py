@@ -154,6 +154,17 @@ class VTPMServersTest(base.ServersTestBase):
 
         return server
 
+    def _create_legacy_server_with_vtpm(self, host):
+        with mock.patch.object(host.manager, '_set_tpm_secret_security'):
+            server = self._create_server_with_vtpm()
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('image_hw_tpm_secret_security',
+                         instance.system_metadata)
+        self.assertNotIn('provisional_tpm_secret_security',
+                         instance.system_metadata)
+        return server
+
     def _create_server_without_vtpm(self):
         # use the default flavor (i.e. one without vTPM extra specs)
         return self._create_server()
@@ -182,6 +193,15 @@ class VTPMServersTest(base.ServersTestBase):
         # removed, so we can assert this.
         conn = compute.driver._host.get_connection()
         self.assertIn(secret_uuid, conn._removed_secrets)
+
+    def _assert_legacy_server_migrated_secret_security(self, server):
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertEqual(
+            'host',
+            instance.system_metadata['provisional_tpm_secret_security'])
+        self.assertNotIn(
+            'image_hw_tpm_secret_security', instance.system_metadata)
 
     def test_tpm_secret_security_user(self):
         self.flags(supported_tpm_secret_security=['user'], group='libvirt')
@@ -214,36 +234,21 @@ class VTPMServersTest(base.ServersTestBase):
         # Mock out _set_tpm_secret_security() to fake a legacy instance that
         # we'll then migrate by restarting nova-compute.
         compute = self.computes['tpm-host']
-        with mock.patch.object(compute.manager, '_set_tpm_secret_security'):
-            server = self._create_server_with_vtpm()
-        ctx = nova_context.get_admin_context()
-        instance = objects.Instance.get_by_uuid(ctx, server['id'])
-        self.assertNotIn('image_hw_tpm_secret_security',
-                         instance.system_metadata)
-        self.assertNotIn('provisional_tpm_secret_security',
-                         instance.system_metadata)
+        server = self._create_legacy_server_with_vtpm(compute)
 
         # Now restart nova-compute without the mock, testing that we migrate
         # the instance correctly.
         self.restart_compute_service(hostname='tpm-host')
-        instance = objects.Instance.get_by_uuid(ctx, server['id'])
-        self.assertNotIn('image_hw_tpm_secret_security',
-                         instance.system_metadata)
-        self.assertEqual(
-            'host',
-            instance.system_metadata['provisional_tpm_secret_security'])
+
+        self._assert_legacy_server_migrated_secret_security(server)
 
         # Now restart nova-compute again with a different secret security
         # policy and verify that it did not change the security policy of the
         # instance.
         self.flags(default_tpm_secret_security='user', group='libvirt')
         self.restart_compute_service(hostname='tpm-host')
-        instance = objects.Instance.get_by_uuid(ctx, server['id'])
-        self.assertNotIn('image_hw_tpm_secret_security',
-                         instance.system_metadata)
-        self.assertEqual(
-            'host',
-            instance.system_metadata['provisional_tpm_secret_security'])
+
+        self._assert_legacy_server_migrated_secret_security(server)
 
     def test_create_server(self):
         compute = self.start_compute()
