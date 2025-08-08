@@ -403,6 +403,43 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
             "Operation 'live-migration' not supported for vTPM-enabled "
             "instance", str(ex))
 
+    def test_live_migrate_server_secret_security_host_missing(self):
+        """Test behavior when the instance libvirt secret is missing
+
+        This should not be able to happen but in case it does, fail gracefully.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.start_compute(hostname='dest')
+        self.src = self.computes['src']
+        self.dest = self.computes['dest']
+
+        self.server = self._create_server_with_vtpm(secret_security='host',
+                                               host='src')
+        self._assert_libvirt_has_secret(self.src, self.server['id'])
+
+        # Delete the libvirt secret ourselves to fake the missing secret.
+        self.src.driver._host.delete_secret('vtpm', self.server['id'])
+        self._assert_libvirt_secret_missing(self.src, self.server['id'])
+
+        # The missing secret error will be a 500 unexpected type of error.
+        self._live_migrate(
+            self.server, migration_expected_state='error',
+            server_expected_state='ERROR')
+
+        # Live migration attempt should have failed with VTPMSecretNotFound.
+        event = self._wait_for_instance_action_event(
+            self.server, 'live-migration',
+            'compute_check_can_live_migrate_source', 'Error')
+        self.assertIn('VTPMSecretNotFound', event['traceback'])
+
+        # Try to recover the instance by hard-rebooting it.
+        self._reboot_server(self.server, hard=True)
+
+        # This time the live migration should work because the libvirt secret
+        # should have been re-created by the hard reboot.
+        self._live_migrate(self.server, migration_expected_state='completed')
+
     def test_live_migrate_server_secret_security_host_to_old(self):
         """Test behavior when a new server tries to migrate to an old compute
 
