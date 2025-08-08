@@ -10593,15 +10593,24 @@ class LibvirtDriver(driver.ComputeDriver):
             mdev_types = self._get_mdev_types_from_uuids(instance_mdevs.keys())
             dest_check_data.source_mdev_types = mdev_types
 
+        self._add_vtpm_secret_to_live_migrate_data(instance, dest_check_data)
+
+        return dest_check_data
+
+    def _add_vtpm_secret_to_live_migrate_data(self, instance, dest_check_data):
         security = instance.system_metadata.get('image_hw_tpm_secret_security')
         if security == 'host':
             secret = self._host.find_secret('vtpm', instance.uuid)
+
+            if secret is None:
+                LOG.error('TPM secret was not found. Try hard-rebooting the '
+                          'instance to recover.', instance=instance)
+                raise exception.VTPMSecretNotFound(instance_uuid=instance.uuid)
+
             dest_check_data.vtpm_secret_uuid = secret.UUIDString()
             # Have to decode the bytes type to conform to the object's
             # SensitiveStringField type.
             dest_check_data.vtpm_secret_value = secret.value().decode()
-
-        return dest_check_data
 
     def _host_can_support_mdev_live_migration(self):
         return self._host.has_min_version(
