@@ -3,10 +3,10 @@
   become_user: stack
   shell: "/opt/stack/nova/roles/run-evacuate-hook/files/setup_evacuate_resources.sh"
   environment:
-    SUBNODE_HOSTNAME: "{{ hostvars['compute1']['ansible_hostname'] }}"
+    SUBNODE_HOSTNAME: "{{ hostvars[groups['subnode'][0]]['ansible_hostname'] }}"
 
 - name: Fence subnode by stopping n-cpu
-  delegate_to: compute1
+  delegate_to: "{{ groups['subnode'][0] }}"
   become: true
   systemd:
     name: devstack@n-cpu
@@ -18,7 +18,7 @@
   register: qagtstatus
 
 - name: Fence subnode by stopping q-agt (if exists)
-  delegate_to: compute1
+  delegate_to: "{{ groups['subnode'][0] }}"
   become: true
   systemd:
     name: devstack@q-agt
@@ -26,14 +26,14 @@
   when: qagtstatus.rc | int == 0
 
 - name: Make sure lxml is installed
-  delegate_to: compute1
+  delegate_to: "{{ groups['subnode'][0] }}"
   become: true
   package:
     name: python3-lxml
     state: present
 
 - name: Register running domains on subnode
-  delegate_to: compute1
+  delegate_to: "{{ groups['subnode'][0] }}"
   become: true
   virt:
     command: list_vms
@@ -41,7 +41,7 @@
   register: subnode_vms
 
 - name: Destroy running domains on subnode
-  delegate_to: compute1
+  delegate_to: "{{ groups['subnode'][0] }}"
   become: true
   virt:
     name: "{{ item }}"
