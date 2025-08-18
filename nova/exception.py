@@ -2671,3 +2671,9 @@ class InstanceEventTimeout(Exception):
 class VTPMSecretNotFound(NovaException):
     msg_fmt = _('TPM encryption secret for instance %(instance_uuid)s was not '
                 'found.')
+
+
+class VTPMOldCompute(Invalid):
+    msg_fmt = _('vTPM live migration is not supported by old nova-compute '
+                'services. Upgrade your nova-compute services to '
+                'Gazpacho (33.0.0) or later.')
