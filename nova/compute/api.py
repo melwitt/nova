@@ -127,6 +127,8 @@ SUPPORT_SHARES = 67
 MIN_COMPUTE_SOUND_MODEL_TRAITS = 69
 MIN_COMPUTE_USB_MODEL_TRAITS = 70
 
+MIN_COMPUTE_VTPM_LIVE_MIGRATION = 71
+
 # FIXME(danms): Keep a global cache of the cells we find the
 # first time we look. This needs to be refreshed on a timer or
 # trigger.
@@ -5629,6 +5631,13 @@ class API:
             # This is essentially a hint to the scheduler to only consider
             # the specified host but still run it through the filters.
             request_spec.requested_destination = destination
+
+        if (instance.system_metadata.get('vtpm_secret_uuid') and
+                force is True and host_name):
+            target = nodes[0]
+            service = objects.Service.get_by_id(context, target.service_id)
+            if service.version < MIN_COMPUTE_VTPM_LIVE_MIGRATION:
+                raise exception.VTPMOldCompute(host=target.host)
 
         try:
             self.compute_task_api.live_migrate_instance(context, instance,

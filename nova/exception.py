@@ -2671,3 +2671,9 @@ class InstanceEventTimeout(Exception):
 class VTPMSecretNotFound(NovaException):
     msg_fmt = _('TPM encryption secret for instance %(instance_uuid)s was not '
                 'found.')
+
+
+class VTPMOldCompute(Invalid):
+    msg_fmt = _('vTPM live migration is not supported by the targeted old '
+                'nova-compute service: %(host)s. Upgrade your nova-compute '
+                'service to Flamingo (32.0.0) or later.')

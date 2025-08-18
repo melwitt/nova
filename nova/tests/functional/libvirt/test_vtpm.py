@@ -23,6 +23,7 @@ from oslo_utils import uuidutils
 import nova.conf
 from nova import context as nova_context
 from nova import crypto
+from nova.db.main import api as db_api
 from nova import exception
 from nova import objects
 from nova.tests.functional.api import client
@@ -451,9 +452,10 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
     def test_live_migrate_server_secret_security_host_to_old(self):
         """Test behavior when a new server tries to migrate to an old compute
 
-        We will simulate this by starting one compute without any
-        supported_tpm_secret_security to represent an old compute node and try
-        to live migrate to it.
+        We will simulate a migration attempt to an old host by setting the
+        service version of the destination to an old version and starting it
+        without any supported_tpm_secret_security. Then we will try to live
+        migrate to it.
 
         The attempt should fail with NoValidHost.
         """
@@ -461,6 +463,13 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.start_compute(hostname='src')
         self.flags(supported_tpm_secret_security=[], group='libvirt')
         self.start_compute(hostname='dest')
+
+        # Set the destination compute to fake the old version. We need to use
+        # the DB API directly to get around the minimum service version check
+        # in the Service object.
+        ctx = nova_context.get_admin_context()
+        db_api.service_update(
+            ctx, self.computes['dest'].service_ref.id, {'version': 70})
 
         server = self._create_server_with_vtpm(secret_security='host',
                                                host='src')
@@ -480,9 +489,10 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         This will request a destination host for live migration.
 
-        We will simulate this by starting one compute without any
-        supported_tpm_secret_security to represent an old compute node and try
-        to live migrate to it.
+        We will simulate a migration attempt to an old host by setting the
+        service version of the destination to an old version and starting it
+        without any supported_tpm_secret_security. Then we will try to live
+        migrate to it.
 
         The attempt should fail with NoValidHost.
         """
@@ -490,6 +500,13 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.start_compute(hostname='src')
         self.flags(supported_tpm_secret_security=[], group='libvirt')
         self.start_compute(hostname='dest')
+
+        # Set the destination compute to fake the old version. We need to use
+        # the DB API directly to get around the minimum service version check
+        # in the Service object.
+        ctx = nova_context.get_admin_context()
+        db_api.service_update(
+            ctx, self.computes['dest'].service_ref.id, {'version': 70})
 
         server = self._create_server_with_vtpm(secret_security='host',
                                                host='src')
@@ -511,11 +528,12 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         This will request a destination host for live migration and force=True
         by using an older microversion 2.30.
 
-        We will simulate this by starting one compute without any
-        supported_tpm_secret_security to represent an old compute node and try
-        to live migrate to it.
+        We will simulate a migration attempt to an old host by setting the
+        service version of the destination to an old version and starting it
+        without any supported_tpm_secret_security. Then we will try to live
+        migrate to it.
 
-        This will go through because it bypasses the scheduler entirely.
+        This should fail with BadRequest because of the service version check.
         """
         self.flags(supported_tpm_secret_security=['host'], group='libvirt')
         self.start_compute(hostname='src')
@@ -524,21 +542,29 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.src = self.computes['src']
         self.dest = self.computes['dest']
 
+        # Set the destination compute to fake the old version. We need to use
+        # the DB API directly to get around the minimum service version check
+        # in the Service object.
+        ctx = nova_context.get_admin_context()
+        db_api.service_update(ctx, self.dest.service_ref.id, {'version': 70})
+
         self.server = self._create_server_with_vtpm(secret_security='host',
                                                     host='src')
 
-        # FIXME(melwitt): Is this reason enough to do a service version bump
-        # and disallow all vTPM live migration until the minimum service
-        # version in the deployment is new enough? Or some subset of live
-        # migration until the minimum service version is met?
+        # The request should be rejected by the API with a 400 Bad Request due
+        # to the destination host service version being too old.
         with utils.temporary_mutation(self.api, microversion='2.30'):
-            self.api.post_server_action(
+            ex = self.assertRaises(
+                client.OpenStackApiException, self.api.post_server_action,
                 self.server['id'],
                 {'os-migrateLive': {'host': 'dest',
                                     'block_migration': 'auto',
                                     'force': 'True'}})
-            self._wait_for_migration_status(self.server, ['completed'])
-            self._wait_for_state_change(self.server, 'ACTIVE')
+            self.assertEqual(400, ex.response.status_code)
+            self.assertIn(
+                'vTPM live migration is not supported by the targeted old '
+                'nova-compute service: dest. Upgrade your nova-compute '
+                'service to Flamingo (32.0.0) or later.', str(ex))
 
     def test_live_migrate_server_secret_security_host(self):
         """Test a successful live migration of a server with 'host' security
