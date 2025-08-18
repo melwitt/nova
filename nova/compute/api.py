@@ -127,6 +127,8 @@ SUPPORT_SHARES = 67
 MIN_COMPUTE_SOUND_MODEL_TRAITS = 69
 MIN_COMPUTE_USB_MODEL_TRAITS = 70
 
+MIN_COMPUTE_VTPM_LIVE_MIGRATION = 71
+
 # FIXME(danms): Keep a global cache of the cells we find the
 # first time we look. This needs to be refreshed on a timer or
 # trigger.
@@ -264,6 +266,26 @@ def reject_sev_instances(operation):
             return f(self, context, instance, *args, **kw)
         return inner
     return outer
+
+
+def reject_legacy_vtpm_live_migration(function):
+
+    @functools.wraps(function)
+    def inner(self, context, instance, *args, **kwargs):
+        if hardware.get_vtpm_constraint(
+                instance.flavor, instance.image_meta):
+            security = hardware.get_tpm_secret_security_constraint(
+                    instance.flavor) or 'user'
+            if security != 'host':
+                raise exception.OperationNotSupportedForVTPM(
+                    instance_uuid=instance.uuid,
+                    operation=instance_actions.LIVE_MIGRATION)
+            min_ver = objects.service.get_minimum_version_all_cells(
+                nova_context.get_admin_context(), ['nova-compute'])
+            if min_ver < MIN_COMPUTE_VTPM_LIVE_MIGRATION:
+                raise exception.VTPMOldCompute()
+        return function(self, context, instance, *args, **kwargs)
+    return inner
 
 
 def reject_vtpm_instances(operation):
@@ -5573,7 +5595,7 @@ class API:
         until=MIN_COMPUTE_VDPA_HOTPLUG_LIVE_MIGRATION
     )
     @block_accelerators()
-    @reject_vtpm_instances(instance_actions.LIVE_MIGRATION)
+    @reject_legacy_vtpm_live_migration
     @reject_sev_instances(instance_actions.LIVE_MIGRATION)
     @check_instance_lock
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.PAUSED])

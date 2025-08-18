@@ -25,10 +25,12 @@ from oslo_utils import uuidutils
 import nova.conf
 from nova import context as nova_context
 from nova import crypto
+from nova.db.main import api as db_api
 from nova import exception
 from nova import objects
 from nova.tests.functional.api import client
 from nova.tests.functional.libvirt import base
+from nova import utils
 
 CONF = nova.conf.CONF
 LOG = logging.getLogger(__name__)
@@ -141,6 +143,8 @@ class VTPMServersTest(base.ServersTestBase):
 
     # Reflect reality more for async API requests like migration
     CAST_AS_CALL = False
+    # Enables block_migration='auto' required by the _live_migrate() helper.
+    microversion = '2.25'
 
     def setUp(self):
         # enable vTPM and use our own fake key service
@@ -288,6 +292,114 @@ class VTPMServersTest(base.ServersTestBase):
         self.assertEqual(0, len(self.key_mgr._passphrases))
         self.assertNotIn(instance.system_metadata['vtpm_secret_uuid'],
                          conn._secrets)
+
+    def test_live_migrate_server_secret_security_host_to_old(self):
+        """Test behavior when a new server tries to migrate to an old compute
+
+        We will simulate a migration attempt to an old host by setting the
+        service version of the destination to an old version and starting it
+        without any supported_tpm_secret_security. Then we will try to live
+        migrate to it.
+
+        This should fail with BadRequest because of the service version check.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+
+        server = self._create_server_with_vtpm(secret_security='host')
+
+        # Set the destination compute to fake the old version. We need to use
+        # the DB API directly to get around the minimum service version check
+        # in the Service object save() method.
+        self.start_compute(hostname='dest')
+        ctx = nova_context.get_admin_context()
+        db_api.service_update(
+            ctx, self.computes['dest'].service_ref.id, {'version': 70})
+
+        ex = self.assertRaises(
+            client.OpenStackApiException, self._live_migrate, server,
+            api=self.admin_api)
+        self.assertEqual(400, ex.response.status_code)
+        self.assertIn(
+            'vTPM live migration is not supported by old nova-compute '
+            'services. Upgrade your nova-compute services to '
+            'Gazpacho (33.0.0) or later.', str(ex))
+
+    def test_live_migrate_host_server_secret_security_host_to_old(self):
+        """Test behavior when a new server tries to migrate to an old compute
+
+        This will request a destination host for live migration.
+
+        We will simulate a migration attempt to an old host by setting the
+        service version of the destination to an old version and starting it
+        without any supported_tpm_secret_security. Then we will try to live
+        migrate to it.
+
+        This should fail with BadRequest because of the service version check.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+
+        server = self._create_server_with_vtpm(secret_security='host')
+
+        # Set the destination compute to fake the old version. We need to use
+        # the DB API directly to get around the minimum service version check
+        # in the Service object save() method.
+        self.start_compute(hostname='dest')
+        ctx = nova_context.get_admin_context()
+        db_api.service_update(
+            ctx, self.computes['dest'].service_ref.id, {'version': 70})
+
+        ex = self.assertRaises(
+            client.OpenStackApiException, self._live_migrate, server,
+            api=self.admin_api)
+        self.assertEqual(400, ex.response.status_code)
+        self.assertIn(
+            'vTPM live migration is not supported by old nova-compute '
+            'services. Upgrade your nova-compute services to '
+            'Gazpacho (33.0.0) or later.', str(ex))
+
+    def test_live_migrate_host_force_server_secret_security_host_to_old(self):
+        """Test behavior when a new server tries to migrate to an old compute
+
+        This will request a destination host for live migration and force=True
+        by using an older microversion 2.30.
+
+        We will simulate a migration attempt to an old host by setting the
+        service version of the destination to an old version and starting it
+        without any supported_tpm_secret_security. Then we will try to live
+        migrate to it.
+
+        This should fail with BadRequest because of the service version check.
+        """
+        self.flags(supported_tpm_secret_security=['host'], group='libvirt')
+        self.start_compute(hostname='src')
+        self.src = self.computes['src']
+
+        self.server = self._create_server_with_vtpm(secret_security='host')
+
+        # Set the destination compute to fake the old version. We need to use
+        # the DB API directly to get around the minimum service version check
+        # in the Service object save() method.
+        self.start_compute(hostname='dest')
+        self.dest = self.computes['dest']
+        ctx = nova_context.get_admin_context()
+        db_api.service_update(ctx, self.dest.service_ref.id, {'version': 70})
+
+        # The request should be rejected by the API with a 400 Bad Request due
+        # to the destination host service version being too old.
+        with utils.temporary_mutation(self.admin_api, microversion='2.30'):
+            ex = self.assertRaises(
+                client.OpenStackApiException,
+                self.admin_api.post_server_action, self.server['id'],
+                {'os-migrateLive': {'host': 'dest',
+                                    'block_migration': 'auto',
+                                    'force': 'True'}})
+            self.assertEqual(400, ex.response.status_code)
+            self.assertIn(
+                'vTPM live migration is not supported by old nova-compute '
+                'services. Upgrade your nova-compute services to '
+                'Gazpacho (33.0.0) or later.', str(ex))
 
     def test_suspend_resume_server(self):
         self.start_compute()

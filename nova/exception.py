@@ -2670,3 +2670,9 @@ class InstanceEventTimeout(Exception):
 
 class VTPMSecretForbidden(Forbidden):
     pass
+
+
+class VTPMOldCompute(Invalid):
+    msg_fmt = _('vTPM live migration is not supported by old nova-compute '
+                'services. Upgrade your nova-compute services to '
+                'Gazpacho (33.0.0) or later.')
