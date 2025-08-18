@@ -163,6 +163,7 @@ class MigrateServerController(wsgi.Controller):
         except (
             exception.ComputeHostNotFound,
             exception.ExtendedResourceRequestOldCompute,
+            exception.VTPMOldCompute,
         )as e:
             raise exc.HTTPBadRequest(explanation=e.format_message())
         except exception.InstanceInvalidState as state_error:

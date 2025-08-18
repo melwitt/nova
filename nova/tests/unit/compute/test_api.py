@@ -7505,6 +7505,7 @@ class _ComputeAPIUnitTestMixIn(object):
 
 # TODO(stephenfin): The separation of the mixin is a hangover from cells v1
 # days and should be removed
+@ddt.ddt
 class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
     def setUp(self):
         super(ComputeAPIUnitTestCase, self).setUp()
@@ -8750,3 +8751,55 @@ class ComputeAPIUnitTestCase(_ComputeAPIUnitTestMixIn, test.NoDBTestCase):
 
         mock_rec_action.assert_called_once_with(
             self.context, instance, instance_actions.DETACH_SHARE)
+
+    @ddt.data(None, 'host')
+    def test_reject_legacy_vtpm_live_migration(self, secret_security):
+        """Test that live migration requests are rejected properly.
+
+        Only certain TPM secret security modes are allowed to request live
+        migration.
+        """
+        @compute_api.reject_legacy_vtpm_live_migration
+        def fake_compute_api_method(api_self, context, instance):
+            pass
+
+        instance = self._create_instance_obj()
+        instance.flavor.extra_specs = {
+            'hw:tpm_version': '1.2',
+        }
+        if secret_security:
+            instance.flavor.extra_specs[
+                    'hw:tpm_secret_security'] = secret_security
+
+        with mock.patch(
+                'nova.objects.service.get_minimum_version_all_cells',
+                return_value=compute_api.MIN_COMPUTE_VTPM_LIVE_MIGRATION):
+            if secret_security == 'host':
+                fake_compute_api_method(self.compute_api, self.context,
+                                        instance)
+            else:
+                self.assertRaises(exception.OperationNotSupportedForVTPM,
+                                  fake_compute_api_method, self.compute_api,
+                                  self.context, instance)
+
+    def test_reject_legacy_vtpm_live_migration_service_version(self):
+        """Test live migration request rejection based on service version.
+
+        If a compute is not new enough, live migration will not be allowed.
+        """
+        @compute_api.reject_legacy_vtpm_live_migration
+        def fake_compute_api_method(api_self, context, instance):
+            pass
+
+        instance = self._create_instance_obj()
+        instance.flavor.extra_specs = {
+            'hw:tpm_version': '1.2',
+            'hw:tpm_secret_security': 'host',
+        }
+
+        with mock.patch(
+                'nova.objects.service.get_minimum_version_all_cells',
+                return_value=compute_api.MIN_COMPUTE_VTPM_LIVE_MIGRATION - 1):
+            self.assertRaises(exception.VTPMOldCompute,
+                              fake_compute_api_method, self.compute_api,
+                              self.context, instance)
