@@ -127,6 +127,8 @@ SUPPORT_SHARES = 67
 MIN_COMPUTE_SOUND_MODEL_TRAITS = 69
 MIN_COMPUTE_USB_MODEL_TRAITS = 70
 
+MIN_COMPUTE_VTPM_LIVE_MIGRATION = 71
+
 # FIXME(danms): Keep a global cache of the cells we find the
 # first time we look. This needs to be refreshed on a timer or
 # trigger.
@@ -277,6 +279,10 @@ def reject_legacy_vtpm_live_migration(function):
                 raise exception.OperationNotSupportedForVTPM(
                     instance_uuid=instance.uuid,
                     operation=instance_actions.LIVE_MIGRATION)
+            min_ver = objects.service.get_minimum_version_all_cells(
+                nova_context.get_admin_context(), ['nova-compute'])
+            if min_ver < MIN_COMPUTE_VTPM_LIVE_MIGRATION:
+                raise exception.VTPMOldCompute()
         return function(self, context, instance, *args, **kwargs)
     return inner
 
