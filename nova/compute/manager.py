@@ -916,10 +916,12 @@ class ComputeManager(manager.Manager):
         try:
             data = self.driver.check_instance_shared_storage_local(context,
                                                        instance)
+            print(f'data = {data}')
             if data:
                 shared_storage = (self.compute_rpcapi.
                                   check_instance_shared_storage(context,
                                   data, instance=instance, host=host))
+                print(f'shared_storage = {shared_storage}')
         except NotImplementedError:
             LOG.debug('Hypervisor driver does not support '
                       'instance shared storage check, '
@@ -6008,6 +6010,7 @@ class ComputeManager(manager.Manager):
 
             destroy_disks = not self._is_instance_storage_shared(
                 context, instance, host=migration.source_compute)
+            print(f'DESTROY_DISKS = {destroy_disks}')
             self.driver.destroy(context, instance, network_info,
                                 block_device_info, destroy_disks)
 
