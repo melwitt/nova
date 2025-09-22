@@ -1918,6 +1918,27 @@ class LibvirtDriver(driver.ComputeDriver):
             enforce_multipath=True,
             host=CONF.host)
 
+    def _cleanup_resize_vtpm_secret_security(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+    ) -> None:
+        old_vtpm_secret_uuid = instance.system_metadata.get(
+            'old_vtpm_secret_uuid')
+        old_vtpm_secret_security = instance.system_metadata.get(
+            'old_image_hw_tpm_secret_security')
+        if old_vtpm_secret_uuid:
+            use_context = context
+            if old_vtpm_secret_security == 'deployment':
+                use_context = nova_context.get_service_user_context()
+            crypto.delete_encryption_secret(use_context, instance.uuid,
+                                            old_vtpm_secret_uuid)
+            instance.system_metadata.pop('old_vtpm_secret_uuid')
+        if old_vtpm_secret_security:
+            instance.system_metadata.pop('old_image_hw_tpm_secret_security')
+        if old_vtpm_secret_uuid or old_vtpm_secret_security:
+            instance.save()
+
     def _cleanup_resize_vtpm(
         self,
         context: nova_context.RequestContext,
@@ -1939,6 +1960,7 @@ class LibvirtDriver(driver.ComputeDriver):
             # the domain will take care of the TPM files themselves
             LOG.info('New flavor no longer requests vTPM; deleting secret.')
             self._delete_secret_for_vtpm(context, instance)
+            instance.system_metadata.pop('image_hw_tpm_secret_security', None)
 
     # TODO(stephenfin): Fold this back into its only caller, cleanup_resize
     def _cleanup_resize(self, context, instance, network_info):
@@ -12647,6 +12669,103 @@ class LibvirtDriver(driver.ComputeDriver):
         images.convert_image(path, path_qcow, 'raw', 'qcow2')
         os.rename(path_qcow, path)
 
+    def _convert_tpm_secret_security(self, context, instance, to_security):
+        """Convert TPM secret to security policy if needed.
+
+        Legacy instances and instances with 'user' or 'host' TPM secret
+        security have secrets persisted in the key manager service but have no
+        secrets persisted in libvirt. When their libvirt domains are created, a
+        libvirt secret is created with ephemeral=yes and private=yes and then
+        it is undefined (deleted) after the domain is running.
+
+        For an instance converting to 'host' secret security from legacy or
+        'user':
+
+          1. Get the secret from the key manager service
+          2. Create a libvirt secret with ephemeral=no and private=no
+
+        These two steps will be done automatically during _create_guest(), so
+        nothing needs to be done here.
+
+        For an instance converting to 'deployment' secret security:
+
+          1. Get the existing secret passphrase from the key manager service
+          2. Create a new secret with the same passphrase using the Nova
+             service user context
+          3. Delete the existing user owned secret in the key manager service
+          4. Create and undefine a libvirt secret with ephemeral=yes and
+             private=yes
+
+        We need to do steps 1 and 3 in this method using the user's request
+        context and step 4 will be done automatically during _create_guest().
+
+        For an instance converting from 'deployment' secret security, the steps
+        are similar:
+
+          1. Get the existing secret passphrase from the key manager service
+          2. Create a new secret with the same passphrase using the user's
+             context
+          3. Delete the existing Nova service user owned secret in the key
+             manager service
+          4. If converting to 'host', create a libvirt secret with ephemeral=no
+             and private=no, else create and undefine a libvirt secret with
+             ephemeral=yes and private=yes
+
+        We need to do steps 1 and 3 using the Nova service user's request
+        context and step 4 will be done automatically during _create_guest().
+        """
+        from_security = hardware.get_tpm_secret_security_constraint(
+            instance.old_flavor, instance.image_meta)
+
+        if from_security != to_security:
+            from_msg = ''
+            if from_security is not None:
+                from_msg = " from '%s' TPM secret security" % from_security
+            to_msg = ''
+            if to_security is not None:
+                to_msg = "to '%s' TPM secret security" % to_security
+            LOG.info(
+                "Converting%s %s", from_msg, to_msg, instance=instance)
+
+            def swap_vtpm_secret(from_context, to_context):
+                # Get the existing secret passphrase.
+                from_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+                    from_context, instance)
+
+                # Stash the current vTPM secret UUID in case we need to revert.
+                instance.system_metadata[
+                    'old_vtpm_secret_uuid'] = from_secret_uuid
+
+                # Clear the secret UUID in the system metadata so a new secret
+                # will be created.
+                instance.system_metadata.pop('vtpm_secret_uuid', None)
+
+                # Create a new secret owned by the new request context with the
+                # same passphrase. This will set vtpm_secret_uuid in system
+                # metadata.
+                to_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+                    to_context, instance, secret=passphrase)
+
+            # If we are converting to or from 'deployment', we will need to
+            # swap the secret to or from Nova service user ownership.
+            if to_security == 'deployment' and from_security:
+                swap_vtpm_secret(
+                    context, nova_context.get_service_user_context())
+            elif from_security == 'deployment' and to_security:
+                swap_vtpm_secret(
+                    nova_context.get_service_user_context(), context)
+
+            # Stash the current vTPM secret security in case we need to revert.
+            if from_security is not None:
+                instance.system_metadata[
+                    'old_image_hw_tpm_secret_security'] = from_security
+
+            if to_security is not None:
+                instance.system_metadata[
+                    'image_hw_tpm_secret_security'] = to_security
+
+            instance.save()
+
     def _finish_migration_vtpm(
         self,
         context: nova_context.RequestContext,
@@ -12684,7 +12803,20 @@ class LibvirtDriver(driver.ComputeDriver):
             # only on path existence here.
             if copy_swtpm_dir and os.path.exists(swtpm_dir):
                 libvirt_utils.restore_vtpm_dir(swtpm_dir)
+
+            # Convert the TPM secret security if needed.
+            to_security = hardware.get_tpm_secret_security_constraint(
+                instance.new_flavor, instance.image_meta)
+            self._convert_tpm_secret_security(context, instance, to_security)
         elif new_vtpm_config:
+            # Check if a secret security policy has been specified from the
+            # extra spec or image property. This will be needed for secret
+            # creation.
+            security = hardware.get_tpm_secret_security_constraint(
+                instance.flavor, instance.image_meta)
+            if security:
+                instance.system_metadata[
+                    'image_hw_tpm_secret_security'] = security
             # we've requested vTPM in the new flavor and didn't have one
             # previously so we need to create a new secret
             self._create_secret_for_vtpm(context, instance)
@@ -12810,6 +12942,27 @@ class LibvirtDriver(driver.ComputeDriver):
             if e.errno != errno.ENOENT:
                 raise
 
+    def _finish_revert_migration_vtpm_secret_security(
+        self,
+        context: nova_context.RequestContext,
+        instance: 'objects.Instance',
+    ) -> None:
+        old_vtpm_secret_uuid = instance.system_metadata.get(
+            'old_vtpm_secret_uuid')
+        old_vtpm_secret_security = instance.system_metadata.get(
+            'old_image_hw_tpm_secret_security')
+        if old_vtpm_secret_uuid:
+            self._delete_secret_for_vtpm(context, instance)
+            # Restore the original vTPM related system metadata.
+            instance.system_metadata['vtpm_secret_uuid'] = old_vtpm_secret_uuid
+            instance.system_metadata.pop('old_vtpm_secret_uuid')
+        if old_vtpm_secret_security:
+            instance.system_metadata[
+                'image_hw_tpm_secret_security'] = old_vtpm_secret_security
+            instance.system_metadata.pop('old_image_hw_tpm_secret_security')
+        if old_vtpm_secret_uuid or old_vtpm_secret_security:
+            instance.save()
+
     def _finish_revert_migration_vtpm(
         self,
         context: nova_context.RequestContext,
@@ -12832,11 +12985,14 @@ class LibvirtDriver(driver.ComputeDriver):
             swtpm_dir = os.path.join(inst_base, 'swtpm', instance.uuid)
             if os.path.exists(swtpm_dir):
                 libvirt_utils.restore_vtpm_dir(swtpm_dir)
+            self._finish_revert_migration_vtpm_secret_security(context,
+                                                               instance)
         elif new_vtpm_config:
             # the instance gained a vTPM and must now lose it; delete the vTPM
             # secret, knowing that libvirt will take care of everything else on
             # the destination side
             self._delete_secret_for_vtpm(context, instance)
+            instance.system_metadata.pop('image_hw_tpm_secret_security', None)
 
     def finish_revert_migration(
         self,
