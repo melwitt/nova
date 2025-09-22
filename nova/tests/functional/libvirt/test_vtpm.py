@@ -191,21 +191,40 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # use the default flavor (i.e. one without vTPM extra specs)
         return self._create_server()
 
-    def assertInstanceHasSecret(self, server):
+    def assertInstanceHasSecret(self, server, secret_security=None):
         ctx = nova_context.get_admin_context()
         instance = objects.Instance.get_by_uuid(ctx, server['id'])
         self.assertIn('vtpm_secret_uuid', instance.system_metadata)
+
+        secret_uuid = instance.system_metadata['vtpm_secret_uuid']
+        self.assertIn(secret_uuid, self.key_mgr._passphrases)
+        # The self.api user_id is 'fake'.
+        expected_user_id = (
+                'nova' if secret_security == 'deployment' else 'fake')
+        self.assertEqual(expected_user_id,
+                         self.key_mgr._contexts[secret_uuid].user_id)
+        return secret_uuid
+
+    def assertInstanceHasOneSecret(self, server, secret_security=None):
         self.assertEqual(1, len(self.key_mgr._passphrases))
-        self.assertIn(
-            instance.system_metadata['vtpm_secret_uuid'],
-            self.key_mgr._passphrases)
-        return instance.system_metadata['vtpm_secret_uuid']
+        return self.assertInstanceHasSecret(server,
+                                            secret_security=secret_security)
+
+    def assertInstanceHasTwoSecrets(self, server, secret_security=None):
+        self.assertEqual(2, len(self.key_mgr._passphrases))
+        return self.assertInstanceHasSecret(server,
+                                            secret_security=secret_security)
 
     def assertInstanceHasNoSecret(self, server):
         ctx = nova_context.get_admin_context()
         instance = objects.Instance.get_by_uuid(ctx, server['id'])
         self.assertNotIn('vtpm_secret_uuid', instance.system_metadata)
         self.assertEqual(0, len(self.key_mgr._passphrases))
+
+    def assertInstanceHasNoOldSysMeta(self, server):
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('old_vtpm_secret_uuid', instance.system_metadata)
 
     def _assert_libvirt_has_secret(self, host, instance_uuid):
         s = host.driver._host.find_secret('vtpm', instance_uuid)
@@ -251,6 +270,146 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.start_compute(hostname='tpm-host')
         self._create_server_with_vtpm(secret_security='user',
                                       expected_state='ERROR')
+
+    @ddt.data('host', 'deployment')
+    def test_tpm_secret_security_instance_opt_in_resize_confirm(
+            self, secret_security):
+        """Test that a 'user' instance can opt-in to live migration.
+
+        Only instances using the new 'host' or 'deployment' TPM secret security
+        policies are able to live migrate.
+
+        New instances that did not previously select a TPM secret security
+        policy can opt-in to live migration by resizing to a flavor with
+        hw:tpm_secret_security set.
+        """
+        self.flags(
+            supported_tpm_secret_security=['user', secret_security],
+            group='libvirt')
+        self.flags(allow_resize_to_same_host=True)
+        self.start_compute(hostname='tpm-host')
+
+        # Create a server that does not have TPM secret security set and will
+        # default to 'user'.
+        self.computes['tpm-host']
+        server = self._create_server_with_vtpm()
+
+        # Server should have one secret that has secret security setting 'user'
+        # and is owned by the user.
+        self.assertInstanceHasOneSecret(server, secret_security='user')
+
+        # Create a new flavor that specifies TPM secret security policy.
+        extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
+        if secret_security:
+            extra_specs.update({'hw:tpm_secret_security': secret_security})
+        flavor_id = self._create_flavor(extra_spec=extra_specs)
+
+        # Resize the server.
+        with mock.patch(
+                'nova.virt.libvirt.driver.LibvirtDriver'
+                '.migrate_disk_and_power_off', return_value='{}'):
+            server = self._resize_server(server, flavor_id=flavor_id)
+
+        # Verify the server now has TPM secret security set.
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', there should temporarily be
+            # two secrets -- one owned by the 'nova' service user and the
+            # original secret owned by the user.
+            self.assertInstanceHasTwoSecrets(server,
+                                             secret_security=secret_security)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
+
+        # Confirm the resize.
+        with mock.patch(
+                'nova.virt.libvirt.driver.LibvirtDriver'
+                '.migrate_disk_and_power_off', return_value='{}'):
+            server = self._confirm_resize(server)
+
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', we should have deleted the
+            # original user owned secret and only the 'nova' service user owned
+            # secret should remain.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
+
+        self.assertInstanceHasNoOldSysMeta(server)
+
+    @ddt.data('host', 'deployment')
+    def test_tpm_secret_security_instance_opt_in_resize_revert(
+            self, secret_security):
+        """Test that a 'user' instance can opt-in to live migration.
+
+        Only instances using the new 'host' or 'deployment' TPM secret security
+        policies are able to live migrate.
+
+        New instances that did not previously select a TPM secret security
+        policy can opt-in to live migration by resizing to a flavor with
+        hw:tpm_secret_security set.
+        """
+        self.flags(
+            supported_tpm_secret_security=['user', secret_security],
+            group='libvirt')
+        self.flags(allow_resize_to_same_host=True)
+        self.start_compute(hostname='tpm-host')
+
+        self.computes['tpm-host']
+        # Create a new server which will default to 'user' TPM secret
+        # security.
+        server = self._create_server_with_vtpm()
+
+        # Server should have one secret that has secret security setting 'user'
+        # and is owned by the user.
+        self.assertInstanceHasOneSecret(server, secret_security='user')
+
+        # Create a new flavor that specifies TPM secret security policy.
+        extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
+        if secret_security:
+            extra_specs.update({'hw:tpm_secret_security': secret_security})
+        flavor_id = self._create_flavor(extra_spec=extra_specs)
+
+        # Resize the server.
+        with mock.patch(
+                'nova.virt.libvirt.driver.LibvirtDriver'
+                '.migrate_disk_and_power_off', return_value='{}'):
+            server = self._resize_server(server, flavor_id=flavor_id)
+
+        # Verify the server now has TPM secret security set.
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', there should temporarily be
+            # two secrets -- one owned by the 'nova' service user and the
+            # original secret owned by the user.
+            self.assertInstanceHasTwoSecrets(server,
+                                             secret_security=secret_security)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
+
+        # Revert the resize.
+        with mock.patch(
+                'nova.virt.libvirt.driver.LibvirtDriver'
+                '.migrate_disk_and_power_off', return_value='{}'):
+            server = self._revert_resize(server)
+
+        # If secret security is 'deployment', we should have deleted
+        # the 'nova' service user owned secret and only the original
+        # user owned secret with no secret security set should remain.
+        # If secret security is 'host', there should still be only one
+        # secret owned by the user but with no secret security set.
+        self.assertInstanceHasOneSecret(server)
+
+        # Should have cleaned up "old_" prefix vTPM system metadata keys.
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_create_server(self):
         compute = self.start_compute()
@@ -321,7 +480,7 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # ensure our instance's system_metadata field and key manager inventory
         # is correct
-        self.assertInstanceHasSecret(server)
+        self.assertInstanceHasSecret(server, secret_security='deployment')
 
         # ensure the libvirt secret is defined correctly
         ctx = nova_context.get_admin_context()
@@ -659,6 +818,9 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         server = self._create_server_with_vtpm()
 
+        # Should have defaulted to secret security 'user'.
+        self.assertInstanceHasSecret(server, secret_security='user')
+
         # Create a different flavor with a vTPM.
         extra_specs = extra_specs or {
             'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
@@ -685,6 +847,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # Should still have a secret because we had a vTPM before too.
         self.assertInstanceHasSecret(server)
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_resize_revert_server__vtpm_to_vtpm_same_config(self):
         self._test_resize_revert_server__vtpm_to_vtpm()
@@ -738,6 +902,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # ensure we delete the new key since we no longer need it
         self.assertInstanceHasNoSecret(server)
 
+        self.assertInstanceHasNoOldSysMeta(server)
+
     def test_resize_server__vtpm_to_no_vtpm(self):
         for host in ('test_compute0', 'test_compute1'):
             self.start_compute(host)
@@ -779,6 +945,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # ensure we have finally deleted the key for the vTPM device since
         # there is no going back now
         self.assertInstanceHasNoSecret(server)
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_create_server_secret_security_unsupported(self):
         """Test when a not supported TPM secret security mode is requested
@@ -830,6 +998,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # ensure nothing has changed
         self.assertInstanceHasSecret(server)
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_migrate_server_as_admin(self):
         """Test cold migrate as an admin user.
@@ -894,7 +1064,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.dest = self.computes['dest']
 
         # We should have a secret in the key manager service.
-        secret_uuid = self.assertInstanceHasSecret(self.server)
+        secret_uuid = self.assertInstanceHasSecret(
+                self.server, secret_security='deployment')
         # We should also have had a libvirt secret on the source host that has
         # since been undefined.
         self._assert_libvirt_had_secret(self.src, secret_uuid)
@@ -905,7 +1076,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # After the live migration, we should still have a secret in the key
         # manager service.
-        secret_uuid = self.assertInstanceHasSecret(self.server)
+        secret_uuid = self.assertInstanceHasSecret(
+                self.server, secret_security='deployment')
         # We should have had a libvirt secret on the destination host that has
         # since been undefined.
         self._assert_libvirt_had_secret(self.dest, secret_uuid)
@@ -934,7 +1106,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.dest = self.computes['dest']
 
         # ensure our instance's system_metadata field is correct
-        secret_uuid = self.assertInstanceHasSecret(server)
+        secret_uuid = self.assertInstanceHasSecret(
+                server, secret_security='deployment')
         # We should have had a libvirt secret on the source host that has since
         # been undefined.
         self._assert_libvirt_had_secret(self.src, secret_uuid)
@@ -945,7 +1118,7 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
             self._live_migrate(server, migration_expected_state='failed',
                                api=self.admin_api)
             # We should still have a secret in the key manager service.
-            self.assertInstanceHasSecret(server)
+            self.assertInstanceHasSecret(server, secret_security='deployment')
             # We should not have a libvirt secret on the destination host.
             self._assert_libvirt_secret_missing(self.dest, server['id'])
 
@@ -999,7 +1172,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.dest = self.computes['dest']
 
         # We should have a secret in the key manager service.
-        secret_uuid = self.assertInstanceHasSecret(self.server)
+        secret_uuid = self.assertInstanceHasSecret(
+                self.server, secret_security='deployment')
         # We should have had a libvirt secret on the source host that has since
         # been undefined.
         self._assert_libvirt_had_secret(self.src, secret_uuid)
@@ -1019,7 +1193,7 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # After the live migration fails, we should still have a secret in
         # the key manager service.
-        self.assertInstanceHasSecret(self.server)
+        self.assertInstanceHasSecret(self.server, secret_security='deployment')
         # And no libvirt secret on the destination host.
         self._assert_libvirt_secret_missing(self.dest, self.server['id'])
 
@@ -1042,7 +1216,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         self.server = self._create_server_with_vtpm(
                 secret_security='deployment')
-        secret_uuid = self.assertInstanceHasSecret(self.server)
+        secret_uuid = self.assertInstanceHasSecret(
+                self.server, secret_security='deployment')
         self._assert_libvirt_had_secret(self.src, secret_uuid)
 
         # Destination with 'host' TPM secret security.
