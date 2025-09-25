@@ -1782,6 +1782,9 @@ class ComputeManagerUnitTestCase(test.NoDBTestCase,
         mocks['_delete_scheduler_instance_info'].assert_called_once_with(
             self.context, instance.uuid)
         mock_delete_vtpm.assert_called_once_with(self.context, instance)
+        # _complete_deletion() is only called at actual delete time (either
+        # regular delete or when reaping after soft delete). The force argument
+        # differs based on actual or reap delete for other reasons.
         if reclaim_instance_interval > 0:
             mock_delete_alloc.assert_called_once_with(
                 self.context, instance.uuid, force=False)
