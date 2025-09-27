@@ -52,6 +52,9 @@ class FakeKeyManager(key_manager.KeyManager):
         #: A mapping of UUIDs to passphrases.
         self._passphrases = {}
 
+        #: A mapping of UUIDs to contexts.
+        self._contexts = {}
+
     def create_key(self, context, algorithm, length, **kwargs):
         """Creates a symmetric key.
 
@@ -82,6 +85,7 @@ class FakeKeyManager(key_manager.KeyManager):
         uuid = uuidutils.generate_uuid()
         managed_object._id = uuid  # set the id to simulate persistence
         self._passphrases[uuid] = managed_object
+        self._contexts[uuid] = context
 
         return uuid
 
@@ -113,6 +117,7 @@ class FakeKeyManager(key_manager.KeyManager):
                 reason="cannot delete non-existent secret")
 
         del self._passphrases[managed_object_id]
+        del self._contexts[managed_object_id]
 
     def add_consumer(self, context, managed_object_id, consumer_data):
         raise NotImplementedError(
@@ -153,6 +158,15 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         self.key_mgr = crypto._get_key_manager()
 
+        # Mock the get_service_user_context() method so we can differentiate
+        # request contexts for the 'nova' service user.
+        def fake_get_service_user_context():
+            return nova_context.RequestContext(user_name='nova')
+
+        self.useFixture(fixtures.MockPatch(
+            'nova.context.get_service_user_context',
+            fake_get_service_user_context))
+
     def _create_server_with_vtpm(self, secret_security=None, host=None,
                                  expected_state='ACTIVE'):
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
@@ -191,11 +205,22 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
                 secret_security,
                 instance.system_metadata.get('image_hw_tpm_secret_security'))
 
+        secret_uuid = instance.system_metadata['vtpm_secret_uuid']
+        self.assertIn(secret_uuid, self.key_mgr._passphrases)
+        expected_username = 'nova' if secret_security == 'deployment' else None
+        self.assertEqual(expected_username,
+                         self.key_mgr._contexts[secret_uuid].user_name)
+        return secret_uuid
+
+    def assertInstanceHasOneSecret(self, server, secret_security=None):
         self.assertEqual(1, len(self.key_mgr._passphrases))
-        self.assertIn(
-            instance.system_metadata['vtpm_secret_uuid'],
-            self.key_mgr._passphrases)
-        return instance.system_metadata['vtpm_secret_uuid']
+        return self.assertInstanceHasSecret(server,
+                                            secret_security=secret_security)
+
+    def assertInstanceHasTwoSecrets(self, server, secret_security=None):
+        self.assertEqual(2, len(self.key_mgr._passphrases))
+        return self.assertInstanceHasSecret(server,
+                                            secret_security=secret_security)
 
     def assertInstanceHasNoSecret(self, server):
         ctx = nova_context.get_admin_context()
@@ -204,6 +229,13 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertEqual(0, len(self.key_mgr._passphrases))
         self.assertNotIn(
             'image_hw_tpm_secret_security', instance.system_metadata)
+
+    def assertInstanceHasNoOldSysMeta(self, server):
+        ctx = nova_context.get_admin_context()
+        instance = objects.Instance.get_by_uuid(ctx, server['id'])
+        self.assertNotIn('old_vtpm_secret_uuid', instance.system_metadata)
+        self.assertNotIn(
+            'old_imag_hw_tpm_secret_security', instance.system_metadata)
 
     def _assert_libvirt_has_secret(self, host, instance_uuid):
         s = host.driver._host.find_secret('vtpm', instance_uuid)
@@ -238,7 +270,7 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         server = self._create_server_with_vtpm(secret_security='user')
 
         # The server should have a secret in the key manager service.
-        secret_uuid = self.assertInstanceHasSecret(
+        secret_uuid = self.assertInstanceHasOneSecret(
             server, secret_security='user')
 
         # And it should have had a libvirt secret created and undefined.
@@ -290,6 +322,10 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         compute = self.computes['tpm-host']
         server = self._create_legacy_server_with_vtpm(compute)
 
+        # Server should have one secret that has no secret security setting and
+        # is owned by the user.
+        self.assertInstanceHasOneSecret(server)
+
         # Create a new flavor that specifies TPM secret security policy.
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
         if secret_security:
@@ -303,16 +339,37 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
             server = self._resize_server(server, flavor_id=flavor_id)
 
         # Verify the server now has TPM secret security set.
-        self.assertInstanceHasSecret(server, secret_security=secret_security)
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', there should temporarily be
+            # two secrets -- one owned by the 'nova' service user and the
+            # original secret owned by the user.
+            self.assertInstanceHasTwoSecrets(server,
+                                             secret_security=secret_security)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
 
-        # Revert the resize.
+        # Confirm the resize.
         with mock.patch(
                 'nova.virt.libvirt.driver.LibvirtDriver'
                 '.migrate_disk_and_power_off', return_value='{}'):
             server = self._confirm_resize(server)
 
-        # The server should still have a TPM secret.
-        self.assertInstanceHasSecret(server, secret_security=secret_security)
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', we should have deleted the
+            # original user owned secret and only the 'nova' service user owned
+            # secret should remain.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     @ddt.data('host', 'deployment')
     def test_tpm_secret_security_legacy_instance_opt_in_revert(
@@ -332,6 +389,10 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         compute = self.computes['tpm-host']
         server = self._create_legacy_server_with_vtpm(compute)
 
+        # Server should have one secret that has no secret security setting and
+        # is owned by the user.
+        self.assertInstanceHasOneSecret(server)
+
         # Create a new flavor that specifies TPM secret security policy.
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
         if secret_security:
@@ -345,7 +406,17 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
             server = self._resize_server(server, flavor_id=flavor_id)
 
         # Verify the server now has TPM secret security set.
-        self.assertInstanceHasSecret(server, secret_security=secret_security)
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', there should temporarily be
+            # two secrets -- one owned by the 'nova' service user and the
+            # original secret owned by the user.
+            self.assertInstanceHasTwoSecrets(server,
+                                             secret_security=secret_security)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user.
+            self.assertInstanceHasOneSecret(server,
+                                            secret_security=secret_security)
 
         # Revert the resize.
         with mock.patch(
@@ -353,8 +424,17 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
                 '.migrate_disk_and_power_off', return_value='{}'):
             server = self._revert_resize(server)
 
-        # The server should still have a TPM secret.
-        self.assertInstanceHasSecret(server, secret_security=secret_security)
+        if secret_security == 'deployment':
+            # If secret security is 'deployment', we should have deleted the
+            # 'nova' service user owned secret and only the original user owned
+            # secret with no secret security set should remain.
+            self.assertInstanceHasOneSecret(server)
+        elif secret_security == 'host':
+            # If secret security is 'host', there should still be only one
+            # secret owned by the user but with no secret security set.
+            self.assertInstanceHasOneSecret(server)
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_create_server(self):
         compute = self.start_compute()
@@ -814,6 +894,9 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         server = self._create_server_with_vtpm()
 
+        # Should have defaulted to secret security 'user'.
+        self.assertInstanceHasSecret(server, secret_security='user')
+
         # Create a different flavor with a vTPM.
         extra_specs = extra_specs or {
             'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
@@ -840,6 +923,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # Should still have a secret because we had a vTPM before too.
         self.assertInstanceHasSecret(server, secret_security='user')
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_resize_revert_server__vtpm_to_vtpm_same_config(self):
         self._test_resize_revert_server__vtpm_to_vtpm()
@@ -893,6 +978,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # ensure we delete the new key since we no longer need it
         self.assertInstanceHasNoSecret(server)
 
+        self.assertInstanceHasNoOldSysMeta(server)
+
     def test_resize_server__vtpm_to_no_vtpm(self):
         for host in ('test_compute0', 'test_compute1'):
             self.start_compute(host)
@@ -935,6 +1022,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         # there is no going back now
         self.assertInstanceHasNoSecret(server)
 
+        self.assertInstanceHasNoOldSysMeta(server)
+
     def test_migrate_server(self):
         for host in ('test_compute0', 'test_compute1'):
             self.start_compute(host)
@@ -957,6 +1046,8 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         # ensure nothing has changed
         self.assertInstanceHasSecret(server, secret_security='user')
+
+        self.assertInstanceHasNoOldSysMeta(server)
 
     def test_live_migrate_server(self):
         for host in ('test_compute0', 'test_compute1'):

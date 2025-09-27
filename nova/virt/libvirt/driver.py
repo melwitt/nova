@@ -1954,6 +1954,8 @@ class LibvirtDriver(driver.ComputeDriver):
         new_vtpm_config = hardware.get_vtpm_constraint(
             instance.new_flavor, instance.image_meta)
 
+        self._cleanup_resize_vtpm_secret_security(context, instance)
+
         if old_vtpm_config and not new_vtpm_config:
             # the instance no longer cares for its vTPM so delete the related
             # secret; the deletion of the instance directory and undefining of
@@ -12695,12 +12697,15 @@ class LibvirtDriver(driver.ComputeDriver):
           1. Get the existing secret passphrase from the key manager service
           2. Create a new secret with the same passphrase using the Nova
              service user context
-          3. Delete the existing user owned secret in the key manager service
-          4. Create and undefine a libvirt secret with ephemeral=yes and
+          3. Create and undefine a libvirt secret with ephemeral=yes and
              private=yes
+          4. If the resize is confirmed, delete the existing user owned secret
+             in the key manager service. If the resize is reverted, delete the
+             new Nova service user owned secret.
 
-        We need to do steps 1 and 3 in this method using the user's request
-        context and step 4 will be done automatically during _create_guest().
+        We need to do steps 1 and 2 in this method, step 3 will be done
+        automatically during _create_guest(), and step 4 will be done in either
+        the resize confirm method or resize revert method.
 
         For an instance converting from 'deployment' secret security, the steps
         are similar:
@@ -12708,66 +12713,68 @@ class LibvirtDriver(driver.ComputeDriver):
           1. Get the existing secret passphrase from the key manager service
           2. Create a new secret with the same passphrase using the user's
              context
-          3. Delete the existing Nova service user owned secret in the key
-             manager service
-          4. If converting to 'host', create a libvirt secret with ephemeral=no
+          3. If converting to 'host', create a libvirt secret with ephemeral=no
              and private=no, else create and undefine a libvirt secret with
              ephemeral=yes and private=yes
+          4. If the resize is confirmed, delete the existing Nova service user
+             owned secret in the key manager service. If the resize is
+             reverted, delete the new user owned secret.
 
-        We need to do steps 1 and 3 using the Nova service user's request
-        context and step 4 will be done automatically during _create_guest().
+        We need to do steps 1 and 2 in this method, step 3 will be done
+        automatically during _create_guest(), and step 4 will be done in either
+        the resize confirm method or resize revert method.
         """
         from_security = hardware.get_tpm_secret_security_constraint(
             instance.old_flavor, instance.image_meta)
 
-        if from_security != to_security:
-            from_msg = ''
-            if from_security is not None:
-                from_msg = " from '%s' TPM secret security" % from_security
-            to_msg = ''
-            if to_security is not None:
-                to_msg = "to '%s' TPM secret security" % to_security
-            LOG.info(
-                "Converting%s %s", from_msg, to_msg, instance=instance)
+        # Log a message about what conversion we are doing.
+        from_msg = ''
+        if from_security is not None:
+            from_msg = " from '%s' TPM secret security" % from_security
+        to_msg = ''
+        if to_security is not None:
+            to_msg = "to '%s' TPM secret security" % to_security
+        LOG.info(
+            "Converting%s %s", from_msg, to_msg, instance=instance)
 
-            def swap_vtpm_secret(from_context, to_context):
-                # Get the existing secret passphrase.
-                from_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
-                    from_context, instance)
+        def swap_vtpm_secret(from_context, to_context):
+            # Get the existing secret passphrase.
+            from_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+                from_context, instance)
 
-                # Stash the current vTPM secret UUID in case we need to revert.
-                instance.system_metadata[
-                    'old_vtpm_secret_uuid'] = from_secret_uuid
+            # Stash the current vTPM secret UUID in case we need to revert.
+            instance.system_metadata[
+                'old_vtpm_secret_uuid'] = from_secret_uuid
 
-                # Clear the secret UUID in the system metadata so a new secret
-                # will be created.
-                instance.system_metadata.pop('vtpm_secret_uuid', None)
+            # Clear the secret UUID in the system metadata so a new secret
+            # will be created.
+            instance.system_metadata.pop('vtpm_secret_uuid', None)
 
-                # Create a new secret owned by the new request context with the
-                # same passphrase. This will set vtpm_secret_uuid in system
-                # metadata.
-                to_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
-                    to_context, instance, secret=passphrase)
+            # Create a new secret owned by the new request context with the
+            # same passphrase. This will set vtpm_secret_uuid in system
+            # metadata.
+            to_secret_uuid, passphrase = crypto.ensure_vtpm_secret(
+                to_context, instance, secret=passphrase)
 
-            # If we are converting to or from 'deployment', we will need to
-            # swap the secret to or from Nova service user ownership.
-            if to_security == 'deployment' and from_security:
-                swap_vtpm_secret(
-                    context, nova_context.get_service_user_context())
-            elif from_security == 'deployment' and to_security:
-                swap_vtpm_secret(
-                    nova_context.get_service_user_context(), context)
+        # If we are converting to or from 'deployment', we will need to
+        # swap the secret to or from Nova service user ownership.
+        if to_security == 'deployment':
+            swap_vtpm_secret(
+                context, nova_context.get_service_user_context())
+        elif from_security == 'deployment':
+            swap_vtpm_secret(
+                nova_context.get_service_user_context(), context)
 
-            # Stash the current vTPM secret security in case we need to revert.
-            if from_security is not None:
-                instance.system_metadata[
-                    'old_image_hw_tpm_secret_security'] = from_security
+        # Stash the current vTPM secret security in case we need to revert.
+        instance.system_metadata[
+            'old_image_hw_tpm_secret_security'] = from_security
 
-            if to_security is not None:
-                instance.system_metadata[
-                    'image_hw_tpm_secret_security'] = to_security
+        # Set the new vTPM secret security if we have one.
+        if to_security:
+            instance.system_metadata[
+                'image_hw_tpm_secret_security'] = to_security
 
-            instance.save()
+        instance.save()
 
     def _finish_migration_vtpm(
         self,
@@ -12809,7 +12816,7 @@ class LibvirtDriver(driver.ComputeDriver):
 
             # Convert the TPM secret security if needed.
             to_security = hardware.get_tpm_secret_security_constraint(
-                instance.new_flavor, instance.image_meta)
+                instance.new_flavor, instance.image_meta) or 'user'
             self._convert_tpm_secret_security(context, instance, to_security)
         elif new_vtpm_config:
             # Check if a secret security policy has been specified from the
@@ -12950,21 +12957,28 @@ class LibvirtDriver(driver.ComputeDriver):
         context: nova_context.RequestContext,
         instance: 'objects.Instance',
     ) -> None:
+        # If we had a TPM secret before the resize, delete the current (new)
+        # secret and then restore the original one.
         old_vtpm_secret_uuid = instance.system_metadata.get(
             'old_vtpm_secret_uuid')
-        old_vtpm_secret_security = instance.system_metadata.get(
-            'old_image_hw_tpm_secret_security')
         if old_vtpm_secret_uuid:
             self._delete_secret_for_vtpm(context, instance)
-            # Restore the original vTPM related system metadata.
             instance.system_metadata['vtpm_secret_uuid'] = old_vtpm_secret_uuid
             instance.system_metadata.pop('old_vtpm_secret_uuid')
-        if old_vtpm_secret_security:
+
+        # Check if we had any TPM secret security set before the resize. If
+        # not, remove the key from system metadata entirely. Otherwise, restore
+        # the old secret security.
+        old_vtpm_secret_security = instance.system_metadata.get(
+            'old_image_hw_tpm_secret_security')
+        if old_vtpm_secret_security is None:
+            instance.system_metadata.pop('image_hw_tpm_secret_security', None)
+        else:
             instance.system_metadata[
                 'image_hw_tpm_secret_security'] = old_vtpm_secret_security
-            instance.system_metadata.pop('old_image_hw_tpm_secret_security')
-        if old_vtpm_secret_uuid or old_vtpm_secret_security:
-            instance.save()
+        instance.system_metadata.pop('old_image_hw_tpm_secret_security', None)
+
+        instance.save()
 
     def _finish_revert_migration_vtpm(
         self,
