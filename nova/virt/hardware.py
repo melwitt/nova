@@ -1143,13 +1143,19 @@ def _get_unique_flavor_image_meta(
             "%(image_name)s which has %(prefix)s_%(key)s explicitly set to "
             "%(image_val)s."
         )
+        # We can't assume the name field has been set on the ImageMeta object
+        # if a caller is passing Instance.image_meta into this method.
+        # Instance.image_meta may not have necessarily come from an actual
+        # Glance image if an image_hw_ system metadata key has been overloaded,
+        # for example: image_hw_tpm_secret_security for vTPM.
+        image_meta_name = image_meta.name if 'name' in image_meta else ''
         raise exception.FlavorImageConflict(
             msg % {
                 'prefix': prefix,
                 'key': key,
                 'flavor_name': flavor.name,
                 'flavor_val': flavor_value,
-                'image_name': image_meta.name,
+                'image_name': image_meta_name,
                 'image_val': image_value,
             },
         )
