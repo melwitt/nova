@@ -304,9 +304,11 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         self.assertNotIn('image_hw_tpm_secret_security',
                          instance.system_metadata)
 
-    @ddt.data('host', 'deployment')
+    @ddt.data((True, 'host'), (True, 'deployment'),
+              (False, 'host'), (False, 'deployment'))
+    @ddt.unpack
     def test_tpm_secret_security_legacy_instance_opt_in_confirm(
-            self, secret_security):
+            self, legacy, secret_security):
         """Test that an existing legacy instance can opt-in to live migration.
 
         Only instances using the new 'host' or 'deployment' TPM secret security
@@ -314,17 +316,24 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         new scheme by resizing to a flavor with hw:tpm_secret_security set.
         """
         self.flags(
-            supported_tpm_secret_security=[secret_security], group='libvirt')
+            supported_tpm_secret_security=['user', secret_security],
+            group='libvirt')
         self.flags(allow_resize_to_same_host=True)
         self.start_compute(hostname='tpm-host')
 
         # Create a legacy server that does not have TPM secret security set.
         compute = self.computes['tpm-host']
-        server = self._create_legacy_server_with_vtpm(compute)
+        if legacy:
+            server = self._create_legacy_server_with_vtpm(compute)
+        else:
+            server = self._create_server_with_vtpm()
 
-        # Server should have one secret that has no secret security setting and
-        # is owned by the user.
-        self.assertInstanceHasOneSecret(server)
+        if legacy:
+            # Server should have one secret that has no secret security setting
+            # and is owned by the user.
+            self.assertInstanceHasOneSecret(server)
+        else:
+            self.assertInstanceHasOneSecret(server, secret_security='user')
 
         # Create a new flavor that specifies TPM secret security policy.
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
@@ -371,9 +380,11 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         self.assertInstanceHasNoOldSysMeta(server)
 
-    @ddt.data('host', 'deployment')
+    @ddt.data((True, 'host'), (True, 'deployment'),
+              (False, 'host'), (False, 'deployment'))
+    @ddt.unpack
     def test_tpm_secret_security_legacy_instance_opt_in_revert(
-            self, secret_security):
+            self, legacy, secret_security):
         """Test that an existing legacy instance can opt-in to live migration.
 
         Only instances using the new 'host' or 'deployment' TPM secret security
@@ -381,17 +392,27 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
         new scheme by resizing to a flavor with hw:tpm_secret_security set.
         """
         self.flags(
-            supported_tpm_secret_security=[secret_security], group='libvirt')
+            supported_tpm_secret_security=['user', secret_security],
+            group='libvirt')
         self.flags(allow_resize_to_same_host=True)
         self.start_compute(hostname='tpm-host')
 
-        # Create a legacy server that does not have TPM secret security set.
         compute = self.computes['tpm-host']
-        server = self._create_legacy_server_with_vtpm(compute)
+        if legacy:
+            # Create a legacy server that does not have TPM secret security
+            # set.
+            server = self._create_legacy_server_with_vtpm(compute)
+        else:
+            # Create a new server which will default to 'user' TPM secret
+            # security.
+            server = self._create_server_with_vtpm()
 
-        # Server should have one secret that has no secret security setting and
-        # is owned by the user.
-        self.assertInstanceHasOneSecret(server)
+        if legacy:
+            # Server should have one secret that has no secret security setting
+            # and is owned by the user.
+            self.assertInstanceHasOneSecret(server)
+        else:
+            self.assertInstanceHasOneSecret(server, secret_security='user')
 
         # Create a new flavor that specifies TPM secret security policy.
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
@@ -425,14 +446,20 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
             server = self._revert_resize(server)
 
         if secret_security == 'deployment':
-            # If secret security is 'deployment', we should have deleted the
-            # 'nova' service user owned secret and only the original user owned
-            # secret with no secret security set should remain.
-            self.assertInstanceHasOneSecret(server)
+            if legacy:
+                # If secret security is 'deployment', we should have deleted
+                # the 'nova' service user owned secret and only the original
+                # user owned secret with no secret security set should remain.
+                self.assertInstanceHasOneSecret(server)
+            else:
+                self.assertInstanceHasOneSecret(server, secret_security='user')
         elif secret_security == 'host':
-            # If secret security is 'host', there should still be only one
-            # secret owned by the user but with no secret security set.
-            self.assertInstanceHasOneSecret(server)
+            if legacy:
+                # If secret security is 'host', there should still be only one
+                # secret owned by the user but with no secret security set.
+                self.assertInstanceHasOneSecret(server)
+            else:
+                self.assertInstanceHasOneSecret(server, secret_security='user')
 
         self.assertInstanceHasNoOldSysMeta(server)
 
