@@ -1,0 +1,13 @@
+features:
+  - |
+    The libvirt driver now supports live migration of servers with virtual
+    emulated TPM (vTPM) when the ``hw:tpm_secret_security`` flavor extra
+    spec is set to ``host`` or ``deployment``. Operators must create flavors
+    which set ``hw:tpm_secret_security`` in order to enable servers to select
+    TPM secret security modes. Pre-existing servers can opt-in to TPM secret
+    security modes by resizing to a flavor which has set
+    ``hw:tpm_secret_security``. Operators may choose which TPM security modes
+    they want to support by setting the
+    ``[libvirt]supported_tpm_secret_security`` configuration option on compute
+    hosts. See the documentation for details:
+    https://docs.openstack.org/nova/latest/admin/emulated-tpm.html
