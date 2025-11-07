@@ -48,6 +48,9 @@ class FakeKeyManager(key_manager.KeyManager):
         #: A mapping of UUIDs to passphrases.
         self._passphrases = {}
 
+        #: A mapping of UUIDs to RequestContext objects.
+        self._contexts = {}
+
     def create_key(self, context, algorithm, length, **kwargs):
         """Creates a symmetric key.
 
@@ -78,6 +81,7 @@ class FakeKeyManager(key_manager.KeyManager):
         uuid = uuidutils.generate_uuid()
         managed_object._id = uuid  # set the id to simulate persistence
         self._passphrases[uuid] = managed_object
+        self._contexts[uuid] = context
 
         return uuid
 
@@ -89,6 +93,9 @@ class FakeKeyManager(key_manager.KeyManager):
         context is None; a KeyError is raised if the UUID is invalid.
         """
         if context is None:
+            raise exception.Forbidden()
+
+        if context.user_id != self._contexts[managed_object_id].user_id:
             raise exception.Forbidden()
 
         if managed_object_id not in self._passphrases:
@@ -104,11 +111,15 @@ class FakeKeyManager(key_manager.KeyManager):
         if context is None:
             raise exception.Forbidden()
 
+        if context.user_id != self._contexts[managed_object_id].user_id:
+            raise exception.Forbidden()
+
         if managed_object_id not in self._passphrases:
             raise exception.KeyManagerError(
                 reason="cannot delete non-existent secret")
 
         del self._passphrases[managed_object_id]
+        del self._contexts[managed_object_id]
 
     def add_consumer(self, context, managed_object_id, consumer_data):
         raise NotImplementedError(
@@ -123,8 +134,11 @@ class FakeKeyManager(key_manager.KeyManager):
 
 class VTPMServersTest(base.ServersTestBase):
 
-    # many move operations are admin-only
-    ADMIN_API = True
+    # NOTE: ADMIN_API is intentionally not set to True in order to catch key
+    # manager service secret ownership issues.
+
+    # Reflect reality more for async API requests like migration
+    CAST_AS_CALL = False
 
     def setUp(self):
         # enable vTPM and use our own fake key service
@@ -372,6 +386,16 @@ class VTPMServersTest(base.ServersTestBase):
         self.assertInstanceHasNoSecret(server)
 
     def test_migrate_server(self):
+        """Test cold migrate as a non-admin user.
+
+        Cold migrate policy defaults to admin-only but this will not currently
+        work as admin due to key manager service secret ownership.
+        """
+        # Allow non-admin to cold migrate a server.
+        rules = {
+            'os_compute_api:os-migrate-server:migrate': 'rule:admin_or_owner'}
+        self.policy.set_rules(rules, overwrite=False)
+
         for host in ('test_compute0', 'test_compute1'):
             self.start_compute(host)
 
@@ -393,6 +417,29 @@ class VTPMServersTest(base.ServersTestBase):
 
         # ensure nothing has changed
         self.assertInstanceHasSecret(server)
+
+    def test_migrate_server_as_admin(self):
+        """Test cold migrate as an admin user.
+
+        Cold migrate policy defaults to admin-only but this will not currently
+        work as admin due to key manager service secret ownership.
+        """
+        for host in ('test_compute0', 'test_compute1'):
+            self.start_compute(host)
+
+        # create a server with vTPM
+        server = self._create_server_with_vtpm()
+
+        # ensure our instance's system_metadata field is correct
+        self.assertInstanceHasSecret(server)
+
+        with mock.patch(
+            'nova.virt.libvirt.driver.LibvirtDriver'
+            '.migrate_disk_and_power_off', return_value='{}',
+        ):
+            # cold migrate the server
+            self._migrate_server(
+                    server, expected_state='ERROR', api=self.admin_api)
 
     def test_live_migrate_server(self):
         for host in ('test_compute0', 'test_compute1'):
