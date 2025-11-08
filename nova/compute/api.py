@@ -5595,7 +5595,7 @@ class API:
         until=MIN_COMPUTE_VDPA_HOTPLUG_LIVE_MIGRATION
     )
     @block_accelerators()
-    @reject_vtpm_instances(instance_actions.LIVE_MIGRATION)
+    @reject_legacy_vtpm_live_migration
     @reject_sev_instances(instance_actions.LIVE_MIGRATION)
     @check_instance_lock
     @check_instance_state(vm_state=[vm_states.ACTIVE, vm_states.PAUSED])
