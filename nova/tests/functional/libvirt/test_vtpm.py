@@ -166,6 +166,15 @@ class VTPMServersTest(base.LibvirtMigrationMixin, base.ServersTestBase):
 
         self.key_mgr = crypto._get_key_manager()
 
+        # Mock the get_service_user_context() method so we can differentiate
+        # request contexts for the 'nova' service user.
+        def fake_get_service_user_context():
+            return nova_context.RequestContext(user_id='nova')
+
+        self.useFixture(fixtures.MockPatch(
+            'nova.context.get_service_user_context',
+            fake_get_service_user_context))
+
     def _create_server_with_vtpm(self, secret_security=None,
                                  expected_state='ACTIVE'):
         extra_specs = {'hw:tpm_model': 'tpm-tis', 'hw:tpm_version': '1.2'}
